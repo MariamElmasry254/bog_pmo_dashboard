@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BOG Digital Transformation — PMO Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500;9..144,600;9..144,700;9..144,800&family=JetBrains+Mono:wght@400;500;600&family=Manrope:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<div class="bg-grid"></div>
+<div class="bg-glow"></div>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark">
+      <svg viewBox="0 0 40 40" width="32" height="32">
+        <rect x="2" y="2" width="36" height="36" rx="8" fill="none" stroke="currentColor" stroke-width="2"/>
+        <circle cx="20" cy="20" r="6" fill="currentColor"/>
+        <path d="M8 28 L20 20 L32 28" stroke="currentColor" stroke-width="2" fill="none"/>
+      </svg>
+    </div>
+    <div class="brand-text">
+      <div class="brand-name">BOG · Digital Transformation</div>
+      <div class="brand-sub">PMO Command Center · Phase Development</div>
+    </div>
+  </div>
+
+  <div class="topbar-right">
+    <div class="live-indicator" id="liveIndicator">
+      <span class="dot"></span>
+      <span id="liveStatus">Connecting…</span>
+    </div>
+    <div class="user-chip">
+      <div class="avatar">ME</div>
+      <div class="user-info">
+        <div class="user-name">Mariam Elmasry</div>
+        <div class="user-role">PMO</div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<nav class="tabs-nav">
+  <button class="tab active" data-tab="overview">
+    <span class="tab-num">01</span>
+    <span class="tab-label">Overview</span>
+  </button>
+  <button class="tab" data-tab="budget">
+    <span class="tab-num">02</span>
+    <span class="tab-label">Budget</span>
+  </button>
+  <button class="tab" data-tab="services">
+    <span class="tab-num">03</span>
+    <span class="tab-label">Scope &amp; Services</span>
+  </button>
+  <button class="tab" data-tab="timesheets">
+    <span class="tab-num">04</span>
+    <span class="tab-label">Timesheets</span>
+  </button>
+  <button class="tab" data-tab="analysis">
+    <span class="tab-num">05</span>
+    <span class="tab-label">Analysis</span>
+  </button>
+  <button class="tab" data-tab="team">
+    <span class="tab-num">06</span>
+    <span class="tab-label">Team</span>
+  </button>
+</nav>
+
+<main class="content">
+
+  <!-- ========== OVERVIEW ========== -->
+  <section class="tab-panel active" id="overview">
+    <div class="panel-head">
+      <div>
+        <div class="eyebrow">Project Pulse</div>
+        <h1 class="panel-title">Project at a glance</h1>
+      </div>
+      <div class="panel-meta">
+        <div class="meta-item"><span>Phase</span><b>Development</b></div>
+        <div class="meta-item"><span>Project Manager</span><b>Abdelrahman Doghish</b></div>
+        <div class="meta-item"><span>Contract</span><b>Fixed Scope</b></div>
+      </div>
+    </div>
+
+    <div class="kpi-grid">
+      <div class="kpi-card kpi-primary">
+        <div class="kpi-label">Total Working Days</div>
+        <div class="kpi-value" id="kpiWD">—</div>
+        <div class="kpi-foot">across all services</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Services in Scope</div>
+        <div class="kpi-value" id="kpiServices">—</div>
+        <div class="kpi-foot">total deliverables</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Total Mandays</div>
+        <div class="kpi-value" id="kpiMD">6,556</div>
+        <div class="kpi-foot">contracted</div>
+      </div>
+      <div class="kpi-card kpi-success">
+        <div class="kpi-label">Budget Profit</div>
+        <div class="kpi-value" id="kpiProfit">49%</div>
+        <div class="kpi-foot">SAR 9.89M</div>
+      </div>
+    </div>
+
+    <div class="overview-grid">
+      <div class="card">
+        <div class="card-head">
+          <h3>Complexity breakdown</h3>
+          <span class="badge">Live</span>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="complexityChart"></canvas>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h3>Project progress</h3>
+        </div>
+        <div class="progress-block">
+          <div class="progress-row">
+            <span>Overall</span>
+            <span><b id="progressVal">0</b>%</span>
+          </div>
+          <div class="bar"><div class="bar-fill" style="width:0%" id="progressBar"></div></div>
+
+          <div class="dates-row">
+            <div>
+              <span>Support starts</span>
+              <b>18 May 2027</b>
+            </div>
+            <div>
+              <span>Support ends</span>
+              <b>17 May 2028</b>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card card-wide">
+        <div class="card-head">
+          <h3>Recent activity (last 7 days)</h3>
+          <span class="badge live" id="recentLive">Live</span>
+        </div>
+        <div id="recentActivity" class="activity-list">
+          <div class="loading">Loading…</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== BUDGET ========== -->
+  <section class="tab-panel" id="budget">
+    <div class="panel-head">
+      <div>
+        <div class="eyebrow">Financials</div>
+        <h1 class="panel-title">Budget &amp; Profitability</h1>
+      </div>
+    </div>
+
+    <div class="budget-grid">
+      <div class="card budget-card">
+        <div class="card-head"><h3>Approved Budget</h3></div>
+        <div class="budget-rows" id="approvedBudget"></div>
+      </div>
+
+      <div class="card budget-card budget-card-final">
+        <div class="card-head"><h3>Final Budget (after changes)</h3></div>
+        <div class="budget-rows" id="finalBudget"></div>
+      </div>
+
+      <div class="card card-wide">
+        <div class="card-head"><h3>Change Log</h3></div>
+        <table class="data-table" id="changesTable">
+          <thead>
+            <tr><th>Reason</th><th>Plan / CR ID</th><th class="num">Δ Cost (SAR)</th><th class="num">Δ Revenue (SAR)</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== SERVICES ========== -->
+  <section class="tab-panel" id="services">
+    <div class="panel-head">
+      <div>
+        <div class="eyebrow">Scope</div>
+        <h1 class="panel-title">Services in scope</h1>
+      </div>
+      <div class="search-wrap">
+        <input type="text" id="serviceSearch" placeholder="Search services…">
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="table-scroll">
+        <table class="data-table services-table" id="servicesTable">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Service Name</th>
+              <th>Priority</th>
+              <th>Complexity</th>
+              <th class="num">Dev MD</th>
+              <th class="num">Analysis</th>
+              <th class="num">UI/UX</th>
+              <th class="num">QC</th>
+              <th class="num">UAT</th>
+              <th class="num">PM</th>
+              <th class="num">Total MD</th>
+              <th class="num">WD</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== TIMESHEETS ========== -->
+  <section class="tab-panel" id="timesheets">
+    <div class="panel-head">
+      <div>
+        <div class="eyebrow">Live · Odoo</div>
+        <h1 class="panel-title">Daily Timesheets</h1>
+      </div>
+      <div class="filters">
+        <select id="rangeSelect">
+          <option value="7">Last 7 days</option>
+          <option value="14">Last 14 days</option>
+          <option value="30" selected>Last 30 days</option>
+          <option value="90">Last 90 days</option>
+        </select>
+        <button id="refreshBtn" class="btn-refresh">⟳ Refresh</button>
+      </div>
+    </div>
+
+    <div id="connectionBanner" class="banner banner-warn" style="display:none;">
+      <strong>Demo mode:</strong> <span id="bannerMsg"></span>
+    </div>
+
+    <div class="card">
+      <div class="table-scroll">
+        <table class="data-table" id="timesheetsTable">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Employee</th>
+              <th>Task</th>
+              <th>Description</th>
+              <th class="num">Hours</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== ANALYSIS ========== -->
+  <section class="tab-panel" id="analysis">
+    <div class="panel-head">
+      <div>
+        <div class="eyebrow">Insights</div>
+        <h1 class="panel-title">Time &amp; Effort Analysis</h1>
+      </div>
+    </div>
+
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-label">Total Hours Logged</div>
+        <div class="kpi-value" id="anaTotalH">—</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Active Members</div>
+        <div class="kpi-value" id="anaMembers">—</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Total Entries</div>
+        <div class="kpi-value" id="anaEntries">—</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Avg Hours / Day</div>
+        <div class="kpi-value" id="anaAvgDay">—</div>
+      </div>
+    </div>
+
+    <div class="overview-grid">
+      <div class="card">
+        <div class="card-head"><h3>Hours by employee</h3></div>
+        <div class="chart-wrap"><canvas id="employeeChart"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>Daily trend</h3></div>
+        <div class="chart-wrap"><canvas id="trendChart"></canvas></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== TEAM ========== -->
+  <section class="tab-panel" id="team">
+    <div class="panel-head">
+      <div>
+        <div class="eyebrow">People</div>
+        <h1 class="panel-title">BOG Members</h1>
+      </div>
+    </div>
+
+    <div class="banner banner-info">
+      <strong>Coming next:</strong> Connect this tab to your "BOG Members" Google Sheet to auto-load roles, allocations and roster.
+    </div>
+
+    <div class="card">
+      <div class="empty-state">
+        <div class="empty-icon">◷</div>
+        <h3>Members data integration pending</h3>
+        <p>Once your Google Sheet is connected, this tab will display: roles, allocation %, current task, hours this week, and availability.</p>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <span>BOG · DT — Internal PMO Dashboard</span>
+  <span>v1.0 · {{ project_name }}</span>
+</footer>
+
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
+
