@@ -1107,6 +1107,7 @@ def compute_effort_from_odoo(phase_key, year, month, position_lookup=None):
     # Load positions + rates from Excel
     positions_list = get_positions_from_excel()
     rate_map = get_position_rates(positions_list)
+    tunis_rates = get_tunis_rates_from_excel()
 
     # Group by employee, then by date
     by_emp = {}
@@ -1174,38 +1175,52 @@ def compute_effort_from_odoo(phase_key, year, month, position_lookup=None):
         total_h = regular_mh + ramadan_mh + overtime_mh
         total_md = round(total_h / NORMAL_HOURS, 2)
 
-        # Position resolution:
-        # - If onsite_days == 0: position = "{COUNTRY} - {role}" (e.g. "EGY - Senior Business Analyst")
-        # - If onsite_days > 0: position = "{COUNTRY} - {role} - onsite"
-        # We try multiple match strategies against the Positions sheet
-        country_position = f"{country} - {odoo_role}".strip(' -') if odoo_role else ''
-        onsite_position = f"{country} - {odoo_role} - onsite".strip(' -') if odoo_role else ''
+        # Position resolution depends on country:
+        # - For TUN: rate is per-name from "Tunis Rates" sheet (no position concept)
+        # - For EGY/KSA: position = "{COUNTRY} - {role}" or "+ - onsite" if any onsite hours
+        if country == 'TUN':
+            tunis_match = find_tunis_rate(emp_name, tunis_rates)
+            if tunis_match:
+                base_position = f"TUN - {odoo_role}".strip(' -') if odoo_role else 'TUN'
+                base_rate_info = {
+                    'hour_rate': tunis_match['hour_rate'],
+                    'md_rate': tunis_match['md_rate'],
+                }
+                onsite_rate_info = None  # Tunis has no onsite variants
+                country_position = base_position
+                onsite_position = ''
+            else:
+                base_position = f"TUN - {odoo_role}".strip(' -') if odoo_role else 'TUN'
+                base_rate_info = None
+                onsite_rate_info = None
+                country_position = base_position
+                onsite_position = ''
+        else:
+            country_position = f"{country} - {odoo_role}".strip(' -') if odoo_role else ''
+            onsite_position = f"{country} - {odoo_role} - onsite".strip(' -') if odoo_role else ''
 
-        # Direct lookup in rate_map (case-sensitive first, then case-insensitive)
-        def _find_position_match(target):
-            if not target:
+            def _find_position_match(target):
+                if not target:
+                    return None
+                if target in rate_map:
+                    return target, rate_map[target]
+                target_lower = target.lower()
+                for k, v in rate_map.items():
+                    if k.lower() == target_lower:
+                        return k, v
+                target_clean = target_lower.replace('.', '').replace('-', ' ').replace('  ', ' ').strip()
+                for k, v in rate_map.items():
+                    k_clean = k.lower().replace('.', '').replace('-', ' ').replace('  ', ' ').strip()
+                    if k_clean == target_clean:
+                        return k, v
                 return None
-            if target in rate_map:
-                return target, rate_map[target]
-            # Case-insensitive search
-            target_lower = target.lower()
-            for k, v in rate_map.items():
-                if k.lower() == target_lower:
-                    return k, v
-            # Try fuzzy: ignore extra spaces and common variations
-            target_clean = target_lower.replace('.', '').replace('-', ' ').replace('  ', ' ').strip()
-            for k, v in rate_map.items():
-                k_clean = k.lower().replace('.', '').replace('-', ' ').replace('  ', ' ').strip()
-                if k_clean == target_clean:
-                    return k, v
-            return None
 
-        base_match = _find_position_match(country_position)
-        onsite_match = _find_position_match(onsite_position)
+            base_match = _find_position_match(country_position)
+            onsite_match = _find_position_match(onsite_position)
 
-        base_position = base_match[0] if base_match else country_position
-        base_rate_info = base_match[1] if base_match else None
-        onsite_rate_info = onsite_match[1] if onsite_match else None
+            base_position = base_match[0] if base_match else country_position
+            base_rate_info = base_match[1] if base_match else None
+            onsite_rate_info = onsite_match[1] if onsite_match else None
 
         effective_hour_rate = None
         if total_h > 0:
@@ -1219,7 +1234,7 @@ def compute_effort_from_odoo(phase_key, year, month, position_lookup=None):
         team.append({
             'name': emp_name,
             'odoo_role': odoo_role,
-            'position': base_position,  # what we use as base
+            'position': base_position,
             'has_base_rate': bool(base_rate_info),
             'has_onsite_rate': bool(onsite_rate_info),
             'country': country,
@@ -1269,6 +1284,55 @@ def get_positions_from_excel():
     except Exception as e:
         logger.error(f"Positions parse: {e}")
         return []
+
+
+def get_tunis_rates_from_excel():
+    """Read 'Tunis Rates' sheet — Tunis people are paid per name, not per position"""
+    if not os.path.exists(VARIANCE_FILE):
+        return {}
+    try:
+        df = pd.read_excel(VARIANCE_FILE, sheet_name='Tunis Rates', header=None)
+        rows = df.values.tolist()
+        tunis = {}
+        for r in rows[1:]:
+            if not r or pd.isna(r[0]):
+                continue
+            name = str(r[0]).strip()
+            hr = safe_val(r[1]) if len(r) > 1 else None
+            if hr is not None:
+                # Store by lowercase name for case-insensitive lookup
+                tunis[name.lower()] = {
+                    'name': name,
+                    'hour_rate': float(hr),
+                    'md_rate': float(hr) * 8,  # 8 hours per MD
+                }
+        return tunis
+    except Exception as e:
+        logger.warning(f"Tunis Rates parse: {e}")
+        return {}
+
+
+def find_tunis_rate(emp_name, tunis_rates):
+    """Match Tunis employee by partial name (handles case + extra prefix like '[T###]')"""
+    if not emp_name or not tunis_rates:
+        return None
+    # Strip [code] prefix
+    import re
+    clean = re.sub(r'^\s*\[[A-Z]\d+\]\s*', '', str(emp_name)).strip().lower()
+    # Direct match
+    if clean in tunis_rates:
+        return tunis_rates[clean]
+    # Partial — match if all words from tunis name appear in clean (or vice versa)
+    for tname, tinfo in tunis_rates.items():
+        tparts = set(tname.split())
+        cparts = set(clean.split())
+        if tparts.issubset(cparts) or cparts.issubset(tparts):
+            return tinfo
+        # Also try if any 2 significant words match
+        common = tparts & cparts
+        if len(common) >= 2:
+            return tinfo
+    return None
 
 
 def get_odoo_position_for_employee(employee_name):
