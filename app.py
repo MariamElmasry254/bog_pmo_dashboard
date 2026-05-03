@@ -623,7 +623,64 @@ def api_overview_analysis(phase_group):
                 'allocation': allocation,
                 'first_log': ts_info['first_date'],
                 'last_log': ts_info['last_date'],
+                # Roll-up totals (filled below)
+                'subtask_planned_hours': 0,
+                'subtask_actual_hours': 0,
+                'subtask_count_total': 0,  # all descendants count
+                # Allocations from descendants (for parent display)
+                'rollup_allocation': {},
             }
+
+        # Build parent->children index for roll-up
+        children_by_parent = {}
+        for tid, obj in task_id_to_obj.items():
+            if obj['parent_id'] and obj['parent_id'] in task_id_to_obj:
+                children_by_parent.setdefault(obj['parent_id'], []).append(tid)
+
+        def rollup(tid):
+            """Recursively sum planned + actual from all descendants."""
+            obj = task_id_to_obj.get(tid)
+            if not obj:
+                return 0, 0, 0, {}
+            child_ids = children_by_parent.get(tid, [])
+            sub_planned = 0
+            sub_actual = 0
+            sub_count = 0
+            sub_alloc = {}  # emp -> hours
+            # Add this task's own allocation to rollup
+            for a in obj.get('allocation', []):
+                sub_alloc[a['name']] = sub_alloc.get(a['name'], 0) + a['hours']
+            for cid in child_ids:
+                # Recurse
+                cp, ca, cn, calloc = rollup(cid)
+                # Direct child contributes itself + its descendants
+                child_obj = task_id_to_obj[cid]
+                sub_planned += child_obj['planned_hours'] + cp
+                sub_actual += child_obj['actual_hours'] + ca
+                sub_count += 1 + cn
+                for emp, h in calloc.items():
+                    sub_alloc[emp] = sub_alloc.get(emp, 0) + h
+            obj['subtask_planned_hours'] = round(sub_planned, 1)
+            obj['subtask_actual_hours'] = round(sub_actual, 1)
+            obj['subtask_count_total'] = sub_count
+            # For parent display: total includes own + sub
+            obj['total_planned_hours'] = round(obj['planned_hours'] + sub_planned, 1)
+            obj['total_actual_hours'] = round(obj['actual_hours'] + sub_actual, 1)
+            # Compute roll-up progress (uses total)
+            if obj['total_planned_hours'] > 0:
+                obj['rollup_progress_pct'] = min(150, round(obj['total_actual_hours'] / obj['total_planned_hours'] * 100, 1))
+            else:
+                obj['rollup_progress_pct'] = obj['progress_pct']
+            # Remaining = total_planned - total_actual
+            obj['total_remaining_hours'] = max(0, round(obj['total_planned_hours'] - obj['total_actual_hours'], 1))
+            # Per-task remaining = planned - actual (own only)
+            obj['remaining_hours'] = max(0, round(obj['planned_hours'] - obj['actual_hours'], 1))
+            obj['rollup_allocation'] = sub_alloc
+            return sub_planned, sub_actual, sub_count, sub_alloc
+
+        # Run rollup for every task
+        for tid in list(task_id_to_obj.keys()):
+            rollup(tid)
 
         # Apply employee filter (only show tasks where filtered employee logged time)
         # Also keep parent if any of its descendants match
