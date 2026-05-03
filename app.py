@@ -480,7 +480,7 @@ def api_overview_analysis(phase_group):
             'project.task', 'search_read',
             [project_domain],
             {'fields': ['id', 'name', 'planned_hours', 'effective_hours',
-                        'progress', 'parent_id', 'user_id',
+                        'progress', 'parent_id', 'user_id', 'project_id',
                         'date_deadline', 'stage_id', 'kanban_state',
                         'phase_id', 'date_start', 'date_end', 'child_ids'],
              'limit': 5000}
@@ -489,23 +489,35 @@ def api_overview_analysis(phase_group):
         if not parent_tasks:
             return jsonify({'tasks': [], 'connected': True, 'phases_available': phase_names})
 
-        # Step 2: Fetch ALL tasks in this project (without phase filter)
-        # Then filter in Python by walking up parent chain to one of our parent_tasks
-        all_project_domain = []
-        if PROJECT_NAME:
-            all_project_domain.append(('project_id.name', 'ilike', PROJECT_NAME))
+        # Diagnostic: log parent tasks with their child_ids count
+        for pt in parent_tasks:
+            logger.info(f"  Parent task: id={pt['id']} name='{pt.get('name')}' child_ids={len(pt.get('child_ids') or [])}")
+
+        # Step 2: Fetch ALL tasks belonging to the same project as parent tasks
+        # (use project_id from parent_tasks, not name match — more reliable)
+        project_ids = set()
+        for pt in parent_tasks:
+            if pt.get('project_id') and isinstance(pt['project_id'], list) and len(pt['project_id']) > 0:
+                project_ids.add(pt['project_id'][0])
+
+        if project_ids:
+            all_project_domain = [('project_id', 'in', list(project_ids))]
+        elif PROJECT_NAME:
+            all_project_domain = [('project_id.name', 'ilike', PROJECT_NAME)]
+        else:
+            all_project_domain = []
 
         all_project_tasks = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'project.task', 'search_read',
             [all_project_domain],
             {'fields': ['id', 'name', 'planned_hours', 'effective_hours',
-                        'progress', 'parent_id', 'user_id',
+                        'progress', 'parent_id', 'user_id', 'project_id',
                         'date_deadline', 'stage_id', 'kanban_state',
                         'phase_id', 'date_start', 'date_end', 'child_ids'],
              'limit': 10000}
         )
-        logger.info(f"Total project tasks fetched: {len(all_project_tasks)}")
+        logger.info(f"Total project tasks fetched: {len(all_project_tasks)} (project_ids: {project_ids})")
 
         # Build lookup: id -> task
         task_by_id = {t['id']: t for t in all_project_tasks}
