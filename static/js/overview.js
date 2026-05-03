@@ -29,7 +29,128 @@ window.loadOverview = async function() {
 
   await loadOverviewKPIs();
   await loadTaskAnalysis(AppState.currentOverviewPhase);
+  await loadTagsAnalysis();
 };
+
+async function loadTagsAnalysis() {
+  const cont = document.getElementById('ovTagsContent');
+  const summary = document.getElementById('ovTagsSummary');
+  if (!cont) return;
+  cont.innerHTML = '<div class="loading">Loading tags from Odoo…</div>';
+
+  try {
+    const res = await fetch('/api/overview/tags-analysis');
+    const d = await res.json();
+
+    if (!d.connected) {
+      cont.innerHTML = `<div class="banner banner-warn"><strong>${d.error || 'Odoo unreachable'}</strong></div>`;
+      summary.innerHTML = '';
+      return;
+    }
+
+    if (!d.tags || !d.tags.length) {
+      cont.innerHTML = '<div class="card"><div class="loading">No tagged tasks found in this project.</div></div>';
+      summary.innerHTML = '';
+      return;
+    }
+
+    // Summary KPIs
+    const s = d.summary;
+    summary.innerHTML = `
+      <div class="kpi-strip kpi-strip-small" style="margin-bottom: 16px;">
+        <div class="kpi-card kpi-blue compact">
+          <div class="kpi-label">TOTAL TAGS</div>
+          <div class="kpi-value">${s.total_tags || 0}</div>
+        </div>
+        <div class="kpi-card kpi-navy compact">
+          <div class="kpi-label">PLANNED</div>
+          <div class="kpi-value">${fmt.num(s.total_planned || 0)}<span class="kpi-unit">h</span></div>
+        </div>
+        <div class="kpi-card kpi-green compact">
+          <div class="kpi-label">ACTUAL</div>
+          <div class="kpi-value">${fmt.num(s.total_actual || 0)}<span class="kpi-unit">h</span></div>
+        </div>
+        <div class="kpi-card kpi-amber compact">
+          <div class="kpi-label">REMAINING</div>
+          <div class="kpi-value">${fmt.num(s.total_remaining || 0)}<span class="kpi-unit">h</span></div>
+        </div>
+      </div>
+    `;
+
+    // Tag cards
+    let html = '<div class="card"><h3 class="card-title" style="margin-bottom: 12px;">Tags Breakdown <span class="muted-text">— sorted by actual hours</span></h3><div class="tags-grid">';
+
+    d.tags.forEach(tag => {
+      const p = tag.progress_pct || 0;
+      let progressColor;
+      if (p === 0) progressColor = '#9CA3AF';
+      else if (p >= 100) progressColor = '#10B981';
+      else if (p >= 75) progressColor = '#10B981';
+      else if (p >= 40) progressColor = '#F59E0B';
+      else progressColor = '#3B82F6';
+
+      const widthBar = Math.min(100, p);
+      const tagColorClass = tag.color ? `tag-color-${tag.color}` : 'tag-color-default';
+
+      const empPills = (tag.top_employees || []).slice(0, 4).map(e =>
+        `<span class="alloc-pill-mini" title="${e.hours}h">${e.name} <small>${fmt.decimal(e.hours)}h</small></span>`
+      ).join('');
+      const moreEmpCount = Math.max(0, (tag.employees_count || 0) - 4);
+
+      html += `
+        <div class="tag-card">
+          <div class="tag-card-head">
+            <div class="tag-name-block">
+              <div class="tag-name-row">
+                <span class="tag-pill ${tagColorClass}">🏷️ ${tag.name}</span>
+                <span class="tag-task-count">${tag.tasks_count} task${tag.tasks_count !== 1 ? 's' : ''}</span>
+              </div>
+            </div>
+            <div class="tag-progress-num" style="color: ${progressColor};">
+              ${fmt.decimal(p)}<small>%</small>
+            </div>
+          </div>
+
+          <div class="tcc-progress-bar">
+            <div class="tcc-progress-fill" style="width: ${widthBar}%; background: ${progressColor};"></div>
+          </div>
+
+          <div class="tag-stats">
+            <div class="tag-stat">
+              <div class="tag-stat-lbl">PLANNED</div>
+              <div class="tag-stat-val">${fmt.decimal(tag.planned_hours)}<small>h</small></div>
+              <div class="tag-stat-sub">${fmt.decimal(tag.planned_days)}d</div>
+            </div>
+            <div class="tag-stat">
+              <div class="tag-stat-lbl">ACTUAL</div>
+              <div class="tag-stat-val" style="color: ${progressColor};">${fmt.decimal(tag.actual_hours)}<small>h</small></div>
+              <div class="tag-stat-sub">${fmt.decimal(tag.actual_days)}d</div>
+            </div>
+            <div class="tag-stat">
+              <div class="tag-stat-lbl">REMAINING</div>
+              <div class="tag-stat-val">${fmt.decimal(tag.remaining_hours)}<small>h</small></div>
+            </div>
+          </div>
+
+          ${empPills ? `
+            <div class="tag-employees">
+              <div class="tag-emp-label">Contributors (${tag.employees_count}):</div>
+              <div class="tag-emp-list">
+                ${empPills}
+                ${moreEmpCount ? `<span class="tcc-more">+${moreEmpCount}</span>` : ''}
+              </div>
+            </div>
+          ` : ''}
+        </div>
+      `;
+    });
+
+    html += '</div></div>';
+    cont.innerHTML = html;
+  } catch (e) {
+    cont.innerHTML = `<div class="banner banner-warn"><strong>Error:</strong> ${e.message}</div>`;
+  }
+}
 
 async function loadOverviewKPIs() {
   try {
@@ -401,19 +522,22 @@ function renderTaskList(phaseGroup) {
   });
 
   // Step 2: include all ancestors of matched tasks (so the tree shows context)
+  // EXCEPT when typeFilter is 'subtasks' - then show only sub-tasks flat
   const visibleIds = new Set(matchedIds);
   const expandedForSearch = new Set();
-  matchedIds.forEach(id => {
-    let cur = taskById.get(id);
-    while (cur && cur.parent_id) {
-      const parent = taskById.get(cur.parent_id);
-      if (!parent) break;
-      visibleIds.add(parent.id);
-      // Auto-expand parents when searching so matches are visible
-      if (search) expandedForSearch.add(parent.id);
-      cur = parent;
-    }
-  });
+  if (typeFilter !== 'subtasks') {
+    matchedIds.forEach(id => {
+      let cur = taskById.get(id);
+      while (cur && cur.parent_id) {
+        const parent = taskById.get(cur.parent_id);
+        if (!parent) break;
+        visibleIds.add(parent.id);
+        // Auto-expand parents when searching so matches are visible
+        if (search) expandedForSearch.add(parent.id);
+        cur = parent;
+      }
+    });
+  }
 
   let tasks = allTasks.filter(t => visibleIds.has(t.id));
 
