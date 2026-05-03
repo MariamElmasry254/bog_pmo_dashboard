@@ -1,76 +1,57 @@
 <section class="tab-panel" id="services">
   <div class="page-header">
     <div>
-      <span class="page-eyebrow">SCOPE &amp; PROGRESS</span>
-      <h2 class="page-title">Services <span class="counter-badge" id="servicesCount">—</span></h2>
+      <span class="page-eyebrow">SCOPE & PROGRESS</span>
+      <h2 class="page-title">Services</h2>
     </div>
     <div class="page-actions">
-      <input type="text" id="serviceSearch" placeholder="🔍 Search services..." class="search-input">
-      <select id="statusFilter" class="search-input" style="width: 180px;">
+      <input type="text" id="svcSearch" placeholder="🔍 Search services..." class="search-input" style="width: 240px;">
+      <select id="svcStatusFilter" class="search-input" style="width: 160px;">
         <option value="">All statuses</option>
         <option value="Not Started">Not Started</option>
         <option value="In Progress">In Progress</option>
+        <option value="At Risk">At Risk</option>
         <option value="Done">Done</option>
         <option value="Overdue">Overdue</option>
-        <option value="At Risk">At Risk</option>
       </select>
     </div>
   </div>
 
   <div class="banner banner-info">
     <strong>Mapping:</strong>
-    <b>Baseline</b> from Presales (services.xlsx · pre-sale estimate) ·
-    <b>Planned</b> per dept will sync from <a href="https://codelabsys.sharepoint.com/:x:/r/sites/BOGDigitalTransformation/_layouts/15/Doc.aspx?sourcedoc=%7B20F81A87-D75B-42AE-B50C-6F7FD4390955%7D&file=WBD.xlsx" target="_blank">WBD SharePoint</a> ·
-    <b>Actuals</b> auto-computed from Odoo timesheets (grouped by parent task)
+    <strong>Baseline</strong> from Presales ·
+    <strong>Planned / Remaining / Status / Assignation</strong> manual (auto-saved) ·
+    <strong>Actuals / Actual dates</strong> from Odoo timesheets (parent task = service name) ·
+    <strong>Planned dates</strong> from Roadmap
   </div>
 
+  <!-- KPI strip -->
   <div class="kpi-strip kpi-strip-small">
     <div class="kpi-card kpi-blue compact">
       <div class="kpi-label">TOTAL SERVICES</div>
-      <div class="kpi-value"><span id="svTotal">—</span></div>
+      <div class="kpi-value" id="svcKpiTotal">—</div>
     </div>
     <div class="kpi-card kpi-amber compact">
       <div class="kpi-label">IN PROGRESS</div>
-      <div class="kpi-value"><span id="svInProgress">—</span></div>
+      <div class="kpi-value" id="svcKpiProgress">—</div>
     </div>
     <div class="kpi-card kpi-green compact">
       <div class="kpi-label">DONE</div>
-      <div class="kpi-value"><span id="svDone">—</span></div>
+      <div class="kpi-value" id="svcKpiDone">—</div>
     </div>
     <div class="kpi-card kpi-red compact">
       <div class="kpi-label">OVERDUE</div>
-      <div class="kpi-value"><span id="svOverdue">—</span></div>
+      <div class="kpi-value" id="svcKpiOverdue">—</div>
     </div>
   </div>
 
-  <div class="card">
-    <div class="table-scroll">
-      <table class="data-table services-table-v3" id="servicesTable">
-        <thead>
-          <tr>
-            <th rowspan="2" style="vertical-align: middle;">#</th>
-            <th rowspan="2" style="vertical-align: middle;">Service Name</th>
-            <th rowspan="2" style="vertical-align: middle;">Complexity</th>
-            <th colspan="6" class="group-header">Baseline (Presales) — MD per Department</th>
-            <th rowspan="2" style="vertical-align: middle;" class="num">Total Baseline</th>
-            <th rowspan="2" style="vertical-align: middle;" class="num">Actuals (days)</th>
-            <th rowspan="2" style="vertical-align: middle;" class="num">Remaining</th>
-            <th rowspan="2" style="vertical-align: middle;">Status</th>
-            <th rowspan="2" style="vertical-align: middle;">Assignation</th>
-            <th rowspan="2" style="vertical-align: middle;">Planned End</th>
-            <th rowspan="2" style="vertical-align: middle;">Expected End</th>
-          </tr>
-          <tr>
-            <th class="num small-th">Dev</th>
-            <th class="num small-th">Analysis</th>
-            <th class="num small-th">UI/UX</th>
-            <th class="num small-th">QC</th>
-            <th class="num small-th">UAT</th>
-            <th class="num small-th">PM</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
+  <!-- Department sub-tabs -->
+  <div class="sub-tabs-bar" id="deptTabsBar">
+    <!-- Populated by JS: Dev / Analysis / UI/UX / QC / UAT / PM -->
+  </div>
+
+  <!-- Table per department -->
+  <div id="servicesContent">
+    <div class="loading">Loading services…</div>
   </div>
 </section>
