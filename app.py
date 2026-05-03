@@ -585,6 +585,16 @@ def api_overview_analysis(phase_group):
             sorted_emps = sorted(ts_info['employees'].items(), key=lambda x: -x[1])
             allocation = [{'name': e[0], 'hours': round(e[1], 1)} for e in sorted_emps]
 
+            # Assignee from Odoo task (user_id)
+            assignee_name = None
+            if t.get('user_id') and isinstance(t['user_id'], list) and len(t['user_id']) > 1:
+                assignee_name = t['user_id'][1]
+                # Add to all_employees_set for filter dropdown
+                all_employees_set.add(assignee_name)
+                # If assignee not in allocation (no time logged), still include
+                if assignee_name not in ts_info['employees']:
+                    allocation.append({'name': assignee_name, 'hours': 0})
+
             stage = ''
             stage_id = None
             if t.get('stage_id') and isinstance(t['stage_id'], list) and len(t['stage_id']) > 1:
@@ -612,6 +622,7 @@ def api_overview_analysis(phase_group):
                 'stage': stage,
                 'stage_id': stage_id,
                 'kanban_state': t.get('kanban_state') or 'normal',
+                'assignee': assignee_name,
                 'planned_hours': round(planned_hours, 1),
                 'actual_hours': round(actual_hours, 1),
                 'planned_days': round(planned_hours / WORK_HOURS_PER_DAY, 1) if planned_hours else 0,
@@ -682,15 +693,16 @@ def api_overview_analysis(phase_group):
         for tid in list(task_id_to_obj.keys()):
             rollup(tid)
 
-        # Apply employee filter (only show tasks where filtered employee logged time)
+        # Apply employee filter (matches allocation OR assignee)
         # Walk UP entire parent chain to keep ancestors visible (for context)
         if employees_filter:
             matching_task_ids = set()
             for tid, t in task_id_to_obj.items():
-                emp_names = {a['name'] for a in t['allocation']}
+                emp_names = {a['name'] for a in t.get('allocation', [])}
+                if t.get('assignee'):
+                    emp_names.add(t['assignee'])
                 if any(e in emp_names for e in employees_filter):
                     matching_task_ids.add(tid)
-                    # Walk up entire parent chain
                     cur = t
                     visited = {tid}
                     while cur and cur.get('parent_id') and cur['parent_id'] not in visited:
