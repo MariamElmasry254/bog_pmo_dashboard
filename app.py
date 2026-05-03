@@ -65,10 +65,37 @@ class OdooClient:
             logger.error(f"Odoo connect: {e}")
             return False
 
+    def get_phases(self, project_name=PROJECT_NAME):
+        """Get list of phases for the project"""
+        if not self.uid and not self.connect():
+            return None
+        try:
+            # First find project ID
+            projects = self.models.execute_kw(
+                ODOO_DB, self.uid, ODOO_PASSWORD,
+                'project.project', 'search_read',
+                [[('name', 'ilike', project_name)]],
+                {'fields': ['id', 'name'], 'limit': 5}
+            )
+            if not projects:
+                return []
+            project_ids = [p['id'] for p in projects]
+
+            # Get phases linked to this project
+            phases = self.models.execute_kw(
+                ODOO_DB, self.uid, ODOO_PASSWORD,
+                'project.phase', 'search_read',
+                [[('project_id', 'in', project_ids)]],
+                {'fields': ['id', 'name', 'project_id']}
+            )
+            return phases
+        except Exception as e:
+            logger.error(f"Odoo phases: {e}")
+            return None
+
     def get_timesheets(self, project_name=PROJECT_NAME, date_from=None, date_to=None,
-                       service_filter=None, all_projects=False):
-        """Get timesheets. If all_projects=True, fetch all (for cross-project missing hours check)."""
-        # Always re-attempt connection if not connected
+                       phase_filter=None, all_projects=False):
+        """Get timesheets. phase_filter can be a single name or list of names."""
         if not self.uid:
             if not self.connect():
                 return None
@@ -80,6 +107,37 @@ class OdooClient:
                 domain.append(('date', '>=', date_from))
             if date_to:
                 domain.append(('date', '<=', date_to))
+
+            # Phase filter — can be string or list
+            if phase_filter:
+                phase_names = phase_filter if isinstance(phase_filter, list) else [phase_filter]
+                phase_names = [p for p in phase_names if p]  # remove empties
+                if phase_names:
+                    try:
+                        phases = self.models.execute_kw(
+                            ODOO_DB, self.uid, ODOO_PASSWORD,
+                            'project.phase', 'search_read',
+                            [[('name', 'in', phase_names)]],
+                            {'fields': ['id'], 'limit': 50}
+                        )
+                        phase_ids = [p['id'] for p in phases]
+                        if phase_ids:
+                            tasks = self.models.execute_kw(
+                                ODOO_DB, self.uid, ODOO_PASSWORD,
+                                'project.task', 'search_read',
+                                [[('phase_id', 'in', phase_ids)]],
+                                {'fields': ['id'], 'limit': 5000}
+                            )
+                            phase_task_ids = [t['id'] for t in tasks]
+                            if phase_task_ids:
+                                domain.append(('task_id', 'in', phase_task_ids))
+                            else:
+                                return []
+                        else:
+                            return []
+                    except Exception as e:
+                        logger.warning(f"Phase filter failed: {e}")
+
             result = self.models.execute_kw(
                 ODOO_DB, self.uid, ODOO_PASSWORD,
                 'account.analytic.line', 'search_read', [domain],
@@ -89,40 +147,44 @@ class OdooClient:
             logger.info(f"Odoo timesheets fetched: {len(result)} entries (filter: {domain})")
 
             # Enrich with parent task info (Odoo v14 doesn't have parent_task_id on timesheet)
-            # We need to fetch task records to get their parent_id
+            # We need to fetch task records to get their parent_id and phase
             task_ids = list(set(e['task_id'][0] for e in result if e.get('task_id')))
             parent_map = {}  # task_id -> parent_task_name
+            phase_map = {}   # task_id -> phase_name
             if task_ids:
                 try:
                     tasks = self.models.execute_kw(
                         ODOO_DB, self.uid, ODOO_PASSWORD,
                         'project.task', 'read',
                         [task_ids],
-                        {'fields': ['id', 'name', 'parent_id']}
+                        {'fields': ['id', 'name', 'parent_id', 'phase_id']}
                     )
                     for t in tasks:
                         parent = t.get('parent_id')
                         if parent and isinstance(parent, list) and len(parent) > 1:
                             parent_map[t['id']] = parent[1]
                         else:
-                            parent_map[t['id']] = t.get('name')  # task is its own parent
-                    logger.info(f"Loaded parent mapping for {len(tasks)} tasks")
+                            parent_map[t['id']] = t.get('name')
+                        ph = t.get('phase_id')
+                        if ph and isinstance(ph, list) and len(ph) > 1:
+                            phase_map[t['id']] = ph[1]
+                    logger.info(f"Loaded mapping for {len(tasks)} tasks")
                 except Exception as e:
-                    logger.warning(f"Could not load parent tasks: {e}")
+                    logger.warning(f"Could not load tasks: {e}")
 
-            # Attach parent task name to each entry
+            # Attach parent task name + phase to each entry
             for entry in result:
                 task = entry.get('task_id')
                 if task and task[0] in parent_map:
                     entry['_parent_name'] = parent_map[task[0]]
                 else:
                     entry['_parent_name'] = task[1] if task else ''
+                entry['_phase_name'] = phase_map.get(task[0] if task else None, '')
 
             return result
         except Exception as e:
             self.last_error = f"{type(e).__name__}: {str(e)}"
             logger.error(f"Odoo timesheets: {e}")
-            # Reset connection on error
             self.uid = None
             self.models = None
             return None
@@ -208,7 +270,8 @@ def load_services():
 def normalize_timesheet(entry):
     """Convert Odoo timesheet entry to flat dict.
     'service' = parent task name (the umbrella service the task belongs to).
-    For Odoo v14, parent name is computed via task lookup and stored in '_parent_name'.
+    'phase' = phase name (project.phase).
+    For Odoo v14, both are computed via task lookup.
     """
     project = entry.get('project_id', [None, ''])
     task = entry.get('task_id', [None, ''])
@@ -216,6 +279,7 @@ def normalize_timesheet(entry):
 
     # SERVICE = parent task name (computed in get_timesheets), fallback to task name itself
     service_name = entry.get('_parent_name') or task_name
+    phase_name = entry.get('_phase_name') or ''
 
     return {
         'date': entry.get('date'),
@@ -223,42 +287,43 @@ def normalize_timesheet(entry):
         'project': project[1] if project else '',
         'task': task_name,
         'service': service_name,  # umbrella/parent — used to group actuals per service
+        'phase': phase_name,
         'description': entry.get('name', ''),
         'hours': float(entry.get('unit_amount', 0)),
     }
 
 def get_demo_timesheets():
-    """Demo data with parent service grouping"""
+    """Demo data with phase + parent service grouping"""
     return [
-        # Service: إدارة الصلاحيات
-        {'date': '2026-04-26', 'employee': 'Ahmed Hassan', 'project': PROJECT_NAME, 'task': 'JWT Setup', 'service': 'إدارة الصلاحيات', 'description': 'Auth flow', 'hours': 7.5},
-        {'date': '2026-04-27', 'employee': 'Ahmed Hassan', 'project': PROJECT_NAME, 'task': 'Token refresh', 'service': 'إدارة الصلاحيات', 'description': '', 'hours': 8.0},
-        {'date': '2026-05-03', 'employee': 'Ahmed Hassan', 'project': PROJECT_NAME, 'task': 'Bug fix', 'service': 'إدارة الصلاحيات', 'description': '', 'hours': 6.5},
-        {'date': '2026-05-02', 'employee': 'Omar Khaled', 'project': PROJECT_NAME, 'task': 'Frontend auth', 'service': 'إدارة الصلاحيات', 'description': '', 'hours': 7.0},
-        # Service: قيد دعوى إدارية
-        {'date': '2026-04-28', 'employee': 'Ahmed Hassan', 'project': PROJECT_NAME, 'task': 'Cases schema', 'service': 'قيد دعوى إدارية', 'description': '', 'hours': 6.0},
-        {'date': '2026-04-29', 'employee': 'Ahmed Hassan', 'project': PROJECT_NAME, 'task': 'Cases schema', 'service': 'قيد دعوى إدارية', 'description': '', 'hours': 8.0},
-        {'date': '2026-04-28', 'employee': 'Sara Ali', 'project': PROJECT_NAME, 'task': 'Wireframes', 'service': 'قيد دعوى إدارية', 'description': '', 'hours': 7.5},
-        {'date': '2026-04-29', 'employee': 'Sara Ali', 'project': PROJECT_NAME, 'task': 'Wireframes', 'service': 'قيد دعوى إدارية', 'description': '', 'hours': 8.0},
-        # Service: الفهارس العامة
-        {'date': '2026-04-27', 'employee': 'Sara Ali', 'project': PROJECT_NAME, 'task': 'Dashboard mockups', 'service': 'الفهارس العامة', 'description': '', 'hours': 7.0},
-        {'date': '2026-04-29', 'employee': 'Omar Khaled', 'project': PROJECT_NAME, 'task': 'Dashboard layout', 'service': 'الفهارس العامة', 'description': '', 'hours': 7.5},
-        # Service: تسجيل الدخول
-        {'date': '2026-04-28', 'employee': 'Omar Khaled', 'project': PROJECT_NAME, 'task': 'Login form', 'service': 'تسجيل الدخول', 'description': '', 'hours': 8.0},
-        # PM activities (no service)
-        {'date': '2026-04-26', 'employee': 'Mariam Elmasry', 'project': PROJECT_NAME, 'task': 'PM Review', 'service': '', 'description': '', 'hours': 6.0},
-        {'date': '2026-04-27', 'employee': 'Mariam Elmasry', 'project': PROJECT_NAME, 'task': 'Stakeholder Meeting', 'service': '', 'description': '', 'hours': 4.5},
-        {'date': '2026-04-28', 'employee': 'Mariam Elmasry', 'project': PROJECT_NAME, 'task': 'Sprint Planning', 'service': '', 'description': '', 'hours': 5.5},
-        {'date': '2026-04-29', 'employee': 'Mariam Elmasry', 'project': PROJECT_NAME, 'task': 'Documentation', 'service': '', 'description': '', 'hours': 7.0},
-        {'date': '2026-04-30', 'employee': 'Mariam Elmasry', 'project': PROJECT_NAME, 'task': 'Sprint Review', 'service': '', 'description': '', 'hours': 4.0},
-        # Cross-project entry — Mariam logged on another project (won't count as missing)
-        {'date': '2026-05-03', 'employee': 'Mariam Elmasry', 'project': 'Other Project X', 'task': 'External work', 'service': '', 'description': '', 'hours': 8.0},
-        {'date': '2026-05-04', 'employee': 'Omar Khaled', 'project': 'Other Project X', 'task': 'External', 'service': '', 'description': '', 'hours': 8.0},
+        # Service: إدارة الصلاحيات (Development Phase)
+        {'date': '2026-04-26', 'employee': 'Ahmed Hassan', 'project': PROJECT_NAME, 'task': 'JWT Setup', 'service': 'إدارة الصلاحيات', 'phase': 'Development Phase', 'description': 'Auth flow', 'hours': 7.5},
+        {'date': '2026-04-27', 'employee': 'Ahmed Hassan', 'project': PROJECT_NAME, 'task': 'Token refresh', 'service': 'إدارة الصلاحيات', 'phase': 'Development Phase', 'description': '', 'hours': 8.0},
+        {'date': '2026-05-03', 'employee': 'Ahmed Hassan', 'project': PROJECT_NAME, 'task': 'Bug fix', 'service': 'إدارة الصلاحيات', 'phase': 'Development Phase', 'description': '', 'hours': 6.5},
+        {'date': '2026-05-02', 'employee': 'Omar Khaled', 'project': PROJECT_NAME, 'task': 'Frontend auth', 'service': 'إدارة الصلاحيات', 'phase': 'Development Phase', 'description': '', 'hours': 7.0},
+        # Service: قيد دعوى إدارية (Development Phase)
+        {'date': '2026-04-28', 'employee': 'Ahmed Hassan', 'project': PROJECT_NAME, 'task': 'Cases schema', 'service': 'قيد دعوى إدارية', 'phase': 'Development Phase', 'description': '', 'hours': 6.0},
+        {'date': '2026-04-29', 'employee': 'Ahmed Hassan', 'project': PROJECT_NAME, 'task': 'Cases schema', 'service': 'قيد دعوى إدارية', 'phase': 'Development Phase', 'description': '', 'hours': 8.0},
+        {'date': '2026-04-28', 'employee': 'Sara Ali', 'project': PROJECT_NAME, 'task': 'Wireframes', 'service': 'قيد دعوى إدارية', 'phase': 'Development Phase', 'description': '', 'hours': 7.5},
+        {'date': '2026-04-29', 'employee': 'Sara Ali', 'project': PROJECT_NAME, 'task': 'Wireframes', 'service': 'قيد دعوى إدارية', 'phase': 'Development Phase', 'description': '', 'hours': 8.0},
+        # Consultation phases
+        {'date': '2026-04-27', 'employee': 'Sara Ali', 'project': PROJECT_NAME, 'task': 'Stakeholder Interviews', 'service': 'الفهارس العامة', 'phase': 'Consultation phase - Analysis', 'description': '', 'hours': 7.0},
+        {'date': '2026-04-29', 'employee': 'Omar Khaled', 'project': PROJECT_NAME, 'task': 'UX Research', 'service': 'الفهارس العامة', 'phase': 'Consultation phase - UX', 'description': '', 'hours': 7.5},
+        {'date': '2026-04-28', 'employee': 'Omar Khaled', 'project': PROJECT_NAME, 'task': 'Initiation Meeting', 'service': 'تسجيل الدخول', 'phase': 'Consultation phase - Initiation', 'description': '', 'hours': 8.0},
+        # PM activities
+        {'date': '2026-04-26', 'employee': 'Mariam Elmasry', 'project': PROJECT_NAME, 'task': 'PM Review', 'service': '', 'phase': 'Development Phase', 'description': '', 'hours': 6.0},
+        {'date': '2026-04-27', 'employee': 'Mariam Elmasry', 'project': PROJECT_NAME, 'task': 'Stakeholder Meeting', 'service': '', 'phase': 'Development Phase', 'description': '', 'hours': 4.5},
+        {'date': '2026-04-28', 'employee': 'Mariam Elmasry', 'project': PROJECT_NAME, 'task': 'Sprint Planning', 'service': '', 'phase': 'Development Phase', 'description': '', 'hours': 5.5},
+        {'date': '2026-04-29', 'employee': 'Mariam Elmasry', 'project': PROJECT_NAME, 'task': 'Documentation', 'service': '', 'phase': 'Development Phase', 'description': '', 'hours': 7.0},
+        {'date': '2026-04-30', 'employee': 'Mariam Elmasry', 'project': PROJECT_NAME, 'task': 'Sprint Review', 'service': '', 'phase': 'Development Phase', 'description': '', 'hours': 4.0},
+        # Cross-project (no phase)
+        {'date': '2026-05-03', 'employee': 'Mariam Elmasry', 'project': 'Other Project X', 'task': 'External work', 'service': '', 'phase': '', 'description': '', 'hours': 8.0},
+        {'date': '2026-05-04', 'employee': 'Omar Khaled', 'project': 'Other Project X', 'task': 'External', 'service': '', 'phase': '', 'description': '', 'hours': 8.0},
     ]
 
-def get_all_timesheets(date_from=None, date_to=None, all_projects=False):
-    """Unified getter — Odoo if available, else demo"""
-    ts = odoo.get_timesheets(date_from=date_from, date_to=date_to, all_projects=all_projects)
+def get_all_timesheets(date_from=None, date_to=None, phases=None, all_projects=False):
+    """Unified getter — Odoo if available, else demo. phases = list or None."""
+    ts = odoo.get_timesheets(date_from=date_from, date_to=date_to,
+                             phase_filter=phases, all_projects=all_projects)
     if ts is None:
         data = get_demo_timesheets()
         if not all_projects:
@@ -267,6 +332,9 @@ def get_all_timesheets(date_from=None, date_to=None, all_projects=False):
             data = [d for d in data if d.get('date', '') >= date_from]
         if date_to:
             data = [d for d in data if d.get('date', '') <= date_to]
+        if phases:
+            phase_list = phases if isinstance(phases, list) else [phases]
+            data = [d for d in data if d.get('phase', '') in phase_list]
         return data, False
     return [normalize_timesheet(e) for e in ts], True
 
@@ -407,33 +475,51 @@ def api_services():
 
     return jsonify(result)
 
-@app.route('/api/services/projects')
-def api_service_projects():
-    """List of unique services/parent-tasks for filter dropdown"""
-    services = load_services()
-    items = []
-    for s in services:
-        name = s.get('اسم الخدمة المستقبلي', '')
-        if name:
-            items.append(name)
-    return jsonify({'services': sorted(items)})
+@app.route('/api/phases')
+def api_phases():
+    """List of phases for the project (from Odoo or fallback)"""
+    phases = odoo.get_phases()
+    if phases is None:
+        # Fallback list (the 5 phases we know exist)
+        return jsonify({
+            'connected': False,
+            'phases': [
+                {'name': 'Consultation phase - Initiation'},
+                {'name': 'Consultation phase - Analysis'},
+                {'name': 'Consultation phase - General'},
+                {'name': 'Consultation phase - UX'},
+                {'name': 'Development Phase'},
+            ],
+            'default': 'Development Phase',
+        })
+    return jsonify({
+        'connected': True,
+        'phases': [{'id': p['id'], 'name': p['name']} for p in phases],
+        'default': 'Development Phase',
+    })
+
+def parse_phases_param(args):
+    """Parse phases query param. Accepts 'phases=A,B,C' or 'phases=A&phases=B'."""
+    phases_csv = args.get('phases')
+    if phases_csv:
+        return [p.strip() for p in phases_csv.split(',') if p.strip()]
+    # Multi-value
+    multi = args.getlist('phases')
+    return [p for p in multi if p] if multi else None
 
 @app.route('/api/timesheets/employees')
 def api_ts_employees():
-    """Aggregated by employee with optional service filter"""
+    """Aggregated by employee with optional phase filter"""
     date_from = request.args.get('from')
     date_to = request.args.get('to')
-    service = request.args.get('service')
+    phases = parse_phases_param(request.args)
 
-    data, connected = get_all_timesheets(date_from=date_from, date_to=date_to)
-
-    # Filter by service if provided
-    if service:
-        data = [d for d in data if d.get('service') == service]
+    data, connected = get_all_timesheets(date_from=date_from, date_to=date_to, phases=phases)
 
     df = pd.DataFrame(data) if data else pd.DataFrame()
     if df.empty:
-        return jsonify({'connected': connected, 'employees': [], 'total_hours': 0})
+        return jsonify({'connected': connected, 'employees': [], 'total_hours': 0,
+                        'phases_filter': phases, 'date_from': date_from, 'date_to': date_to})
 
     by_emp = df.groupby('employee').agg(
         total_hours=('hours', 'sum'),
@@ -443,7 +529,7 @@ def api_ts_employees():
 
     return jsonify({
         'connected': connected,
-        'service_filter': service,
+        'phases_filter': phases,
         'employees': [{
             'name': r['employee'],
             'total_hours': float(r['total_hours']),
@@ -460,11 +546,9 @@ def api_ts_employee_detail(name):
     """Drill-down: days only by default, tasks via expand"""
     date_from = request.args.get('from')
     date_to = request.args.get('to')
-    service = request.args.get('service')
+    phases = parse_phases_param(request.args)
 
-    data, _ = get_all_timesheets(date_from=date_from, date_to=date_to)
-    if service:
-        data = [d for d in data if d.get('service') == service]
+    data, _ = get_all_timesheets(date_from=date_from, date_to=date_to, phases=phases)
     data = [d for d in data if d.get('employee') == name]
 
     by_date = {}
@@ -478,6 +562,7 @@ def api_ts_employee_detail(name):
             'description': entry.get('description'),
             'hours': entry.get('hours'),
             'service': entry.get('service', ''),
+            'phase': entry.get('phase', ''),
         })
     days = sorted(by_date.values(), key=lambda x: x['date'], reverse=True)
 
@@ -493,26 +578,23 @@ def api_ts_export():
     """CSV export of timesheets"""
     date_from = request.args.get('from')
     date_to = request.args.get('to')
-    service = request.args.get('service')
+    phases = parse_phases_param(request.args)
 
-    data, _ = get_all_timesheets(date_from=date_from, date_to=date_to)
-    if service:
-        data = [d for d in data if d.get('service') == service]
+    data, _ = get_all_timesheets(date_from=date_from, date_to=date_to, phases=phases)
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(['Date', 'Employee', 'Project', 'Service', 'Task', 'Description', 'Hours'])
+    writer.writerow(['Date', 'Employee', 'Project', 'Phase', 'Service', 'Task', 'Description', 'Hours'])
     for d in data:
         writer.writerow([
             d.get('date', ''), d.get('employee', ''), d.get('project', ''),
-            d.get('service', ''), d.get('task', ''), d.get('description', ''),
-            d.get('hours', 0)
+            d.get('phase', ''), d.get('service', ''), d.get('task', ''),
+            d.get('description', ''), d.get('hours', 0)
         ])
 
     csv_content = output.getvalue()
     output.close()
     filename = f"timesheets_{date.today().isoformat()}.csv"
-    # Add UTF-8 BOM for Excel Arabic support
     return Response(
         '\ufeff' + csv_content,
         mimetype='text/csv',
