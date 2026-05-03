@@ -28,7 +28,7 @@
 
     <nav class="exec-tabs">
       <button class="exec-tab active" data-tab="overview"><span class="tab-num">01</span> Overview</button>
-      <button class="exec-tab" data-tab="budget"><span class="tab-num">02</span> Budget</button>
+      <button class="exec-tab" data-tab="variance"><span class="tab-num">02</span> Variance</button>
       <button class="exec-tab" data-tab="services"><span class="tab-num">03</span> Services &amp; Scope</button>
       <button class="exec-tab" data-tab="timesheets"><span class="tab-num">04</span> Timesheets</button>
       <button class="exec-tab" data-tab="missing"><span class="tab-num">05</span> Missing Hours</button>
@@ -39,7 +39,7 @@
 
 <main class="content">
   {% include 'partials/overview.html' %}
-  {% include 'partials/budget.html' %}
+  {% include 'partials/variance.html' %}
   {% include 'partials/services.html' %}
   {% include 'partials/timesheets.html' %}
   {% include 'partials/missing.html' %}
@@ -54,7 +54,7 @@
 <!-- Modular JS -->
 <script src="{{ url_for('static', filename='js/utils.js') }}"></script>
 <script src="{{ url_for('static', filename='js/overview.js') }}"></script>
-<script src="{{ url_for('static', filename='js/budget.js') }}"></script>
+<script src="{{ url_for('static', filename='js/variance.js') }}"></script>
 <script src="{{ url_for('static', filename='js/services.js') }}"></script>
 <script src="{{ url_for('static', filename='js/timesheets.js') }}"></script>
 <script src="{{ url_for('static', filename='js/missing.js') }}"></script>
