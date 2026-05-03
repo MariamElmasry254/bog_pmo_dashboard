@@ -1,0 +1,140 @@
+<section class="tab-panel" id="risks">
+  <div class="page-header">
+    <div>
+      <span class="page-eyebrow">RISKS & ISSUES</span>
+      <h2 class="page-title">⚠️ Risks &amp; Issues</h2>
+    </div>
+    <div class="page-actions">
+      <button class="btn-primary" id="addRiskBtn">+ Add Risk/Issue</button>
+    </div>
+  </div>
+
+  <div class="banner banner-warn">
+    <strong>⚠️ Risks &amp; Issues Log:</strong>
+    Add risks (potential problems) and issues (current problems) for tracking.
+    All entries are auto-saved to persistent storage and won't be lost on redeploy.
+  </div>
+
+  <!-- Sub-tabs Development / Consultation -->
+  <div class="sub-tabs-bar" id="risksSubTabs">
+    <button class="sub-tab active" data-rphase="development">Development</button>
+    <button class="sub-tab" data-rphase="consultation">Consultation</button>
+  </div>
+
+  <!-- KPI strip -->
+  <div class="kpi-strip kpi-strip-small" id="risksKpis"></div>
+
+  <!-- Filter bar -->
+  <div class="filters-bar" style="margin-bottom: 16px;">
+    <div class="filter-group">
+      <label class="filter-label">SEVERITY</label>
+      <select id="riskSevFilter" class="search-input" style="width: 140px;">
+        <option value="all">All</option>
+        <option value="Critical">🔴 Critical</option>
+        <option value="High">🟠 High</option>
+        <option value="Medium">🟡 Medium</option>
+        <option value="Low">🟢 Low</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label class="filter-label">STATUS</label>
+      <select id="riskStatusFilter" class="search-input" style="width: 140px;">
+        <option value="all">All</option>
+        <option value="Open">Open</option>
+        <option value="In Progress">In Progress</option>
+        <option value="Resolved">Resolved</option>
+        <option value="Closed">Closed</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label class="filter-label">TYPE</label>
+      <select id="riskTypeFilter" class="search-input" style="width: 140px;">
+        <option value="all">All</option>
+        <option value="Risk">Risk</option>
+        <option value="Issue">Issue</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Risk cards container -->
+  <div id="risksContent">
+    <div class="loading">Loading risks &amp; issues…</div>
+  </div>
+
+  <!-- Modal for add/edit -->
+  <div id="riskModal" class="risk-modal" style="display: none;">
+    <div class="risk-modal-overlay"></div>
+    <div class="risk-modal-content">
+      <div class="risk-modal-head">
+        <h3 id="riskModalTitle">Add New Risk/Issue</h3>
+        <button class="risk-modal-close" id="riskModalClose">×</button>
+      </div>
+      <div class="risk-modal-body">
+        <input type="hidden" id="riskId">
+
+        <div class="risk-form-row">
+          <div class="risk-form-field">
+            <label>Type *</label>
+            <select id="riskType">
+              <option value="Risk">⚠️ Risk (potential)</option>
+              <option value="Issue">🔥 Issue (current)</option>
+            </select>
+          </div>
+          <div class="risk-form-field">
+            <label>Severity *</label>
+            <select id="riskSeverity">
+              <option value="Low">🟢 Low</option>
+              <option value="Medium" selected>🟡 Medium</option>
+              <option value="High">🟠 High</option>
+              <option value="Critical">🔴 Critical</option>
+            </select>
+          </div>
+          <div class="risk-form-field">
+            <label>Status *</label>
+            <select id="riskStatus">
+              <option value="Open" selected>Open</option>
+              <option value="In Progress">In Progress</option>
+              <option value="Resolved">Resolved</option>
+              <option value="Closed">Closed</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="risk-form-field">
+          <label>Title *</label>
+          <input type="text" id="riskTitle" placeholder="Brief title (e.g. Resource shortage in QC team)">
+        </div>
+
+        <div class="risk-form-field">
+          <label>Description</label>
+          <textarea id="riskDescription" rows="3" placeholder="Detailed description of the risk or issue"></textarea>
+        </div>
+
+        <div class="risk-form-field">
+          <label>Mitigation / Action Plan</label>
+          <textarea id="riskMitigation" rows="3" placeholder="How this will be handled or resolved"></textarea>
+        </div>
+
+        <div class="risk-form-row">
+          <div class="risk-form-field">
+            <label>Owner</label>
+            <input type="text" id="riskOwner" placeholder="Person responsible">
+          </div>
+          <div class="risk-form-field">
+            <label>Date Identified</label>
+            <input type="date" id="riskDateId">
+          </div>
+          <div class="risk-form-field">
+            <label>Target Date</label>
+            <input type="date" id="riskTargetDate">
+          </div>
+        </div>
+      </div>
+      <div class="risk-modal-foot">
+        <button class="btn-secondary" id="riskCancelBtn">Cancel</button>
+        <button class="btn-danger" id="riskDeleteBtn" style="display: none;">Delete</button>
+        <button class="btn-primary" id="riskSaveBtn">💾 Save</button>
+      </div>
+    </div>
+  </div>
+</section>
