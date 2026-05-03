@@ -79,6 +79,7 @@ async function loadTaskAnalysis(phaseGroup) {
 
     renderPhaseFilters(phaseGroup, d.phases_available || []);
     renderEmployeeFilter(d.employees_available || []);
+    populateStageFilter(d.stages_used || []);
     renderSummary(d.summary);
     renderTaskList(phaseGroup);
   } catch (e) {
@@ -247,6 +248,25 @@ function empLabel(emps, total) {
   return `${emps.length} employees selected`;
 }
 
+function populateStageFilter(stagesUsed) {
+  const sel = document.getElementById('ovTaskStatus');
+  if (!sel) return;
+  const currentValue = sel.value;
+  // Get unique stage names
+  const stageNames = (stagesUsed || []).map(s => s.name).filter(Boolean);
+  const uniqueStages = [...new Set(stageNames)].sort();
+
+  let html = '<option value="all">All stages</option>';
+  uniqueStages.forEach(name => {
+    html += `<option value="${name.toLowerCase()}">${name}</option>`;
+  });
+  sel.innerHTML = html;
+  // Restore selection if still valid
+  if ([...sel.options].some(o => o.value === currentValue)) {
+    sel.value = currentValue;
+  }
+}
+
 function renderSummary(s) {
   const summary = document.getElementById('ovAnalysisSummary');
   if (!s) { summary.innerHTML = ''; return; }
@@ -292,6 +312,12 @@ function renderTaskList(phaseGroup) {
   const allTasks = data.tasks;
   const taskById = new Map(allTasks.map(t => [t.id, t]));
 
+  // Build set of parent IDs (tasks that have at least one child in the dataset)
+  const parentIdsInData = new Set();
+  allTasks.forEach(t => {
+    if (t.parent_id && taskById.has(t.parent_id)) parentIdsInData.add(t.parent_id);
+  });
+
   // Step 1: find which tasks match the filters (direct matches)
   let matchedIds = new Set();
   allTasks.forEach(t => {
@@ -300,14 +326,13 @@ function renderTaskList(phaseGroup) {
       const matchSearch = (t.name || '').toLowerCase().includes(search);
       if (!matchSearch) pass = false;
     }
-    if (pass && typeFilter === 'parents' && !t.is_parent) pass = false;
-    if (pass && typeFilter === 'subtasks' && t.is_parent) pass = false;
-    if (pass) {
-      const p = t.is_parent ? (t.rollup_progress_pct || 0) : (t.progress_pct || 0);
-      if (statusFilter === 'not_started' && p !== 0) pass = false;
-      else if (statusFilter === 'in_progress' && (p === 0 || p >= 100)) pass = false;
-      else if (statusFilter === 'completed' && (p < 100 || p > 110)) pass = false;
-      else if (statusFilter === 'overdue' && p <= 110) pass = false;
+    const isActuallyParent = parentIdsInData.has(t.id);
+    if (pass && typeFilter === 'parents' && !isActuallyParent) pass = false;
+    if (pass && typeFilter === 'subtasks' && isActuallyParent) pass = false;
+    if (pass && statusFilter && statusFilter !== 'all') {
+      // Stage filter: match by stage name (case insensitive)
+      const taskStage = (t.stage || '').toLowerCase().trim();
+      if (taskStage !== statusFilter.toLowerCase()) pass = false;
     }
     if (pass) matchedIds.add(t.id);
   });
