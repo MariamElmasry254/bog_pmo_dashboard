@@ -791,6 +791,37 @@ th[data-sort-key]:hover {
   font-family: var(--mono);
 }
 
+/* Detail filters (inside drill-down view) */
+.detail-filters {
+  margin-bottom: 16px;
+}
+.filter-mode-tabs {
+  display: inline-flex;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px;
+  gap: 2px;
+}
+.filter-mode-tab {
+  background: transparent;
+  border: none;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: all 0.15s;
+}
+.filter-mode-tab:hover { color: var(--text); }
+.filter-mode-tab.active {
+  background: white;
+  color: var(--navy);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+
 .missing-detail-row {
   background: var(--bg-subtle);
 }
