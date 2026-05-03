@@ -225,18 +225,21 @@ function renderEmployeeFilter(employees) {
         opt.classList.remove('selected');
       }
       document.getElementById('ovEmpLabel').textContent = empLabel(AppState.activeEmployees, employees.length);
-      loadTaskAnalysis(AppState.currentOverviewPhase);
+      // Re-render with current data (no backend call needed for employee filter)
+      renderTaskList(AppState.currentOverviewPhase);
     });
   });
   menu.querySelector('#ovEmpAll').addEventListener('click', (e) => {
     e.stopPropagation();
     AppState.activeEmployees = [...employees];
-    loadTaskAnalysis(AppState.currentOverviewPhase);
+    renderEmployeeFilter(employees);  // refresh checkmarks
+    renderTaskList(AppState.currentOverviewPhase);
   });
   menu.querySelector('#ovEmpNone').addEventListener('click', (e) => {
     e.stopPropagation();
     AppState.activeEmployees = [];
-    loadTaskAnalysis(AppState.currentOverviewPhase);
+    renderEmployeeFilter(employees);
+    renderTaskList(AppState.currentOverviewPhase);
   });
 }
 
@@ -369,6 +372,9 @@ function renderTaskList(phaseGroup) {
   });
 
   // Step 1: find which tasks match the filters (direct matches)
+  const activeEmps = AppState.activeEmployees || [];
+  const empFilterActive = activeEmps.length > 0 && activeEmps.length < (data.employees_available || []).length;
+
   let matchedIds = new Set();
   allTasks.forEach(t => {
     let pass = true;
@@ -380,9 +386,16 @@ function renderTaskList(phaseGroup) {
     if (pass && typeFilter === 'parents' && !isActuallyParent) pass = false;
     if (pass && typeFilter === 'subtasks' && isActuallyParent) pass = false;
     if (pass && statusFilter && statusFilter !== 'all') {
-      // Stage filter: match by stage name (case insensitive)
       const taskStage = (t.stage || '').toLowerCase().trim();
       if (taskStage !== statusFilter.toLowerCase()) pass = false;
+    }
+    // Employee filter: task must have one of the active employees in allocation OR be assignee
+    if (pass && empFilterActive) {
+      const taskEmps = new Set();
+      (t.allocation || []).forEach(a => taskEmps.add(a.name));
+      if (t.assignee) taskEmps.add(t.assignee);
+      const hasMatch = activeEmps.some(e => taskEmps.has(e));
+      if (!hasMatch) pass = false;
     }
     if (pass) matchedIds.add(t.id);
   });
@@ -489,14 +502,14 @@ function renderTaskCard(t, childCount, depth, isMatched) {
   let progressColor, progressLabel;
   if (progressP === 0) { progressColor = '#9CA3AF'; progressLabel = 'Not started'; }
   else if (progressP >= 100 && progressP <= 110) { progressColor = '#10B981'; progressLabel = 'Done'; }
-  else if (progressP > 110) { progressColor = '#EF4444'; progressLabel = 'Over budget'; }
+  else if (progressP > 110) { progressColor = '#10B981'; progressLabel = 'Done'; }  // treat over 100 as done
   else if (progressP >= 75) { progressColor = '#10B981'; progressLabel = 'On track'; }
   else if (progressP >= 40) { progressColor = '#F59E0B'; progressLabel = 'In progress'; }
-  else { progressColor = '#EF4444'; progressLabel = 'Behind'; }
+  else { progressColor = '#3B82F6'; progressLabel = 'Active'; }
 
   const stageColor = stageColorMap(t.stage);
   const isExpanded = AppState.expandedTasks.has(t.id);
-  const widthBar = Math.min(150, progressP);
+  const widthBar = Math.min(100, progressP);
   const isChild = depth > 0;
 
   // For parent display, show rolled-up allocation; for leaf, show own
@@ -546,17 +559,16 @@ function renderTaskCard(t, childCount, depth, isMatched) {
             <div class="tcc-stat-val">${fmt.decimal(remainingH)}<small>h</small></div>
           </div>
           <div class="tcc-progress-num" style="color: ${progressColor};">
-            ${fmt.decimal(progressP)}<small>%</small>
+            ${fmt.decimal(Math.min(100, progressP))}<small>%</small>
           </div>
         </div>
       </div>
       <div class="tcc-progress-bar">
         <div class="tcc-progress-fill" style="width: ${widthBar}%; background: ${progressColor};"></div>
-        ${progressP > 100 ? `<div class="tcc-progress-over" style="width: ${Math.min(50, progressP - 100)}%;"></div>` : ''}
       </div>
       ${(allocHtml || progressLabel) ? `
         <div class="tcc-row2">
-          <span class="tcc-status" style="background: ${progressColor}18; color: ${progressColor};">${progressLabel}</span>
+          ${progressLabel ? `<span class="tcc-status" style="background: ${progressColor}18; color: ${progressColor};">${progressLabel}</span>` : ''}
           ${allocHtml ? `<div class="tcc-allocs">${allocHtml}${moreCount ? `<span class="tcc-more">+${moreCount}</span>` : ''}</div>` : ''}
         </div>
       ` : ''}
