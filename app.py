@@ -375,28 +375,217 @@ def index():
 
 @app.route('/api/overview')
 def api_overview():
-    services = load_services()
-    df = pd.DataFrame(services) if services else pd.DataFrame()
-    total_wd = float(df['WD'].sum()) if 'WD' in df.columns and not df.empty else 0
-    total_all = float(df['ALL'].sum()) if 'ALL' in df.columns and not df.empty else 0
-    complexity_dist = {}
-    if 'Complexity' in df.columns and not df.empty:
-        for c in ['Basic', 'Simple', 'Medium', 'Complex']:
-            complexity_dist[c] = int((df['Complexity'] == c).sum())
+    """KPIs from Roadmap (PPT) only"""
+    roadmap_services = ROADMAP or []
+    total_services_roadmap = len(roadmap_services)
+    total_wd_roadmap = sum(s.get('wd') or 0 for s in roadmap_services)
+
+    # Distinct teams in roadmap
+    teams = set()
+    for s in roadmap_services:
+        if s.get('team'):
+            teams.add(s['team'])
+
+    proj_start = PROJECT_INFO.get('start_date')
+    proj_end = PROJECT_INFO.get('end_date')
+    duration_months = PROJECT_INFO.get('duration_months')
+    milestones_count = len(MILESTONES) if MILESTONES else 0
+
+    # Time progress
+    progress_pct = 0
+    days_elapsed = 0
+    days_remaining = 0
+    try:
+        if proj_start and proj_end:
+            ps = datetime.strptime(proj_start, '%Y-%m-%d').date()
+            pe = datetime.strptime(proj_end, '%Y-%m-%d').date()
+            today = date.today()
+            total = (pe - ps).days
+            elapsed = max(0, (today - ps).days)
+            days_elapsed = elapsed
+            days_remaining = max(0, (pe - today).days)
+            if total > 0:
+                progress_pct = round(min(100, elapsed / total * 100), 1)
+    except Exception:
+        pass
+
     return jsonify({
         'project_name': PROJECT_NAME,
-        'phase': PROJECT_INFO['phase'],
-        'roadmap_start': PROJECT_INFO['start_date'],
-        'roadmap_end': PROJECT_INFO['end_date'],
-        'total_services': len(df),
-        'total_working_days': total_wd,
-        'total_all_mds': total_all,
-        'complexity_distribution': complexity_dist,
-        'budget_sar': 10257885.00,
-        'profit_sar': 9892459.00,
-        'profit_pct': 49,
-        'progress_pct': 0,
+        'phase': PROJECT_INFO.get('phase'),
+        'roadmap_start': proj_start,
+        'roadmap_end': proj_end,
+        'duration_months': duration_months,
+        'total_services': total_services_roadmap,
+        'total_mandays': total_wd_roadmap,
+        'teams_count': len(teams),
+        'teams': sorted(teams),
+        'milestones_count': milestones_count,
+        'progress_pct': progress_pct,
+        'days_elapsed': days_elapsed,
+        'days_remaining': days_remaining,
     })
+
+
+@app.route('/api/overview/analysis/<phase>')
+def api_overview_analysis(phase):
+    """Per-task analysis from Odoo for Development or Consultation:
+    Returns ALL tasks (not just parents) under the relevant phases with:
+      - Initially Planned hours (planned_hours from Odoo task)
+      - Actuals (sum of timesheets)
+      - Allocation (people working on the task)
+      - Progress %
+    """
+    if phase not in ('development', 'consultation'):
+        return jsonify({'error': 'phase must be development or consultation'}), 400
+
+    phase_names = PHASE_MAPPING.get(phase, [])
+    if not phase_names:
+        return jsonify({'tasks': [], 'error': f'No phases mapped for {phase}'})
+
+    # Connect to Odoo
+    if not odoo.uid:
+        if not odoo.connect():
+            return jsonify({'tasks': [], 'connected': False, 'error': 'Odoo unreachable'})
+
+    try:
+        # Get phase IDs by name
+        phases = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.phase', 'search_read',
+            [[('name', 'in', phase_names)]],
+            {'fields': ['id', 'name'], 'limit': 50}
+        )
+        phase_ids = [p['id'] for p in phases]
+        if not phase_ids:
+            return jsonify({'tasks': [], 'connected': True, 'error': 'No matching phases in Odoo'})
+
+        # Get all tasks under those phases (including sub-tasks)
+        # Filter by project too
+        project_domain = [('phase_id', 'in', phase_ids)]
+        if PROJECT_NAME:
+            project_domain.append(('project_id.name', 'ilike', PROJECT_NAME))
+
+        tasks = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [project_domain],
+            {'fields': ['id', 'name', 'planned_hours', 'effective_hours',
+                        'progress', 'parent_id', 'user_id', 'user_ids',
+                        'date_deadline', 'stage_id', 'kanban_state',
+                        'phase_id', 'date_start', 'date_end'],
+             'limit': 5000}
+        )
+
+        if not tasks:
+            return jsonify({'tasks': [], 'connected': True})
+
+        # Get all timesheet entries for these tasks (for accurate per-person allocation)
+        task_ids = [t['id'] for t in tasks]
+        timesheets = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'account.analytic.line', 'search_read',
+            [[('task_id', 'in', task_ids)]],
+            {'fields': ['task_id', 'employee_id', 'unit_amount', 'date'], 'limit': 50000}
+        )
+
+        # Group timesheets by task → employee
+        ts_by_task = {}
+        for ts in timesheets:
+            tid = ts['task_id'][0] if ts.get('task_id') else None
+            if not tid:
+                continue
+            emp = ts.get('employee_id', [None, 'Unknown'])[1] if ts.get('employee_id') else 'Unknown'
+            h = float(ts.get('unit_amount', 0) or 0)
+            d = ts.get('date')
+            if tid not in ts_by_task:
+                ts_by_task[tid] = {'employees': {}, 'first_date': None, 'last_date': None}
+            ts_by_task[tid]['employees'][emp] = ts_by_task[tid]['employees'].get(emp, 0) + h
+            if d:
+                if not ts_by_task[tid]['first_date'] or d < ts_by_task[tid]['first_date']:
+                    ts_by_task[tid]['first_date'] = d
+                if not ts_by_task[tid]['last_date'] or d > ts_by_task[tid]['last_date']:
+                    ts_by_task[tid]['last_date'] = d
+
+        # Build result
+        result = []
+        for t in tasks:
+            tid = t['id']
+            ts_info = ts_by_task.get(tid, {'employees': {}, 'first_date': None, 'last_date': None})
+            actual_hours = sum(ts_info['employees'].values())
+            planned_hours = float(t.get('planned_hours') or 0)
+            # Progress: Odoo's progress field (0-100), or compute from hours
+            progress_pct = float(t.get('progress') or 0)
+            if progress_pct == 0 and planned_hours > 0:
+                progress_pct = min(150, round(actual_hours / planned_hours * 100, 1))
+
+            # Allocation list
+            sorted_emps = sorted(ts_info['employees'].items(), key=lambda x: -x[1])
+            allocation = [{
+                'name': e[0],
+                'hours': round(e[1], 1),
+            } for e in sorted_emps]
+
+            # Stage / status
+            stage = ''
+            if t.get('stage_id') and isinstance(t['stage_id'], list) and len(t['stage_id']) > 1:
+                stage = t['stage_id'][1]
+
+            # Phase label
+            phase_label = ''
+            if t.get('phase_id') and isinstance(t['phase_id'], list) and len(t['phase_id']) > 1:
+                phase_label = t['phase_id'][1]
+
+            # Parent task
+            parent_name = ''
+            if t.get('parent_id') and isinstance(t['parent_id'], list) and len(t['parent_id']) > 1:
+                parent_name = t['parent_id'][1]
+
+            result.append({
+                'id': tid,
+                'name': t.get('name'),
+                'parent_name': parent_name,
+                'is_parent': not bool(parent_name),
+                'phase': phase_label,
+                'stage': stage,
+                'planned_hours': round(planned_hours, 1),
+                'actual_hours': round(actual_hours, 1),
+                'planned_days': round(planned_hours / WORK_HOURS_PER_DAY, 1) if planned_hours else 0,
+                'actual_days': round(actual_hours / WORK_HOURS_PER_DAY, 1),
+                'progress_pct': progress_pct,
+                'deadline': t.get('date_deadline'),
+                'allocation': allocation,
+                'first_log': ts_info['first_date'],
+                'last_log': ts_info['last_date'],
+            })
+
+        # Sort by parent first, then progress desc
+        result.sort(key=lambda x: (x['parent_name'] or '', -x['progress_pct'], x['name'] or ''))
+
+        # Summary
+        total_planned = sum(t['planned_hours'] for t in result)
+        total_actual = sum(t['actual_hours'] for t in result)
+        overall_progress = round(min(150, total_actual / total_planned * 100), 1) if total_planned > 0 else 0
+
+        return jsonify({
+            'tasks': result,
+            'connected': True,
+            'summary': {
+                'total_tasks': len(result),
+                'total_planned_hours': round(total_planned, 1),
+                'total_actual_hours': round(total_actual, 1),
+                'total_planned_days': round(total_planned / WORK_HOURS_PER_DAY, 1),
+                'total_actual_days': round(total_actual / WORK_HOURS_PER_DAY, 1),
+                'overall_progress_pct': overall_progress,
+                'tasks_with_planning': sum(1 for t in result if t['planned_hours'] > 0),
+                'tasks_in_progress': sum(1 for t in result if 0 < t['progress_pct'] < 100),
+                'tasks_completed': sum(1 for t in result if t['progress_pct'] >= 100),
+            },
+            'phase': phase,
+        })
+    except Exception as e:
+        logger.error(f"api_overview_analysis: {e}\n{traceback.format_exc()}")
+        return jsonify({'tasks': [], 'connected': False, 'error': str(e)})
+
 
 SERVICES_OVERRIDES_FILE = os.path.join(PERSIST_DIR, 'services_overrides.json')
 
