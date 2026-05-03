@@ -896,6 +896,196 @@ th[data-sort-key]:hover {
   text-decoration-color: rgba(0,0,0,0.15);
 }
 
+/* ============ TASK ANALYSIS CARDS (Overview tab) ============ */
+.task-analysis-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: 16px;
+}
+.task-card {
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition: all 0.15s;
+}
+.task-card:hover {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+  border-color: var(--border-strong);
+}
+.task-card.task-parent {
+  background: linear-gradient(180deg, white 0%, rgba(59,130,246,0.03) 100%);
+  border-left: 3px solid var(--blue);
+}
+.task-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+.task-parent-link {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+  font-weight: 500;
+}
+.task-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--navy);
+  line-height: 1.3;
+  margin-bottom: 6px;
+}
+.task-meta {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.task-meta-badge {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.task-meta-badge.stage-badge {
+  background: var(--blue-light);
+  color: var(--blue);
+}
+.task-meta-badge.deadline-badge {
+  background: rgba(245, 158, 11, 0.15);
+  color: #92400E;
+}
+.task-progress-num {
+  font-size: 24px;
+  font-weight: 700;
+  font-family: var(--mono);
+  line-height: 1;
+}
+.task-progress-num small {
+  font-size: 12px;
+  margin-left: 2px;
+}
+.task-progress-bar {
+  position: relative;
+  height: 8px;
+  background: var(--bg-subtle);
+  border-radius: 100px;
+  overflow: hidden;
+}
+.task-progress-fill {
+  height: 100%;
+  border-radius: 100px;
+  transition: width 0.4s ease;
+}
+.task-progress-overflow {
+  position: absolute;
+  top: 0;
+  left: 100%;
+  height: 100%;
+  background: var(--red);
+  opacity: 0.5;
+  border-left: 1px solid white;
+}
+.task-card-stats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--bg-subtle);
+  border-radius: 6px;
+}
+.task-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.task-stat-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+.task-stat-value {
+  font-size: 16px;
+  font-weight: 700;
+  font-family: var(--mono);
+  color: var(--text);
+}
+.task-stat-value small {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.task-stat-sub {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--mono);
+}
+.task-stat-arrow {
+  font-size: 18px;
+  color: var(--text-muted);
+}
+.task-stat-spacer {
+  flex: 1;
+}
+.task-stat-status .status-pill {
+  font-size: 10px;
+  padding: 4px 10px;
+}
+.task-allocation {
+  border-top: 1px dashed var(--border);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.task-alloc-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+.task-alloc-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.alloc-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--blue-light);
+  color: var(--blue);
+  padding: 3px 8px;
+  border-radius: 100px;
+  font-size: 11px;
+  font-weight: 500;
+}
+.alloc-pill small {
+  font-family: var(--mono);
+  font-size: 10px;
+  opacity: 0.75;
+}
+.alloc-more {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-style: italic;
+  align-self: center;
+  padding: 0 6px;
+}
+.task-dates {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: var(--mono);
+}
+
 /* ============ VARIANCE SUB-TABS ============ */
 .sub-tabs-bar {
   display: flex;
