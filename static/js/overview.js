@@ -80,8 +80,7 @@ async function loadTaskAnalysis(phaseGroup) {
     renderPhaseFilters(phaseGroup, d.phases_available || []);
     renderEmployeeFilter(d.employees_available || []);
     populateStageFilter(d.stages_used || []);
-    renderSummary(d.summary);
-    renderTaskList(phaseGroup);
+    renderTaskList(phaseGroup);  // This calls renderSummary internally with filtered tasks
   } catch (e) {
     cont.innerHTML = `<div class="banner banner-warn"><strong>Error:</strong> ${e.message}</div>`;
   }
@@ -267,33 +266,84 @@ function populateStageFilter(stagesUsed) {
   }
 }
 
-function renderSummary(s) {
+function renderSummary(filteredTasks) {
   const summary = document.getElementById('ovAnalysisSummary');
-  if (!s) { summary.innerHTML = ''; return; }
-  const overallColor = s.overall_progress_pct >= 100 ? 'kpi-green'
-    : s.overall_progress_pct >= 75 ? 'kpi-blue'
-    : s.overall_progress_pct >= 40 ? 'kpi-amber' : 'kpi-red';
+  if (!summary) return;
+
+  // Compute summary from filtered (non-context) tasks
+  // Only count leaves to avoid double-counting via parents' rollups
+  const taskList = filteredTasks || [];
+
+  const taskIdsHere = new Set(taskList.map(t => t.id));
+  const isParent = (t) => taskList.some(x => x.parent_id === t.id);
+
+  let totalPlanned = 0;
+  let totalActual = 0;
+  let totalRemaining = 0;
+  let parentsCount = 0;
+  let subsCount = 0;
+  let doneCount = 0;
+  let activeCount = 0;
+  let notStartedCount = 0;
+
+  taskList.forEach(t => {
+    const hasChild = isParent(t);
+    if (hasChild) parentsCount++;
+    else subsCount++;
+
+    // Only count leaf tasks for hours (avoid double-counting parent rollups)
+    if (!hasChild) {
+      const stage = (t.stage || '').toLowerCase().trim();
+      const isClosed = stage === 'closed' || stage === 'done' || (t.progress_pct >= 100);
+      const planned = t.planned_hours || 0;
+      const actual = t.actual_hours || 0;
+      totalPlanned += planned;
+      totalActual += actual;
+      // Closed tasks: remaining = 0
+      if (isClosed) {
+        totalRemaining += 0;
+        doneCount++;
+      } else if (planned > 0) {
+        totalRemaining += Math.max(0, planned - actual);
+        if (actual > 0) activeCount++;
+        else notStartedCount++;
+      } else {
+        // Task without planning — show actual as "active" if any
+        if (actual > 0) activeCount++;
+        else notStartedCount++;
+      }
+    }
+  });
+
+  const totalTasks = taskList.length;
+  const overallProgress = totalPlanned > 0 ? Math.min(150, totalActual / totalPlanned * 100) : 0;
+
+  // Color for remaining: more remaining = warning
+  const remainingColor = totalRemaining === 0 ? 'kpi-green'
+    : totalRemaining > totalPlanned * 0.5 ? 'kpi-red'
+    : totalRemaining > totalPlanned * 0.25 ? 'kpi-amber' : 'kpi-blue';
+
   summary.innerHTML = `
     <div class="kpi-strip kpi-strip-small" style="margin-bottom: 16px;">
       <div class="kpi-card kpi-blue compact">
         <div class="kpi-label">TASKS</div>
-        <div class="kpi-value">${s.total_tasks || 0}</div>
-        <div class="kpi-foot">${s.parent_tasks || 0} parents · ${s.sub_tasks || 0} subs</div>
+        <div class="kpi-value">${totalTasks}</div>
+        <div class="kpi-foot">${parentsCount} parents · ${subsCount} subs</div>
       </div>
       <div class="kpi-card kpi-navy compact">
         <div class="kpi-label">PLANNED HOURS</div>
-        <div class="kpi-value">${fmt.num(s.total_planned_hours || 0)}</div>
-        <div class="kpi-foot">${fmt.num(s.total_planned_days || 0)} days</div>
+        <div class="kpi-value">${fmt.num(Math.round(totalPlanned))}</div>
+        <div class="kpi-foot">${fmt.decimal(totalPlanned / 8)} days</div>
       </div>
       <div class="kpi-card kpi-green compact">
         <div class="kpi-label">ACTUAL HOURS</div>
-        <div class="kpi-value">${fmt.num(s.total_actual_hours || 0)}</div>
-        <div class="kpi-foot">${fmt.num(s.total_actual_days || 0)} days</div>
+        <div class="kpi-value">${fmt.num(Math.round(totalActual))}</div>
+        <div class="kpi-foot">${fmt.decimal(totalActual / 8)} days</div>
       </div>
-      <div class="kpi-card ${overallColor} compact">
-        <div class="kpi-label">OVERALL PROGRESS</div>
-        <div class="kpi-value">${fmt.decimal(s.overall_progress_pct || 0)}<span class="kpi-unit">%</span></div>
-        <div class="kpi-foot">${s.tasks_completed || 0} done · ${s.tasks_in_progress || 0} active</div>
+      <div class="kpi-card ${remainingColor} compact">
+        <div class="kpi-label">REMAINING</div>
+        <div class="kpi-value">${fmt.num(Math.round(totalRemaining))}<span class="kpi-unit">h</span></div>
+        <div class="kpi-foot">${doneCount} done · ${activeCount} active · ${notStartedCount} new</div>
       </div>
     </div>
   `;
@@ -353,6 +403,10 @@ function renderTaskList(phaseGroup) {
   });
 
   let tasks = allTasks.filter(t => visibleIds.has(t.id));
+
+  // Update summary KPIs with the matched tasks (excluding context-only ancestors)
+  const matchedTasksList = allTasks.filter(t => matchedIds.has(t.id));
+  renderSummary(matchedTasksList);
 
   if (!tasks.length) {
     cont.innerHTML = '<div class="card"><div class="loading">No tasks match the filters.</div></div>';
@@ -415,23 +469,21 @@ function renderTaskList(phaseGroup) {
 }
 
 function renderTaskCard(t, childCount, depth, isMatched) {
-  // For PARENT (has children): use roll-up data from sub-tasks
-  // For LEAF (no children, has its own work): use direct data
   const hasChildren = childCount > 0;
+  const stageLower = (t.stage || '').toLowerCase().trim();
+  const isClosed = stageLower === 'closed' || stageLower === 'done';
 
   let plannedH, actualH, remainingH, progressP;
   if (hasChildren) {
-    // Parent: show sum of sub-tasks
     plannedH = t.subtask_planned_hours || 0;
     actualH = t.subtask_actual_hours || 0;
-    remainingH = Math.max(0, plannedH - actualH);
-    progressP = plannedH > 0 ? Math.min(150, (actualH / plannedH * 100)) : 0;
+    remainingH = isClosed ? 0 : Math.max(0, plannedH - actualH);
+    progressP = isClosed ? 100 : (plannedH > 0 ? Math.min(150, (actualH / plannedH * 100)) : 0);
   } else {
-    // Leaf task: own data
     plannedH = t.planned_hours || 0;
     actualH = t.actual_hours || 0;
-    remainingH = Math.max(0, plannedH - actualH);
-    progressP = t.progress_pct || 0;
+    remainingH = isClosed ? 0 : Math.max(0, plannedH - actualH);
+    progressP = isClosed ? 100 : (t.progress_pct || 0);
   }
 
   let progressColor, progressLabel;
