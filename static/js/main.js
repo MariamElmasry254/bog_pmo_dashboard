@@ -11,7 +11,7 @@ document.querySelectorAll('.exec-tab').forEach(t => {
     else if (target === 'timesheets') loadTimesheets();
     else if (target === 'missing') loadMissing();
     else if (target === 'roadmap' && !AppState.loaded.roadmap) loadRoadmap();
-    else if (target === 'budget' && !AppState.loaded.budget) loadBudget();
+    else if (target === 'variance') loadVariance();
   });
 });
 
