@@ -1,0 +1,90 @@
+<section class="tab-panel" id="timesheets">
+  <div class="page-header">
+    <div>
+      <span class="page-eyebrow">LIVE · ODOO</span>
+      <h2 class="page-title">Timesheets</h2>
+    </div>
+  </div>
+
+  <!-- Persistent Filters Bar -->
+  <div class="filters-bar">
+    <div class="filter-group">
+      <label class="filter-label">DATE RANGE</label>
+      <input type="date" id="tsFrom" class="search-input" style="width: 150px;">
+      <span class="filter-sep">→</span>
+      <input type="date" id="tsTo" class="search-input" style="width: 150px;">
+    </div>
+    <div class="filter-group">
+      <label class="filter-label">SERVICE / PHASE</label>
+      <select id="tsService" class="search-input" style="width: 240px;">
+        <option value="">All services</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label class="filter-label">EMPLOYEE</label>
+      <input type="text" id="tsSearch" placeholder="Search by name..." class="search-input" style="width: 220px;">
+    </div>
+    <div class="filter-group" style="margin-left: auto;">
+      <button id="tsApply" class="btn-primary">Apply</button>
+      <button id="tsReset" class="btn-ghost">Reset</button>
+      <button id="tsExport" class="btn-export">⬇ Export CSV</button>
+    </div>
+  </div>
+
+  <div id="connectionBanner" class="banner banner-warn" style="display:none;">
+    <strong>Demo mode:</strong> <span id="bannerMsg"></span>
+  </div>
+
+  <!-- View 1: Employees List (default) -->
+  <div id="tsListView">
+    <div class="kpi-strip kpi-strip-small">
+      <div class="kpi-card kpi-blue compact">
+        <div class="kpi-label">TOTAL HOURS</div>
+        <div class="kpi-value"><span id="tsTotalHours">—</span><span class="kpi-unit">h</span></div>
+      </div>
+      <div class="kpi-card kpi-green compact">
+        <div class="kpi-label">EMPLOYEES</div>
+        <div class="kpi-value"><span id="tsTotalEmps">—</span></div>
+      </div>
+      <div class="kpi-card kpi-amber compact">
+        <div class="kpi-label">PERIOD</div>
+        <div class="kpi-value-text" id="tsRange">All time</div>
+      </div>
+      <div class="kpi-card kpi-navy compact">
+        <div class="kpi-label">FILTER</div>
+        <div class="kpi-value-text" id="tsServiceLabel">All services</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">Hours by Employee <span class="muted-text">— click any row for daily breakdown</span></h3>
+      <div class="table-scroll">
+        <table class="data-table" id="tsEmpTable">
+          <thead>
+            <tr>
+              <th>Employee</th>
+              <th class="num">Total Hours</th>
+              <th class="num">Days Logged</th>
+              <th class="num">Entries</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- View 2: Drill-down -->
+  <div id="tsDetailView" style="display:none;">
+    <button class="btn-back" id="tsBack">← Back to all employees</button>
+    <div class="detail-header">
+      <h3 id="tsDetailName">—</h3>
+      <div class="detail-stats">
+        <span><b id="tsDetailH">0</b>h total</span>
+        <span><b id="tsDetailD">0</b> days</span>
+      </div>
+    </div>
+    <div id="tsDetailDays" class="days-list"></div>
+  </div>
+</section>

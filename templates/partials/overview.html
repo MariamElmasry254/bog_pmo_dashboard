@@ -1,0 +1,64 @@
+<section class="tab-panel active" id="overview">
+  <div class="period-tag">
+    <span>PERIOD</span>
+    <strong>2026-04-05 → 2027-05-13</strong>
+  </div>
+
+  <div class="kpi-strip">
+    <div class="kpi-card kpi-blue">
+      <div class="kpi-bar"></div>
+      <div class="kpi-label">TOTAL SERVICES</div>
+      <div class="kpi-value"><span id="kpiServices">—</span><span class="kpi-unit">in scope</span></div>
+      <div class="kpi-foot">From Excel + Roadmap</div>
+    </div>
+    <div class="kpi-card kpi-green">
+      <div class="kpi-bar"></div>
+      <div class="kpi-label">TOTAL WORKING DAYS</div>
+      <div class="kpi-value"><span id="kpiWD">—</span><span class="kpi-unit">WD</span></div>
+      <div class="kpi-foot">Baseline estimate</div>
+    </div>
+    <div class="kpi-card kpi-navy">
+      <div class="kpi-bar"></div>
+      <div class="kpi-label">TOTAL MANDAYS</div>
+      <div class="kpi-value"><span>6,556</span><span class="kpi-unit">MD</span></div>
+      <div class="kpi-foot">Contracted</div>
+    </div>
+    <div class="kpi-card kpi-amber">
+      <div class="kpi-bar"></div>
+      <div class="kpi-label">BUDGET PROFIT</div>
+      <div class="kpi-value"><span id="kpiProfit">49</span><span class="kpi-unit">%</span></div>
+      <div class="kpi-foot">SAR 9.89M net</div>
+    </div>
+  </div>
+
+  <div class="section-bar">
+    <span class="section-num">01</span>
+    <h2>Project Health Snapshot</h2>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <h3 class="card-title">Complexity Distribution</h3>
+      <div class="chart-wrap"><canvas id="complexityChart"></canvas></div>
+    </div>
+    <div class="card">
+      <h3 class="card-title">Project Progress</h3>
+      <div class="progress-section">
+        <div class="big-stat"><span id="progressVal">0</span><span class="big-stat-unit">%</span></div>
+        <div class="progress-bar"><div id="progressBar" class="progress-fill" style="width:0%"></div></div>
+        <div class="progress-dates">
+          <div><span>SUPPORT STARTS</span><b>18 May 2027</b></div>
+          <div><span>SUPPORT ENDS</span><b>17 May 2028</b></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-bar">
+    <span class="section-num">02</span>
+    <h2>Recent Activity (last 7 days)</h2>
+  </div>
+  <div class="card">
+    <div id="recentActivity"><div class="loading">Loading activity…</div></div>
+  </div>
+</section>
