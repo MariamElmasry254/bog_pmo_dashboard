@@ -426,21 +426,31 @@ def api_overview():
     })
 
 
-@app.route('/api/overview/analysis/<phase>')
-def api_overview_analysis(phase):
-    """Per-task analysis from Odoo for Development or Consultation:
-    Returns ALL tasks (not just parents) under the relevant phases with:
-      - Initially Planned hours (planned_hours from Odoo task)
-      - Actuals (sum of timesheets)
-      - Allocation (people working on the task)
-      - Progress %
+@app.route('/api/overview/analysis/<phase_group>')
+def api_overview_analysis(phase_group):
+    """Per-task analysis from Odoo with multi-phase + employee filter support.
+    phase_group: 'development' or 'consultation' — defines default phase set.
+    Query params:
+      - phases: comma-separated list of phase names (overrides default)
+      - employees: comma-separated employee names to filter by
     """
-    if phase not in ('development', 'consultation'):
-        return jsonify({'error': 'phase must be development or consultation'}), 400
+    if phase_group not in ('development', 'consultation'):
+        return jsonify({'error': 'phase_group must be development or consultation'}), 400
 
-    phase_names = PHASE_MAPPING.get(phase, [])
+    # Parse query params
+    phases_param = request.args.get('phases')
+    if phases_param:
+        phase_names = [p.strip() for p in phases_param.split(',') if p.strip()]
+    else:
+        phase_names = PHASE_MAPPING.get(phase_group, [])
+
+    employees_param = request.args.get('employees')
+    employees_filter = []
+    if employees_param:
+        employees_filter = [e.strip() for e in employees_param.split(',') if e.strip()]
+
     if not phase_names:
-        return jsonify({'tasks': [], 'error': f'No phases mapped for {phase}'})
+        return jsonify({'tasks': [], 'error': f'No phases for {phase_group}'})
 
     # Connect to Odoo
     if not odoo.uid:
@@ -456,11 +466,11 @@ def api_overview_analysis(phase):
             {'fields': ['id', 'name'], 'limit': 50}
         )
         phase_ids = [p['id'] for p in phases]
+        phase_id_to_name = {p['id']: p['name'] for p in phases}
         if not phase_ids:
             return jsonify({'tasks': [], 'connected': True, 'error': 'No matching phases in Odoo'})
 
-        # Get all tasks under those phases (including sub-tasks)
-        # Filter by project too
+        # Get all tasks under those phases
         project_domain = [('phase_id', 'in', phase_ids)]
         if PROJECT_NAME:
             project_domain.append(('project_id.name', 'ilike', PROJECT_NAME))
@@ -472,14 +482,14 @@ def api_overview_analysis(phase):
             {'fields': ['id', 'name', 'planned_hours', 'effective_hours',
                         'progress', 'parent_id', 'user_id', 'user_ids',
                         'date_deadline', 'stage_id', 'kanban_state',
-                        'phase_id', 'date_start', 'date_end'],
+                        'phase_id', 'date_start', 'date_end', 'child_ids'],
              'limit': 5000}
         )
 
         if not tasks:
-            return jsonify({'tasks': [], 'connected': True})
+            return jsonify({'tasks': [], 'connected': True, 'phases_available': phase_names})
 
-        # Get all timesheet entries for these tasks (for accurate per-person allocation)
+        # Get all timesheet entries for these tasks
         task_ids = [t['id'] for t in tasks]
         timesheets = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
@@ -490,11 +500,13 @@ def api_overview_analysis(phase):
 
         # Group timesheets by task → employee
         ts_by_task = {}
+        all_employees_set = set()
         for ts in timesheets:
             tid = ts['task_id'][0] if ts.get('task_id') else None
             if not tid:
                 continue
             emp = ts.get('employee_id', [None, 'Unknown'])[1] if ts.get('employee_id') else 'Unknown'
+            all_employees_set.add(emp)
             h = float(ts.get('unit_amount', 0) or 0)
             d = ts.get('date')
             if tid not in ts_by_task:
@@ -506,85 +518,134 @@ def api_overview_analysis(phase):
                 if not ts_by_task[tid]['last_date'] or d > ts_by_task[tid]['last_date']:
                     ts_by_task[tid]['last_date'] = d
 
-        # Build result
-        result = []
+        # Collect all stages used (for visualization)
+        stages_used = {}  # id -> name
+        for t in tasks:
+            if t.get('stage_id') and isinstance(t['stage_id'], list) and len(t['stage_id']) > 1:
+                stages_used[t['stage_id'][0]] = t['stage_id'][1]
+
+        # Build task list
+        task_id_to_obj = {}
         for t in tasks:
             tid = t['id']
             ts_info = ts_by_task.get(tid, {'employees': {}, 'first_date': None, 'last_date': None})
             actual_hours = sum(ts_info['employees'].values())
             planned_hours = float(t.get('planned_hours') or 0)
-            # Progress: Odoo's progress field (0-100), or compute from hours
             progress_pct = float(t.get('progress') or 0)
             if progress_pct == 0 and planned_hours > 0:
                 progress_pct = min(150, round(actual_hours / planned_hours * 100, 1))
 
-            # Allocation list
             sorted_emps = sorted(ts_info['employees'].items(), key=lambda x: -x[1])
-            allocation = [{
-                'name': e[0],
-                'hours': round(e[1], 1),
-            } for e in sorted_emps]
+            allocation = [{'name': e[0], 'hours': round(e[1], 1)} for e in sorted_emps]
 
-            # Stage / status
             stage = ''
+            stage_id = None
             if t.get('stage_id') and isinstance(t['stage_id'], list) and len(t['stage_id']) > 1:
+                stage_id = t['stage_id'][0]
                 stage = t['stage_id'][1]
 
-            # Phase label
-            phase_label = ''
-            if t.get('phase_id') and isinstance(t['phase_id'], list) and len(t['phase_id']) > 1:
-                phase_label = t['phase_id'][1]
+            phase_label = phase_id_to_name.get(t.get('phase_id', [None, ''])[0]) if t.get('phase_id') else ''
 
-            # Parent task
+            parent_id = None
             parent_name = ''
             if t.get('parent_id') and isinstance(t['parent_id'], list) and len(t['parent_id']) > 1:
+                parent_id = t['parent_id'][0]
                 parent_name = t['parent_id'][1]
 
-            result.append({
+            child_count = len(t.get('child_ids') or [])
+
+            task_id_to_obj[tid] = {
                 'id': tid,
                 'name': t.get('name'),
+                'parent_id': parent_id,
                 'parent_name': parent_name,
-                'is_parent': not bool(parent_name),
+                'is_parent': not bool(parent_id),
+                'child_count': child_count,
                 'phase': phase_label,
                 'stage': stage,
+                'stage_id': stage_id,
+                'kanban_state': t.get('kanban_state') or 'normal',
                 'planned_hours': round(planned_hours, 1),
                 'actual_hours': round(actual_hours, 1),
                 'planned_days': round(planned_hours / WORK_HOURS_PER_DAY, 1) if planned_hours else 0,
                 'actual_days': round(actual_hours / WORK_HOURS_PER_DAY, 1),
                 'progress_pct': progress_pct,
                 'deadline': t.get('date_deadline'),
+                'date_start': t.get('date_start'),
+                'date_end': t.get('date_end'),
                 'allocation': allocation,
                 'first_log': ts_info['first_date'],
                 'last_log': ts_info['last_date'],
-            })
+            }
 
-        # Sort by parent first, then progress desc
-        result.sort(key=lambda x: (x['parent_name'] or '', -x['progress_pct'], x['name'] or ''))
+        # Apply employee filter (only show tasks where filtered employee logged time)
+        # Also keep parent if any of its descendants match
+        if employees_filter:
+            matching_task_ids = set()
+            for tid, t in task_id_to_obj.items():
+                emp_names = {a['name'] for a in t['allocation']}
+                if any(e in emp_names for e in employees_filter):
+                    matching_task_ids.add(tid)
+                    # also add parent
+                    if t['parent_id'] and t['parent_id'] in task_id_to_obj:
+                        matching_task_ids.add(t['parent_id'])
+            task_id_to_obj = {k: v for k, v in task_id_to_obj.items() if k in matching_task_ids}
+
+        result = list(task_id_to_obj.values())
+
+        # Sort: parents first by name, then their children grouped
+        # Build hierarchical order
+        parents = [t for t in result if t['is_parent']]
+        parents.sort(key=lambda x: (x['name'] or '').lower())
+
+        ordered = []
+        seen = set()
+        for p in parents:
+            ordered.append(p)
+            seen.add(p['id'])
+            # Append children of this parent
+            children = [t for t in result if t['parent_id'] == p['id']]
+            children.sort(key=lambda x: (-x['progress_pct'], x['name'] or ''))
+            for c in children:
+                ordered.append(c)
+                seen.add(c['id'])
+        # Append orphans (children without parent in current set)
+        for t in result:
+            if t['id'] not in seen:
+                ordered.append(t)
 
         # Summary
-        total_planned = sum(t['planned_hours'] for t in result)
-        total_actual = sum(t['actual_hours'] for t in result)
+        total_planned = sum(t['planned_hours'] for t in ordered)
+        total_actual = sum(t['actual_hours'] for t in ordered)
         overall_progress = round(min(150, total_actual / total_planned * 100), 1) if total_planned > 0 else 0
 
         return jsonify({
-            'tasks': result,
+            'tasks': ordered,
             'connected': True,
+            'phases_available': [p['name'] for p in phases],
+            'phases_active': phase_names,
+            'employees_available': sorted(all_employees_set),
+            'employees_filter': employees_filter,
+            'stages_used': [{'id': sid, 'name': name} for sid, name in stages_used.items()],
             'summary': {
-                'total_tasks': len(result),
+                'total_tasks': len(ordered),
+                'parent_tasks': sum(1 for t in ordered if t['is_parent']),
+                'sub_tasks': sum(1 for t in ordered if not t['is_parent']),
                 'total_planned_hours': round(total_planned, 1),
                 'total_actual_hours': round(total_actual, 1),
                 'total_planned_days': round(total_planned / WORK_HOURS_PER_DAY, 1),
                 'total_actual_days': round(total_actual / WORK_HOURS_PER_DAY, 1),
                 'overall_progress_pct': overall_progress,
-                'tasks_with_planning': sum(1 for t in result if t['planned_hours'] > 0),
-                'tasks_in_progress': sum(1 for t in result if 0 < t['progress_pct'] < 100),
-                'tasks_completed': sum(1 for t in result if t['progress_pct'] >= 100),
+                'tasks_with_planning': sum(1 for t in ordered if t['planned_hours'] > 0),
+                'tasks_in_progress': sum(1 for t in ordered if 0 < t['progress_pct'] < 100),
+                'tasks_completed': sum(1 for t in ordered if t['progress_pct'] >= 100),
             },
-            'phase': phase,
+            'phase_group': phase_group,
         })
     except Exception as e:
         logger.error(f"api_overview_analysis: {e}\n{traceback.format_exc()}")
         return jsonify({'tasks': [], 'connected': False, 'error': str(e)})
+
 
 
 SERVICES_OVERRIDES_FILE = os.path.join(PERSIST_DIR, 'services_overrides.json')
