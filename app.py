@@ -732,6 +732,388 @@ def api_budget():
         'total_change_revenue': -420000.00
     })
 
+# ============================================================
+# VARIANCE — reads variance.xlsx
+# ============================================================
+VARIANCE_FILE = os.path.join(BASE_DIR, 'data', 'variance.xlsx')
+TRAVEL_FILE = os.path.join(BASE_DIR, 'data', 'travel.json')
+
+# Sub-tab definitions: which sheets feed which tab
+VARIANCE_TABS = {
+    'development': {
+        'label': 'Development',
+        'sections': [
+            {'key': 'budget', 'label': 'Budget', 'sheet': 'Budget - Development', 'parser': 'budget'},
+            {'key': 'profitability', 'label': 'Profitability', 'sheet': 'Profitability - Development', 'parser': 'profitability'},
+            {'key': 'effort', 'label': 'Current Effort', 'sheet': 'Current Effort - Development', 'parser': 'effort'},
+            {'key': 'estimated', 'label': 'Estimated Cost', 'sheet': 'Estimated Cost - Development', 'parser': 'estimated'},
+        ]
+    },
+    'consultation': {
+        'label': 'Consultation',
+        'sections': [
+            {'key': 'budget', 'label': 'Budget', 'sheet': 'Budget - Consultation', 'parser': 'budget'},
+            {'key': 'profitability', 'label': 'Profitability', 'sheet': 'Profitability - Consultation', 'parser': 'profitability'},
+            {'key': 'effort', 'label': 'Current Effort', 'sheet': 'Current Effort - Consultation', 'parser': 'effort'},
+            {'key': 'estimated', 'label': 'Estimated Cost', 'sheet': 'Estimated Cost - Consultation', 'parser': 'estimated'},
+        ]
+    },
+    'support': {
+        'label': 'Support',
+        'sections': [
+            {'key': 'budget', 'label': 'Budget', 'sheet': 'Budget - Support', 'parser': 'budget'},
+            {'key': 'estimated', 'label': 'Estimated Cost', 'sheet': 'Estimated Cost - Support', 'parser': 'estimated'},
+        ]
+    },
+    'travel': {
+        'label': 'Travel & Onsite',
+        'sections': [
+            {'key': 'travel', 'label': 'Travel Records', 'parser': 'travel'},
+        ]
+    },
+}
+
+def safe_val(v):
+    """Convert pandas value to JSON-safe value"""
+    if v is None:
+        return None
+    if isinstance(v, float) and pd.isna(v):
+        return None
+    if isinstance(v, (pd.Timestamp, datetime)):
+        return v.isoformat()
+    if isinstance(v, (int, float)):
+        return v
+    return str(v)
+
+def parse_budget_sheet(df):
+    """Parse a Budget sheet (Development/Consultation/Support)"""
+    info = {}
+    # Column 2 = label, column 3-4 = values
+    label_col, val_col, val_col2 = 2, 3, 4
+    rows = df.values.tolist()
+    info['contract'] = {}
+    contract_keys = ['Project Name', 'Client', 'Contract start date', 'Contract end date',
+                     'Contract duration', 'Contract Type', 'Scope', 'Support start and end dates', 'Progress']
+    for r in rows:
+        if len(r) > val_col and pd.notna(r[label_col]) and r[label_col] in contract_keys:
+            v1 = safe_val(r[val_col]) if len(r) > val_col else None
+            v2 = safe_val(r[val_col2]) if len(r) > val_col2 else None
+            info['contract'][r[label_col]] = {'value': v1, 'value2': v2}
+
+    # Approved budget block (rows 11-18)
+    info['approved'] = {}
+    info['final'] = {}
+    for r in rows:
+        if not r or len(r) < 5:
+            continue
+        lbl = r[label_col] if pd.notna(r[label_col]) else None
+        if lbl == 'Total Mandays':
+            info['approved']['total_mandays'] = safe_val(r[4])
+        elif lbl == 'Total Estimated Cost ($)':
+            info['approved']['cost_usd'] = safe_val(r[4])
+        elif lbl == 'Total Estimated Cost (SAR)':
+            info['approved']['cost_sar'] = safe_val(r[4])
+        elif lbl == 'Total Revenue':
+            info['approved']['revenue_sar'] = safe_val(r[4])
+        elif lbl == 'Budget Profit (SAR)' and 'profit_sar' not in info['approved']:
+            info['approved']['profit_sar'] = safe_val(r[4])
+        elif lbl == 'Budget Profit (%)' and 'profit_pct' not in info['approved']:
+            info['approved']['profit_pct'] = safe_val(r[4])
+        # Final budget on right side (col 6 label, col 8 value)
+        if len(r) > 8 and pd.notna(r[6]):
+            rlabel = r[6]
+            rval = safe_val(r[8])
+            if rlabel == 'Total Cost after changes':
+                info['final']['cost_sar'] = rval
+            elif rlabel == 'Total Revenue after changes':
+                info['final']['revenue_sar'] = rval
+            elif rlabel == 'Budget Profit (SAR)':
+                info['final']['profit_sar'] = rval
+            elif rlabel == 'Budget Profit (%)':
+                info['final']['profit_pct'] = rval
+            elif rlabel == 'Total Changes on Budget':
+                info['final']['total_change_cost'] = safe_val(r[8])
+                if len(r) > 9:
+                    info['final']['total_change_revenue'] = safe_val(r[9])
+
+    # Changes log (rows 3-10ish, cols 6,7,8,9)
+    changes = []
+    for r in rows[3:11]:
+        if len(r) > 9 and pd.notna(r[6]) and r[6] != 'Reason':
+            changes.append({
+                'reason': safe_val(r[6]),
+                'plan_id': safe_val(r[7]) if len(r) > 7 else None,
+                'changes_cost': safe_val(r[8]) if len(r) > 8 else None,
+                'changes_revenue': safe_val(r[9]) if len(r) > 9 else None,
+            })
+    info['changes'] = changes
+
+    return info
+
+def parse_profitability_sheet(df):
+    """Parse Profitability sheet — month-by-month variance metrics"""
+    rows = df.values.tolist()
+    # Header at row 5 (0-indexed)
+    if len(rows) < 6:
+        return {'months': [], 'columns': []}
+
+    headers = []
+    for v in rows[5]:
+        h = str(v) if pd.notna(v) else ''
+        headers.append(h.strip())
+
+    months = []
+    for r in rows[7:]:  # data starts at row 7
+        if not r or len(r) == 0:
+            continue
+        if pd.isna(r[0]):
+            continue
+        row_data = {}
+        for i, h in enumerate(headers):
+            if h and i < len(r):
+                row_data[h] = safe_val(r[i])
+        months.append(row_data)
+
+    return {'columns': headers, 'months': months}
+
+def parse_effort_sheet(df):
+    """Parse Current Effort sheet — team monthly hours"""
+    rows = df.values.tolist()
+    if len(rows) < 5:
+        return {'team': [], 'months': [], 'totals': {}}
+
+    # Row 3: month names; Row 4: column headers
+    months_row = rows[3] if len(rows) > 3 else []
+    headers = rows[4] if len(rows) > 4 else []
+
+    # Find month columns (skip first 6 cols which are #, Name, Position, Hour Rate, Overtime Rate)
+    month_blocks = []
+    cur_month = None
+    for i, m in enumerate(months_row):
+        if pd.notna(m):
+            cur_month = str(m).strip()
+        if cur_month and i >= 6:
+            month_blocks.append({'month': cur_month, 'col': i})
+
+    # Group by month (every 3 cols = Regular, Ramadan, Overtime)
+    seen_months = []
+    last_month = None
+    for b in month_blocks:
+        if b['month'] != last_month:
+            seen_months.append(b['month'])
+            last_month = b['month']
+
+    team = []
+    for r in rows[5:]:
+        if len(r) < 4 or pd.isna(r[1]):
+            continue
+        # Stop at totals row
+        if isinstance(r[1], str) and 'total' in str(r[1]).lower():
+            continue
+        if pd.isna(r[0]):
+            # could be totals/summary row
+            if len(r) > 5 and pd.notna(r[5]) and isinstance(r[5], str) and 'cost' in r[5].lower():
+                continue
+            if pd.isna(r[1]):
+                continue
+        member = {
+            'num': safe_val(r[0]) if len(r) > 0 else None,
+            'name': safe_val(r[1]) if len(r) > 1 else None,
+            'position': safe_val(r[3]) if len(r) > 3 else None,
+            'hour_rate': safe_val(r[4]) if len(r) > 4 else None,
+            'overtime_rate': safe_val(r[5]) if len(r) > 5 else None,
+            'monthly': [],
+            'total_cost': safe_val(r[39]) if len(r) > 39 else None,
+            'current_mds': safe_val(r[40]) if len(r) > 40 else None,
+        }
+        # 11 months × 3 cols starting at col 6
+        for m_idx, month in enumerate(seen_months):
+            base = 6 + m_idx * 3
+            if base + 2 < len(r):
+                member['monthly'].append({
+                    'month': month,
+                    'regular': safe_val(r[base]),
+                    'ramadan': safe_val(r[base + 1]),
+                    'overtime': safe_val(r[base + 2]),
+                })
+        team.append(member)
+
+    return {'team': team, 'months': seen_months}
+
+def parse_estimated_sheet(df):
+    """Parse Estimated Cost sheet"""
+    rows = df.values.tolist()
+    # Header typically at row 5
+    if len(rows) < 6:
+        return {'positions': [], 'columns': []}
+
+    # Find header row
+    header_row = None
+    for i, r in enumerate(rows[:10]):
+        if r and pd.notna(r[0]) and 'Position' in str(r[0]):
+            header_row = i
+            break
+    if header_row is None:
+        header_row = 5
+
+    headers = [str(h) if pd.notna(h) else f'col_{i}' for i, h in enumerate(rows[header_row])]
+    positions = []
+    for r in rows[header_row + 1:]:
+        if not r or pd.isna(r[0]):
+            continue
+        row_data = {}
+        for i, h in enumerate(headers):
+            if i < len(r):
+                row_data[h] = safe_val(r[i])
+        if row_data.get(headers[0]):
+            positions.append(row_data)
+    return {'columns': headers, 'positions': positions}
+
+# Main API endpoint for variance data
+@app.route('/api/variance')
+def api_variance():
+    """Returns full variance structure"""
+    out = {'tabs': {}, 'available': os.path.exists(VARIANCE_FILE)}
+    if not out['available']:
+        return jsonify(out)
+
+    try:
+        for tab_key, tab_info in VARIANCE_TABS.items():
+            if tab_key == 'travel':
+                continue  # handled separately
+            tab_data = {'label': tab_info['label'], 'sections': []}
+            for sect in tab_info['sections']:
+                try:
+                    df = pd.read_excel(VARIANCE_FILE, sheet_name=sect['sheet'], header=None)
+                    parser = sect['parser']
+                    if parser == 'budget':
+                        data = parse_budget_sheet(df)
+                    elif parser == 'profitability':
+                        data = parse_profitability_sheet(df)
+                    elif parser == 'effort':
+                        data = parse_effort_sheet(df)
+                    elif parser == 'estimated':
+                        data = parse_estimated_sheet(df)
+                    else:
+                        data = {}
+                    tab_data['sections'].append({
+                        'key': sect['key'],
+                        'label': sect['label'],
+                        'sheet': sect['sheet'],
+                        'data': data,
+                    })
+                except Exception as e:
+                    logger.error(f"Variance parse {sect['sheet']}: {e}")
+                    tab_data['sections'].append({
+                        'key': sect['key'],
+                        'label': sect['label'],
+                        'sheet': sect['sheet'],
+                        'error': str(e),
+                    })
+            out['tabs'][tab_key] = tab_data
+    except Exception as e:
+        logger.error(f"Variance error: {e}\n{traceback.format_exc()}")
+        out['error'] = str(e)
+    return jsonify(out)
+
+@app.route('/api/variance/export')
+def api_variance_export():
+    """Export the variance Excel file as-is"""
+    from flask import send_file
+    if not os.path.exists(VARIANCE_FILE):
+        return jsonify({'error': 'File not found'}), 404
+    return send_file(
+        VARIANCE_FILE,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name=f'BOG_Variance_{date.today().isoformat()}.xlsx'
+    )
+
+# ============================================================
+# TRAVEL & ONSITE — manual entries stored in JSON
+# ============================================================
+def load_travel():
+    if not os.path.exists(TRAVEL_FILE):
+        return []
+    try:
+        import json
+        with open(TRAVEL_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"load_travel: {e}")
+        return []
+
+def save_travel(records):
+    import json
+    os.makedirs(os.path.dirname(TRAVEL_FILE), exist_ok=True)
+    with open(TRAVEL_FILE, 'w', encoding='utf-8') as f:
+        json.dump(records, f, indent=2, ensure_ascii=False)
+
+@app.route('/api/travel', methods=['GET'])
+def api_travel_list():
+    records = load_travel()
+    today_str = date.today().isoformat()
+    # Compute current status for each record
+    for r in records:
+        end = r.get('end_date')
+        if not end:
+            r['status'] = 'Onsite (open-ended)'
+            r['days_onsite'] = (date.today() - datetime.strptime(r['start_date'], '%Y-%m-%d').date()).days + 1 if r.get('start_date') else 0
+        else:
+            try:
+                end_d = datetime.strptime(end, '%Y-%m-%d').date()
+                start_d = datetime.strptime(r['start_date'], '%Y-%m-%d').date()
+                if end_d < date.today():
+                    r['status'] = 'Returned'
+                else:
+                    r['status'] = 'Onsite'
+                r['days_onsite'] = (end_d - start_d).days + 1
+            except Exception:
+                r['status'] = 'Unknown'
+                r['days_onsite'] = 0
+    return jsonify({'records': records, 'today': today_str})
+
+@app.route('/api/travel', methods=['POST'])
+def api_travel_add():
+    body = request.json or {}
+    records = load_travel()
+    new_id = max([r.get('id', 0) for r in records], default=0) + 1
+    record = {
+        'id': new_id,
+        'name': body.get('name', '').strip(),
+        'position': body.get('position', '').strip(),
+        'start_date': body.get('start_date'),
+        'end_date': body.get('end_date') or None,
+        'notes': body.get('notes', ''),
+        'created_at': datetime.now().isoformat(),
+    }
+    if not record['name'] or not record['start_date']:
+        return jsonify({'error': 'name and start_date required'}), 400
+    records.append(record)
+    save_travel(records)
+    return jsonify({'ok': True, 'record': record})
+
+@app.route('/api/travel/<int:rec_id>', methods=['PUT'])
+def api_travel_update(rec_id):
+    body = request.json or {}
+    records = load_travel()
+    for r in records:
+        if r.get('id') == rec_id:
+            for k in ['name', 'position', 'start_date', 'end_date', 'notes']:
+                if k in body:
+                    r[k] = body[k] or None if k == 'end_date' else body[k]
+            save_travel(records)
+            return jsonify({'ok': True, 'record': r})
+    return jsonify({'error': 'not found'}), 404
+
+@app.route('/api/travel/<int:rec_id>', methods=['DELETE'])
+def api_travel_delete(rec_id):
+    records = load_travel()
+    new_recs = [r for r in records if r.get('id') != rec_id]
+    save_travel(new_recs)
+    return jsonify({'ok': True})
+
+
 @app.route('/health')
 def health():
     return jsonify({'status': 'ok', 'time': datetime.now().isoformat()})
