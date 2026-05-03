@@ -150,14 +150,13 @@ function renderProfitability(data, phaseKey) {
     return '<div class="loading">No profitability data</div>';
   }
 
-  // Pre-fetch overrides (async, but render with what's available)
+  // Pre-fetch overrides
   fetch('/api/plan-overrides').then(r => r.json()).then(o => {
     AppState.planOverrides = o.plan_overrides || {};
-    // Re-apply overrides to inputs after render
     setTimeout(() => applyPlanOverrides(phaseKey), 100);
   });
 
-  // Latest month KPIs
+  // Latest month KPIs (using current sheet values for now)
   const latest = data.months[data.months.length - 1];
   let kpiHtml = '';
   if (latest) {
@@ -189,15 +188,15 @@ function renderProfitability(data, phaseKey) {
     `;
   }
 
-  // Editable plan table
+  // Editable: % Completion and Remaining MDs
   const cols = [
     { k: 'Month', label: 'Month', type: 'date' },
-    { k: 'Plan MDs', label: 'Plan MDs (editable)', type: 'plan' },
     { k: 'Estimated Effort MDs', label: 'Estimated MDs', type: 'num' },
     { k: 'This month MDs', label: 'This Month', type: 'num' },
     { k: 'Actual Effort to Date (MD)', label: 'Actual MDs', type: 'num' },
-    { k: '% Completion', label: '% Completion (auto)', type: 'computed-pct' },
-    { k: 'Remaining', label: 'Remaining (auto)', type: 'computed-num' },
+    { k: '% Completion', label: '% Completion (editable)', type: 'editable-pct' },
+    { k: 'Remaining', label: 'Remaining MDs (editable)', type: 'editable-num' },
+    { k: 'Plan MDs', label: 'Plan MDs (auto)', type: 'computed-plan' },
     { k: 'EAC MDs', label: 'EAC MDs', type: 'num' },
     { k: 'Variance', label: 'Variance', type: 'money' },
     { k: 'CPI', label: 'CPI', type: 'num' },
@@ -207,7 +206,7 @@ function renderProfitability(data, phaseKey) {
 
   let html = kpiHtml + `<div class="card">
     <h3 class="card-title">Monthly Variance
-      <span class="muted-text">— Plan MDs editable; Completion & Remaining auto-calculated</span>
+      <span class="muted-text">— % Completion & Remaining editable; Plan auto-calculated · auto-saved on change</span>
     </h3>
     <div class="table-scroll"><table class="data-table" id="profit-table-${phaseKey}">
     <thead><tr>`;
@@ -216,23 +215,23 @@ function renderProfitability(data, phaseKey) {
 
   data.months.forEach((m, idx) => {
     const monthDate = String(m['Month'] || '').slice(0, 10);
-    const monthKey = monthDate.slice(0, 7);  // YYYY-MM
+    const monthKey = monthDate.slice(0, 7);
     const actual = parseFloat(m['Actual Effort to Date (MD)']) || 0;
-    // Default plan from sheet's "% Completion from plan" * "Estimated Effort MDs" or use Estimated MDs
-    const sheetCompletion = parseFloat(m['% Completion from plan']) || 0;
-    const sheetEstimated = parseFloat(m['Estimated Effort MDs']) || 0;
-    let defaultPlan = sheetCompletion > 0 ? (actual / sheetCompletion) : sheetEstimated;
-    if (!isFinite(defaultPlan) || defaultPlan === 0) defaultPlan = sheetEstimated;
+    // Default % Completion from sheet
+    const sheetCompletionPct = (parseFloat(m['% Completion from plan']) || 0) * 100;
+    const sheetRemaining = parseFloat(m['Estimated Remaining (MD)']) || 0;
 
     html += `<tr data-month-key="${monthKey}" data-actual="${actual}">`;
     cols.forEach(c => {
       let cell = '—';
       if (c.type === 'date') {
         cell = monthDate;
-      } else if (c.type === 'plan') {
-        cell = `<input type="number" step="0.01" class="plan-input" data-phase="${phaseKey}" data-month="${monthKey}" value="${defaultPlan.toFixed(2)}" style="width: 90px; padding: 4px 8px; font-family: var(--mono); font-size: 12px; text-align: right; border: 1px solid var(--border-strong); border-radius: 4px;">`;
-      } else if (c.type === 'computed-pct' || c.type === 'computed-num') {
-        cell = `<span class="computed-${c.k.toLowerCase()}-${monthKey}">—</span>`;
+      } else if (c.type === 'editable-pct') {
+        cell = `<input type="number" step="0.01" min="0" max="200" class="completion-input" data-phase="${phaseKey}" data-month="${monthKey}" data-field="completion" value="${sheetCompletionPct.toFixed(2)}" style="width: 80px; padding: 4px 8px; font-family: var(--mono); font-size: 12px; text-align: right; border: 1px solid var(--border-strong); border-radius: 4px;"><span style="font-size: 11px; color: var(--text-muted);">%</span>`;
+      } else if (c.type === 'editable-num') {
+        cell = `<input type="number" step="0.01" min="0" class="remaining-input" data-phase="${phaseKey}" data-month="${monthKey}" data-field="remaining" value="${sheetRemaining.toFixed(2)}" style="width: 95px; padding: 4px 8px; font-family: var(--mono); font-size: 12px; text-align: right; border: 1px solid var(--border-strong); border-radius: 4px;">`;
+      } else if (c.type === 'computed-plan') {
+        cell = `<span class="computed-plan-${monthKey}">—</span>`;
       } else {
         let v = m[c.k];
         if (v != null && v !== '') {
@@ -248,53 +247,51 @@ function renderProfitability(data, phaseKey) {
   });
   html += '</tbody></table></div></div>';
 
-  // Wire after render
   setTimeout(() => {
     const table = document.getElementById(`profit-table-${phaseKey}`);
     if (!table) return;
-    // Initial computation
-    table.querySelectorAll('.plan-input').forEach(inp => {
-      recomputePlanRow(inp);
-      inp.addEventListener('input', () => recomputePlanRow(inp));
-      inp.addEventListener('change', () => savePlanOverride(inp));
+    // Initial render of computed Plan
+    table.querySelectorAll('tr[data-month-key]').forEach(tr => recomputePlanRow(tr));
+    // Wire inputs
+    table.querySelectorAll('.completion-input, .remaining-input').forEach(inp => {
+      inp.addEventListener('input', () => recomputePlanRow(inp.closest('tr')));
+      inp.addEventListener('change', () => saveOverride(inp));
+      // Auto-save on blur as well (debounced)
+      inp.addEventListener('blur', () => saveOverride(inp));
     });
   }, 50);
 
   return html;
 }
 
-function recomputePlanRow(inp) {
-  const monthKey = inp.dataset.month;
-  const tr = inp.closest('tr');
+function recomputePlanRow(tr) {
   if (!tr) return;
   const actual = parseFloat(tr.dataset.actual) || 0;
-  const plan = parseFloat(inp.value) || 0;
-  const completion = plan > 0 ? (actual / plan * 100) : 0;
-  const remaining = plan - actual;
-  // Update computed cells (find by class containing 'computed-')
-  const computedEls = tr.querySelectorAll('span[class*="computed-"]');
-  computedEls.forEach(el => {
-    const cls = el.className || '';
-    if (cls.includes('% completion')) {
-      el.textContent = fmt.decimal(completion) + '%';
-      el.style.color = completion >= 100 ? 'var(--green)' : completion >= 75 ? 'var(--blue)' : 'var(--amber)';
-      el.style.fontWeight = '600';
-    } else if (cls.includes('remaining')) {
-      el.textContent = fmt.decimal(remaining);
-      el.style.color = remaining < 0 ? 'var(--red)' : 'var(--text)';
-      el.style.fontWeight = '600';
-    }
-  });
+  const compInp = tr.querySelector('.completion-input');
+  const remInp = tr.querySelector('.remaining-input');
+  const completionPct = parseFloat(compInp?.value) || 0;
+  const remaining = parseFloat(remInp?.value) || 0;
+  // Plan = Actual + Remaining (this is what the % Completion implies)
+  // Or: Plan = Actual / (completion / 100)
+  // We use Actual + Remaining since both are editable (more direct)
+  const plan = actual + remaining;
+  const planEl = tr.querySelector('span[class*="computed-plan"]');
+  if (planEl) {
+    planEl.textContent = fmt.decimal(plan);
+    planEl.style.fontWeight = '600';
+    planEl.style.color = 'var(--blue)';
+  }
 }
 
-async function savePlanOverride(inp) {
+async function saveOverride(inp) {
   const phase = inp.dataset.phase;
-  const month_key = inp.dataset.month;
-  const plan_md = parseFloat(inp.value) || 0;
+  const monthKey = inp.dataset.month;
+  const field = inp.dataset.field;
+  const value = parseFloat(inp.value) || 0;
   await fetch('/api/plan-overrides', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ phase, month_key, plan_md })
+    body: JSON.stringify({ phase, month_key: monthKey, field, value })
   });
   inp.style.borderColor = 'var(--green)';
   setTimeout(() => { inp.style.borderColor = 'var(--border-strong)'; }, 1200);
@@ -302,12 +299,18 @@ async function savePlanOverride(inp) {
 
 function applyPlanOverrides(phaseKey) {
   const overrides = (AppState.planOverrides || {})[phaseKey] || {};
-  document.querySelectorAll(`.plan-input[data-phase="${phaseKey}"]`).forEach(inp => {
-    const monthKey = inp.dataset.month;
-    if (overrides[monthKey] !== undefined) {
-      inp.value = parseFloat(overrides[monthKey]).toFixed(2);
-      recomputePlanRow(inp);
+  document.querySelectorAll(`#profit-table-${phaseKey} tr[data-month-key]`).forEach(tr => {
+    const monthKey = tr.dataset.monthKey;
+    const monthOverrides = overrides[monthKey] || {};
+    if (monthOverrides.completion !== undefined) {
+      const inp = tr.querySelector('.completion-input');
+      if (inp) inp.value = parseFloat(monthOverrides.completion).toFixed(2);
     }
+    if (monthOverrides.remaining !== undefined) {
+      const inp = tr.querySelector('.remaining-input');
+      if (inp) inp.value = parseFloat(monthOverrides.remaining).toFixed(2);
+    }
+    recomputePlanRow(tr);
   });
 }
 
@@ -390,20 +393,23 @@ async function loadEffortLive(phaseKey, containerId, yearSelectId, monthSelectId
     let html = `
       <div class="banner banner-info" style="margin-bottom: 12px;">
         <strong>${d.month_label}</strong> · ${d.team.length} team members ·
-        Phases: ${(d.phases_used || []).join(', ') || 'all'}
+        Country detected from Odoo employee code (E=EGY, R=KSA, T=TUN) ·
+        Onsite days from Travel records
       </div>
       <div class="table-scroll">
         <table class="data-table">
           <thead>
             <tr>
               <th>Name</th>
-              <th>Position</th>
               <th>Country</th>
+              <th>Resolved Position</th>
+              <th class="num">Onsite Days</th>
               <th class="num">Regular MH</th>
               <th class="num">Ramadan MH</th>
               <th class="num">Overtime MH</th>
               <th class="num">Total Hours</th>
               <th class="num">MDs</th>
+              <th class="num">Eff. Rate ($)</th>
             </tr>
           </thead>
           <tbody>
@@ -413,33 +419,50 @@ async function loadEffortLive(phaseKey, containerId, yearSelectId, monthSelectId
       totalRam += m.ramadan_mh || 0;
       totalOT += m.overtime_mh || 0;
       totalMD += m.mds || 0;
-      const posDisplay = m.position
-        ? `<span style="font-size: 11px;">${m.position}</span>`
-        : `<select class="position-override" data-emp="${encodeURIComponent(m.name)}" style="font-size: 11px; padding: 4px;">
-             <option value="">— set position —</option>
-             ${posOptions}
-           </select>`;
+
+      // Position display: show resolved position with badges
+      let posBadges = '';
+      if (!m.has_base_rate) {
+        posBadges += ' <span class="badge badge-amber" style="font-size: 9px;">no base rate</span>';
+      }
+      if (m.onsite_days > 0 && !m.has_onsite_rate) {
+        posBadges += ' <span class="badge badge-amber" style="font-size: 9px;">no onsite rate</span>';
+      }
+      const posDisplay = `<span style="font-size: 11px;" dir="auto">${m.position || '<i class="muted-text">— no position —</i>'}</span>${posBadges}`;
+
+      const onsiteCell = m.onsite_days > 0
+        ? `<b style="color: var(--amber);">${m.onsite_days}</b><span class="muted-text" style="font-size: 10px;"> d</span>`
+        : `<span class="muted-text">—</span>`;
+      const rateCell = m.effective_hour_rate
+        ? `$${fmt.decimal(m.effective_hour_rate)}${m.onsite_hours > 0 && m.has_onsite_rate ? '<span class="muted-text" style="font-size: 9px;"> blend</span>' : ''}`
+        : `<span class="muted-text">—</span>`;
+      const countryColor = m.country === 'KSA' ? '#10B981' : m.country === 'TUN' ? '#F59E0B' : '#3B82F6';
+
       html += `
         <tr>
-          <td><b>${m.name}</b></td>
+          <td><b>${m.name}</b><br><span class="muted-text" style="font-size: 10px;">${m.odoo_role || ''}</span></td>
+          <td><span class="team-pill" style="font-size: 10px; background: ${countryColor}20; color: ${countryColor}; border-color: ${countryColor};">${m.country}</span></td>
           <td>${posDisplay}</td>
-          <td><span class="team-pill" style="font-size: 10px;">${m.country}</span></td>
+          <td class="num">${onsiteCell}</td>
           <td class="num">${fmt.decimal(m.regular_mh)}</td>
           <td class="num" style="color: ${m.ramadan_mh > 0 ? 'var(--amber)' : 'var(--text-muted)'};">${m.ramadan_mh > 0 ? fmt.decimal(m.ramadan_mh) : '—'}</td>
           <td class="num" style="color: ${m.overtime_mh > 0 ? 'var(--red)' : 'var(--text-muted)'};">${m.overtime_mh > 0 ? fmt.decimal(m.overtime_mh) : '—'}</td>
           <td class="num"><b>${fmt.decimal(m.total_hours)}</b></td>
           <td class="num"><b style="color: var(--blue);">${fmt.decimal(m.mds)}</b></td>
+          <td class="num">${rateCell}</td>
         </tr>
       `;
     });
     html += `
         <tr style="background: var(--bg-subtle); font-weight: 700;">
           <td colspan="3"><b>TOTAL</b></td>
+          <td class="num">—</td>
           <td class="num">${fmt.decimal(totalReg)}</td>
           <td class="num">${fmt.decimal(totalRam)}</td>
           <td class="num">${fmt.decimal(totalOT)}</td>
           <td class="num">${fmt.decimal(totalReg + totalRam + totalOT)}</td>
           <td class="num"><b style="color: var(--blue);">${fmt.decimal(totalMD)}</b></td>
+          <td class="num">—</td>
         </tr>
       </tbody></table></div>
     `;
