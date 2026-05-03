@@ -92,7 +92,18 @@
 
   <div class="banner banner-info">
     <strong>Tag-based analysis:</strong> Aggregates planned + actual hours grouped by tag (Standup, Review, Onboarding, Management, etc.).
-    Useful for tracking effort categories across the project.
+    Click any tag to see per-task breakdown.
+  </div>
+
+  <!-- Tag sub-tabs: Development / Consultation -->
+  <div class="sub-tabs-bar" id="tagSubTabs">
+    <button class="sub-tab active" data-tagphase="development">Development</button>
+    <button class="sub-tab" data-tagphase="consultation">Consultation</button>
+  </div>
+
+  <!-- Phase multi-select for tags -->
+  <div class="filters-bar" style="margin-bottom: 16px;">
+    <div class="filter-group" id="tagPhaseFilters" style="min-width: 280px;"></div>
   </div>
 
   <div id="ovTagsSummary"></div>
