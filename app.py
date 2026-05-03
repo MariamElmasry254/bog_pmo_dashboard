@@ -683,16 +683,24 @@ def api_overview_analysis(phase_group):
             rollup(tid)
 
         # Apply employee filter (only show tasks where filtered employee logged time)
-        # Also keep parent if any of its descendants match
+        # Walk UP entire parent chain to keep ancestors visible (for context)
         if employees_filter:
             matching_task_ids = set()
             for tid, t in task_id_to_obj.items():
                 emp_names = {a['name'] for a in t['allocation']}
                 if any(e in emp_names for e in employees_filter):
                     matching_task_ids.add(tid)
-                    # also add parent
-                    if t['parent_id'] and t['parent_id'] in task_id_to_obj:
-                        matching_task_ids.add(t['parent_id'])
+                    # Walk up entire parent chain
+                    cur = t
+                    visited = {tid}
+                    while cur and cur.get('parent_id') and cur['parent_id'] not in visited:
+                        pid = cur['parent_id']
+                        if pid in task_id_to_obj:
+                            matching_task_ids.add(pid)
+                            visited.add(pid)
+                            cur = task_id_to_obj[pid]
+                        else:
+                            break
             task_id_to_obj = {k: v for k, v in task_id_to_obj.items() if k in matching_task_ids}
 
         result = list(task_id_to_obj.values())
