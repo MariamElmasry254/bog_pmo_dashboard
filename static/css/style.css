@@ -822,6 +822,80 @@ th[data-sort-key]:hover {
   box-shadow: 0 1px 3px rgba(0,0,0,0.08);
 }
 
+/* ============ STATUS SELECT (services tab) ============ */
+.status-select {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 22px 5px 10px;
+  border-radius: 100px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-family: inherit;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 12 12'%3E%3Cpath d='M2 4l4 4 4-4' stroke='%23666' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  transition: all 0.15s;
+  min-width: 110px;
+}
+.status-select.status-Not-Started {
+  background-color: #F3F4F6;
+  color: #6B7280;
+  border-color: #E5E7EB;
+}
+.status-select.status-In-Progress {
+  background-color: #DBEAFE;
+  color: #1E40AF;
+  border-color: #93C5FD;
+}
+.status-select.status-At-Risk {
+  background-color: #FEF3C7;
+  color: #92400E;
+  border-color: #FCD34D;
+}
+.status-select.status-Done {
+  background-color: #D1FAE5;
+  color: #065F46;
+  border-color: #6EE7B7;
+}
+.status-select.status-Overdue {
+  background-color: #FEE2E2;
+  color: #991B1B;
+  border-color: #FCA5A5;
+}
+.status-select:hover {
+  filter: brightness(0.97);
+}
+.status-select:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+}
+
+/* Services table polish */
+.services-table input.svc-input:focus,
+.services-table .svc-input:focus {
+  outline: none;
+  border-color: var(--blue) !important;
+  box-shadow: 0 0 0 2px var(--blue-light);
+}
+.services-table tr:hover {
+  background-color: var(--bg-subtle);
+}
+.services-table tr.row-done {
+  background-color: rgba(209, 250, 229, 0.3);
+  opacity: 0.85;
+}
+.services-table tr.row-done:hover {
+  background-color: rgba(209, 250, 229, 0.5);
+  opacity: 1;
+}
+.services-table tr.row-done td b {
+  color: var(--text-secondary) !important;
+  text-decoration: line-through;
+  text-decoration-color: rgba(0,0,0,0.15);
+}
+
 /* ============ VARIANCE SUB-TABS ============ */
 .sub-tabs-bar {
   display: flex;
