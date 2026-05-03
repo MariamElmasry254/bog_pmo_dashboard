@@ -91,6 +91,53 @@
         <span><b id="tsDetailD">0</b> days</span>
       </div>
     </div>
+
+    <!-- Detail Filters -->
+    <div class="filters-bar detail-filters">
+      <div class="filter-group">
+        <label class="filter-label">FILTER BY</label>
+        <div class="filter-mode-tabs">
+          <button class="filter-mode-tab active" data-mode="tasks">Tasks</button>
+          <button class="filter-mode-tab" data-mode="dates">Dates</button>
+          <button class="filter-mode-tab" data-mode="desc">Description</button>
+        </div>
+      </div>
+
+      <!-- Tasks multi-select (default visible) -->
+      <div class="filter-group detail-filter-pane" id="detailTasksPane">
+        <label class="filter-label">SELECT TASKS</label>
+        <div class="phase-dropdown" id="taskFilterDropdown">
+          <button type="button" class="phase-toggle" id="taskFilterToggle">
+            <span id="taskFilterLabel">All tasks</span>
+            <span style="margin-left:8px; color: var(--text-muted);">▼</span>
+          </button>
+          <div class="phase-menu" id="taskFilterMenu" style="display:none;"></div>
+        </div>
+      </div>
+
+      <!-- Dates multi-select -->
+      <div class="filter-group detail-filter-pane" id="detailDatesPane" style="display:none;">
+        <label class="filter-label">SELECT DATES</label>
+        <div class="phase-dropdown" id="dateFilterDropdown">
+          <button type="button" class="phase-toggle" id="dateFilterToggle">
+            <span id="dateFilterLabel">All dates</span>
+            <span style="margin-left:8px; color: var(--text-muted);">▼</span>
+          </button>
+          <div class="phase-menu" id="dateFilterMenu" style="display:none;"></div>
+        </div>
+      </div>
+
+      <!-- Description search -->
+      <div class="filter-group detail-filter-pane" id="detailDescPane" style="display:none;">
+        <label class="filter-label">SEARCH IN DESCRIPTION</label>
+        <input type="text" id="descSearch" placeholder="Type to search descriptions..." class="search-input" style="width: 320px;">
+      </div>
+
+      <div class="filter-group" style="margin-left: auto;">
+        <button id="detailReset" class="btn-ghost">Reset</button>
+      </div>
+    </div>
+
     <div id="tsDetailDays" class="days-list"></div>
   </div>
 </section>
