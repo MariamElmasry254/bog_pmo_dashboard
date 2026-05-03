@@ -428,34 +428,104 @@ def api_overview():
 
 @app.route('/api/overview/tags-analysis')
 def api_overview_tags_analysis():
-    """Group tasks by their Odoo tags and aggregate planned/actual/remaining hours."""
+    """Group tasks by their Odoo tags. Filtered by phase_group + phases."""
     if not odoo.uid:
         if not odoo.connect():
             return jsonify({'tags': [], 'connected': False, 'error': 'Odoo unreachable'})
 
+    # Phase filter
+    phase_group = request.args.get('phase_group', 'development')
+    phases_param = request.args.get('phases')
+    if phases_param:
+        phase_names = [p.strip() for p in phases_param.split(',') if p.strip()]
+    else:
+        phase_names = PHASE_MAPPING.get(phase_group, [])
+
     try:
-        # Get all tasks for this project
+        # Resolve phase IDs
+        phase_id_to_name = {}
+        if phase_names:
+            phases = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.phase', 'search_read',
+                [[('name', 'in', phase_names)]],
+                {'fields': ['id', 'name'], 'limit': 50}
+            )
+            phase_id_to_name = {p['id']: p['name'] for p in phases}
+
+        # Build base domain - tasks in this project
         project_domain = []
         if PROJECT_NAME:
             project_domain.append(('project_id.name', 'ilike', PROJECT_NAME))
 
+        # Get parent tasks under requested phases
+        parent_domain = list(project_domain)
+        if phase_id_to_name:
+            parent_domain.append(('phase_id', 'in', list(phase_id_to_name.keys())))
+
+        parent_tasks = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [parent_domain],
+            {'fields': ['id', 'name', 'phase_id', 'project_id'], 'limit': 5000}
+        )
+        parent_task_ids = {t['id'] for t in parent_tasks}
+        parent_phase_map = {}  # parent_id -> phase name
+        for pt in parent_tasks:
+            if pt.get('phase_id'):
+                parent_phase_map[pt['id']] = pt['phase_id'][1] if isinstance(pt['phase_id'], list) else ''
+
+        # Get ALL project tasks (so we can walk parent chain)
+        project_ids = set()
+        for pt in parent_tasks:
+            if pt.get('project_id') and isinstance(pt['project_id'], list):
+                project_ids.add(pt['project_id'][0])
+
+        all_domain = list(project_domain)
+        if project_ids:
+            all_domain = [('project_id', 'in', list(project_ids))]
+
         all_tasks = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'project.task', 'search_read',
-            [project_domain],
+            [all_domain],
             {'fields': ['id', 'name', 'planned_hours', 'effective_hours',
                         'progress', 'parent_id', 'tag_ids', 'stage_id',
                         'phase_id', 'project_id'],
              'limit': 10000}
         )
 
+        # Build lookup
+        task_by_id = {t['id']: t for t in all_tasks}
+
+        # Filter tasks: must descend from a parent_task (under our phases)
+        filtered_tasks = []
+        for t in all_tasks:
+            cur = t
+            visited = set()
+            depth = 0
+            found_root = None
+            while cur and cur['id'] not in visited and depth < 10:
+                visited.add(cur['id'])
+                depth += 1
+                if cur['id'] in parent_task_ids:
+                    found_root = cur['id']
+                    break
+                if not cur.get('parent_id'):
+                    break
+                pid = cur['parent_id'][0] if isinstance(cur['parent_id'], list) else cur['parent_id']
+                cur = task_by_id.get(pid)
+            if found_root:
+                t['_root_id'] = found_root
+                filtered_tasks.append(t)
+
         # Get all tag definitions
         all_tag_ids = set()
-        for t in all_tasks:
+        for t in filtered_tasks:
             for tid in t.get('tag_ids', []) or []:
                 all_tag_ids.add(tid)
 
-        tag_id_to_name = {}
+        tag_id_to_info = {}
         if all_tag_ids:
             tags = odoo.models.execute_kw(
                 ODOO_DB, odoo.uid, ODOO_PASSWORD,
@@ -463,16 +533,18 @@ def api_overview_tags_analysis():
                 [[('id', 'in', list(all_tag_ids))]],
                 {'fields': ['id', 'name', 'color']}
             )
-            tag_id_to_name = {t['id']: {'name': t['name'], 'color': t.get('color', 0)} for t in tags}
+            tag_id_to_info = {t['id']: {'name': t['name'], 'color': t.get('color', 0)} for t in tags}
 
-        # Get timesheets for these tasks (for accurate per-tag hours)
-        task_ids = [t['id'] for t in all_tasks]
-        timesheets = odoo.models.execute_kw(
-            ODOO_DB, odoo.uid, ODOO_PASSWORD,
-            'account.analytic.line', 'search_read',
-            [[('task_id', 'in', task_ids)]],
-            {'fields': ['task_id', 'employee_id', 'unit_amount'], 'limit': 50000}
-        )
+        # Get timesheets for these tasks
+        task_ids = [t['id'] for t in filtered_tasks]
+        timesheets = []
+        if task_ids:
+            timesheets = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'account.analytic.line', 'search_read',
+                [[('task_id', 'in', task_ids)]],
+                {'fields': ['task_id', 'employee_id', 'unit_amount'], 'limit': 50000}
+            )
 
         # Aggregate hours per task
         task_hours = {}
@@ -488,40 +560,50 @@ def api_overview_tags_analysis():
                 task_employees[tid] = {}
             task_employees[tid][emp] = task_employees[tid].get(emp, 0) + h
 
-        # Aggregate by tag
-        tag_data = {}  # tag_id -> { name, planned, actual, tasks, employees }
+        # Aggregate by tag (with per-task breakdown)
+        tag_data = {}
         UNTAGGED = -1
 
-        for t in all_tasks:
+        for t in filtered_tasks:
             tid = t['id']
             planned = float(t.get('planned_hours') or 0)
             actual = task_hours.get(tid, 0)
             task_emps = task_employees.get(tid, {})
 
+            # Skip tasks with no tags AND no work AND no planning (noise)
             tag_ids_for_task = t.get('tag_ids', []) or []
             if not tag_ids_for_task:
+                if planned == 0 and actual == 0:
+                    continue
                 tag_ids_for_task = [UNTAGGED]
 
             for tag_id in tag_ids_for_task:
                 if tag_id not in tag_data:
                     tag_data[tag_id] = {
                         'tag_id': tag_id,
-                        'name': tag_id_to_name.get(tag_id, {}).get('name', 'Untagged') if tag_id != UNTAGGED else 'Untagged',
-                        'color': tag_id_to_name.get(tag_id, {}).get('color', 0) if tag_id != UNTAGGED else 0,
+                        'name': tag_id_to_info.get(tag_id, {}).get('name', 'Untagged') if tag_id != UNTAGGED else 'Untagged',
+                        'color': tag_id_to_info.get(tag_id, {}).get('color', 0) if tag_id != UNTAGGED else 0,
                         'planned': 0,
                         'actual': 0,
                         'tasks_count': 0,
                         'employees': {},
-                        'task_names': [],
+                        'tasks': [],  # per-task breakdown
                     }
                 tag_data[tag_id]['planned'] += planned
                 tag_data[tag_id]['actual'] += actual
                 tag_data[tag_id]['tasks_count'] += 1
-                tag_data[tag_id]['task_names'].append(t.get('name', ''))
+                tag_data[tag_id]['tasks'].append({
+                    'id': tid,
+                    'name': t.get('name', ''),
+                    'planned_hours': round(planned, 1),
+                    'actual_hours': round(actual, 1),
+                    'employees': sorted([{'name': e[0], 'hours': round(e[1], 1)} for e in task_emps.items()],
+                                        key=lambda x: -x['hours'])[:5],
+                })
                 for emp, eh in task_emps.items():
                     tag_data[tag_id]['employees'][emp] = tag_data[tag_id]['employees'].get(emp, 0) + eh
 
-        # Build response
+        # Build result
         result = []
         for tag_id, td in tag_data.items():
             planned = td['planned']
@@ -529,6 +611,8 @@ def api_overview_tags_analysis():
             remaining = max(0, planned - actual)
             progress = round(min(100, actual / planned * 100), 1) if planned > 0 else 0
             sorted_emps = sorted(td['employees'].items(), key=lambda x: -x[1])
+            # Sort tasks by actual hours desc
+            td['tasks'].sort(key=lambda x: -x['actual_hours'])
             result.append({
                 'tag_id': td['tag_id'],
                 'name': td['name'],
@@ -542,15 +626,17 @@ def api_overview_tags_analysis():
                 'tasks_count': td['tasks_count'],
                 'top_employees': [{'name': e[0], 'hours': round(e[1], 1)} for e in sorted_emps[:5]],
                 'employees_count': len(td['employees']),
-                'sample_tasks': td['task_names'][:5],
+                'tasks': td['tasks'],
             })
 
-        # Sort by actual hours descending (most-worked tags first)
         result.sort(key=lambda x: -x['actual_hours'])
 
         return jsonify({
             'tags': result,
             'connected': True,
+            'phases_active': phase_names,
+            'phases_available': list(phase_id_to_name.values()),
+            'phase_group': phase_group,
             'summary': {
                 'total_tags': len(result),
                 'total_planned': round(sum(t['planned_hours'] for t in result), 1),
@@ -941,6 +1027,90 @@ def api_overview_analysis(phase_group):
 
 
 SERVICES_OVERRIDES_FILE = os.path.join(PERSIST_DIR, 'services_overrides.json')
+RISKS_FILE = os.path.join(PERSIST_DIR, 'risks_issues.json')
+
+def load_risks():
+    if not os.path.exists(RISKS_FILE):
+        return []
+    try:
+        import json
+        with open(RISKS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+def save_risks(data):
+    import json
+    os.makedirs(os.path.dirname(RISKS_FILE), exist_ok=True)
+    with open(RISKS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+@app.route('/api/risks')
+def api_risks_list():
+    """List all risks/issues, optionally filtered by phase_group"""
+    phase_group = request.args.get('phase_group')
+    risks = load_risks()
+    if phase_group:
+        risks = [r for r in risks if r.get('phase_group') == phase_group]
+    risks.sort(key=lambda x: (
+        {'Critical': 0, 'High': 1, 'Medium': 2, 'Low': 3}.get(x.get('severity'), 4),
+        -int(x.get('updated_at', '').replace('-', '').replace(':', '').replace('T', '').replace('.', '')[:14] or 0)
+    ))
+    return jsonify({'risks': risks, 'count': len(risks)})
+
+
+@app.route('/api/risks', methods=['POST'])
+def api_risks_save():
+    """Create or update a risk/issue. Body should include id (or new uuid), and fields."""
+    body = request.json or {}
+    risks = load_risks()
+    rid = body.get('id')
+    now_iso = datetime.now().isoformat()
+
+    if not rid:
+        # Create new
+        import uuid
+        rid = str(uuid.uuid4())[:8]
+        new_risk = {
+            'id': rid,
+            'created_at': now_iso,
+            'updated_at': now_iso,
+            'phase_group': body.get('phase_group', 'development'),
+            'type': body.get('type', 'Risk'),  # Risk or Issue
+            'title': body.get('title', ''),
+            'description': body.get('description', ''),
+            'mitigation': body.get('mitigation', ''),
+            'severity': body.get('severity', 'Medium'),
+            'status': body.get('status', 'Open'),
+            'owner': body.get('owner', ''),
+            'date_identified': body.get('date_identified', date.today().isoformat()),
+            'target_date': body.get('target_date', ''),
+        }
+        risks.append(new_risk)
+        save_risks(risks)
+        return jsonify({'ok': True, 'risk': new_risk})
+
+    # Update existing
+    for r in risks:
+        if r.get('id') == rid:
+            for k in ['phase_group', 'type', 'title', 'description', 'mitigation',
+                      'severity', 'status', 'owner', 'date_identified', 'target_date']:
+                if k in body:
+                    r[k] = body[k]
+            r['updated_at'] = now_iso
+            save_risks(risks)
+            return jsonify({'ok': True, 'risk': r})
+
+    return jsonify({'error': 'Risk not found'}), 404
+
+
+@app.route('/api/risks/<rid>', methods=['DELETE'])
+def api_risks_delete(rid):
+    risks = load_risks()
+    risks = [r for r in risks if r.get('id') != rid]
+    save_risks(risks)
+    return jsonify({'ok': True})
 
 def load_services_overrides():
     if not os.path.exists(SERVICES_OVERRIDES_FILE):
