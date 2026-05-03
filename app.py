@@ -398,10 +398,80 @@ def api_overview():
         'progress_pct': 0,
     })
 
+SERVICES_OVERRIDES_FILE = os.path.join(PERSIST_DIR, 'services_overrides.json')
+
+def load_services_overrides():
+    if not os.path.exists(SERVICES_OVERRIDES_FILE):
+        return {}
+    try:
+        import json
+        with open(SERVICES_OVERRIDES_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_services_overrides(data):
+    import json
+    os.makedirs(os.path.dirname(SERVICES_OVERRIDES_FILE), exist_ok=True)
+    with open(SERVICES_OVERRIDES_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def get_odoo_parent_task_metadata(service_name):
+    """For a given service name, find the matching parent task in Odoo and return:
+    - earliest entry date (actual_start)
+    - assignee (from task user_ids/user_id)
+    - top contributor (most hours)
+    """
+    if not odoo.uid:
+        if not odoo.connect():
+            return {}
+    try:
+        # Search for task by name
+        tasks = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [[('name', '=', service_name), ('parent_id', '=', False)]],
+            {'fields': ['id', 'name', 'user_id', 'date_start', 'date_end',
+                        'date_deadline', 'stage_id', 'kanban_state'], 'limit': 5}
+        )
+        if not tasks:
+            # Try ilike
+            tasks = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.task', 'search_read',
+                [[('name', 'ilike', service_name), ('parent_id', '=', False)]],
+                {'fields': ['id', 'name', 'user_id', 'date_start', 'date_end',
+                            'date_deadline', 'stage_id', 'kanban_state'], 'limit': 5}
+            )
+        if not tasks:
+            return {}
+        task = tasks[0]
+        meta = {
+            'task_id': task['id'],
+            'task_name': task['name'],
+        }
+        if task.get('user_id') and isinstance(task['user_id'], list) and len(task['user_id']) > 1:
+            meta['assignee'] = task['user_id'][1]
+        if task.get('date_start'):
+            meta['actual_start'] = str(task['date_start'])[:10]
+        if task.get('date_end'):
+            meta['actual_end'] = str(task['date_end'])[:10]
+        if task.get('stage_id') and isinstance(task['stage_id'], list) and len(task['stage_id']) > 1:
+            meta['odoo_stage'] = task['stage_id'][1]
+        return meta
+    except Exception as e:
+        logger.warning(f"Odoo task lookup for {service_name}: {e}")
+        return {}
+
+
 @app.route('/api/services')
 def api_services():
-    """Services with full mapping: baseline / planned / actuals / status"""
+    """Services with department-level breakdown: baseline / planned / actuals / status per dept.
+    Returns one row per (service, department) combination.
+    """
     services = load_services()
+    overrides = load_services_overrides()
 
     # Compute actuals from Odoo timesheets grouped by service (parent_task)
     data, _ = get_all_timesheets()
@@ -410,16 +480,43 @@ def api_services():
         s = entry.get('service', '')
         if not s:
             continue
+        emp = entry.get('employee', 'Unknown')
+        d = entry.get('date', '')
+        h = entry.get('hours', 0)
         if s not in actuals_by_service:
-            actuals_by_service[s] = {'hours': 0, 'employees': set()}
-        actuals_by_service[s]['hours'] += entry.get('hours', 0)
-        actuals_by_service[s]['employees'].add(entry.get('employee'))
+            actuals_by_service[s] = {
+                'hours': 0,
+                'first_date': None,
+                'last_date': None,
+                'employees_hours': {},  # emp -> total hours
+                'employees_dates': {},  # emp -> {first_date, last_date}
+            }
+        actuals_by_service[s]['hours'] += h
+        if d:
+            if not actuals_by_service[s]['first_date'] or d < actuals_by_service[s]['first_date']:
+                actuals_by_service[s]['first_date'] = d
+            if not actuals_by_service[s]['last_date'] or d > actuals_by_service[s]['last_date']:
+                actuals_by_service[s]['last_date'] = d
+        actuals_by_service[s]['employees_hours'][emp] = actuals_by_service[s]['employees_hours'].get(emp, 0) + h
+        # Track each employee's first and last log date for this service
+        if emp not in actuals_by_service[s]['employees_dates']:
+            actuals_by_service[s]['employees_dates'][emp] = {'first': d, 'last': d}
+        else:
+            ed = actuals_by_service[s]['employees_dates'][emp]
+            if d and (not ed['first'] or d < ed['first']):
+                ed['first'] = d
+            if d and (not ed['last'] or d > ed['last']):
+                ed['last'] = d
 
     today = date.today().isoformat()
 
+    # Build response: list of services with all dept data merged + odoo metadata
     result = []
     for s in services:
         name = s.get('اسم الخدمة المستقبلي', '') or ''
+        if not name:
+            continue
+
         # Match service name to actuals (exact or fuzzy)
         actual_entry = actuals_by_service.get(name)
         if not actual_entry and name:
@@ -430,55 +527,178 @@ def api_services():
 
         actual_hours = actual_entry['hours'] if actual_entry else 0
         actual_days = round(actual_hours / WORK_HOURS_PER_DAY, 1)
-        s['actuals_hours'] = actual_hours
-        s['actuals_days'] = actual_days
 
-        # Baseline total in days
-        baseline_total = 0
-        try:
-            baseline_total = float(s.get('ALL') or 0)
-        except (ValueError, TypeError):
-            baseline_total = 0
-        remaining = max(0, baseline_total - actual_days)
-        s['remaining_baseline'] = remaining
+        # Top contributor (fallback)
+        top_contributor = None
+        if actual_entry and actual_entry.get('employees_hours'):
+            top_contributor = max(actual_entry['employees_hours'].items(), key=lambda x: x[1])[0]
 
-        # Auto status
-        if s.get('status_manual'):
-            s['status'] = s['status_manual']
-        else:
+        # Date-based assignation: list of people who logged time within planned date range
+        # (or all contributors if dates are missing). Sorted by total hours descending.
+        assignation_list = []
+        if actual_entry and actual_entry.get('employees_hours'):
             planned_start = s.get('planned_start')
             planned_end = s.get('planned_end')
-            if remaining == 0 and actual_days > 0:
-                s['status'] = 'Done'
-            elif planned_start and planned_start <= today and (not planned_end or planned_end >= today):
-                s['status'] = 'In Progress'
-            elif planned_end and planned_end < today and remaining > 0:
-                s['status'] = 'Overdue'
-            elif planned_start and planned_start > today:
-                s['status'] = 'Not Started'
-            elif actual_days > 0 and remaining > 0:
-                s['status'] = 'In Progress'
-            else:
-                s['status'] = 'Not Started'
+            emps_in_range = {}
+            emps_outside = {}
+            for emp, ed in actual_entry.get('employees_dates', {}).items():
+                emp_first = ed.get('first')
+                emp_last = ed.get('last')
+                hours = actual_entry['employees_hours'].get(emp, 0)
+                # Check if their work overlaps with planned window
+                in_range = True
+                if planned_start and emp_last and emp_last < planned_start:
+                    in_range = False
+                if planned_end and emp_first and emp_first > planned_end:
+                    in_range = False
+                if in_range:
+                    emps_in_range[emp] = hours
+                else:
+                    emps_outside[emp] = hours
+            # Prefer in-range, sorted by hours desc; fall back to outside
+            sorted_in = sorted(emps_in_range.items(), key=lambda x: -x[1])
+            sorted_out = sorted(emps_outside.items(), key=lambda x: -x[1])
+            assignation_list = [e[0] for e in sorted_in] + [e[0] for e in sorted_out]
 
-        # Expected end = today + remaining/8 (skipping weekends)
-        if remaining > 0:
+        auto_assignation = ', '.join(assignation_list[:3]) if assignation_list else ''
+
+        # Try Odoo task metadata (assignee, dates, stage)
+        odoo_meta = {}  # disabled by default — only fetch if needed (slow)
+        # Uncomment to enable: odoo_meta = get_odoo_parent_task_metadata(name)
+
+        # Override key — service ID is the Arabic name (stable)
+        override_key = name
+        sov = overrides.get(override_key, {})
+
+        # Build per-dept rows
+        baseline_by_dept = s.get('baseline_by_dept', {}) or {}
+
+        # Prepare base service data
+        service_obj = {
+            'name': name,
+            'planned_team': s.get('planned_team'),
+            'planned_start': s.get('planned_start'),
+            'planned_end': s.get('planned_end'),
+            'planned_wd_roadmap': s.get('planned_wd_roadmap'),
+            # Odoo-derived
+            'actual_start': (actual_entry or {}).get('first_date') or odoo_meta.get('actual_start'),
+            'actual_end_from_logs': (actual_entry or {}).get('last_date'),
+            'odoo_assignee': odoo_meta.get('assignee'),
+            'odoo_stage': odoo_meta.get('odoo_stage'),
+            'top_contributor': top_contributor,
+            'actuals_total_hours': actual_hours,
+            'actuals_total_days': actual_days,
+            # Departments breakdown
+            'departments': {},
+        }
+
+        # For each department with non-zero baseline, build a row
+        for dept_label in DEPT_LABELS.values():
+            base_v = baseline_by_dept.get(dept_label)
+            dept_override = sov.get('departments', {}).get(dept_label, {})
+
+            # Read overrides
+            planned = dept_override.get('planned')
+            remaining = dept_override.get('remaining')
+            status = dept_override.get('status')
+            assignation = dept_override.get('assignation')
+
+            # Auto-defaults if not overridden
+            if status is None:
+                # Compute auto status using actuals
+                if base_v and actual_days >= base_v:
+                    status = 'Done'
+                elif s.get('planned_end') and s['planned_end'] < today and base_v and actual_days < base_v:
+                    status = 'Overdue'
+                elif s.get('planned_start') and s['planned_start'] <= today and base_v:
+                    status = 'In Progress' if actual_days > 0 else 'Not Started'
+                else:
+                    status = 'Not Started'
+
+            # Auto-default assignation: date-aware list (in-range contributors first)
+            if not assignation:
+                assignation = odoo_meta.get('assignee') or auto_assignation or top_contributor or ''
+
+            # Auto-default remaining
+            if remaining is None and base_v is not None:
+                remaining = max(0, base_v - actual_days)
+
+            service_obj['departments'][dept_label] = {
+                'baseline': base_v,
+                'planned': planned,
+                'actuals_days': actual_days if base_v else None,
+                'assignation': assignation,
+                'remaining': remaining,
+                'status': status,
+                'has_baseline': base_v is not None and base_v > 0,
+            }
+
+        # Actual end: latest log date if all departments are 'Done'
+        all_done = all(
+            d['status'] == 'Done'
+            for d in service_obj['departments'].values()
+            if d['has_baseline']
+        )
+        service_obj['actual_end'] = service_obj['actual_end_from_logs'] if all_done else None
+
+        result.append(service_obj)
+
+    # Default sort by planned_start (roadmap order). Frontend will re-sort to push Done to bottom per-dept.
+    result.sort(key=lambda x: (x.get('planned_start') or '9999-12-31', x.get('name') or ''))
+
+    return jsonify({
+        'services': result,
+        'departments': list(DEPT_LABELS.values()),
+        'today': today,
+    })
+
+
+@app.route('/api/services/override', methods=['POST'])
+def api_services_override():
+    """Save manual override for a (service, dept, field).
+    Body: { service_name, department, field, value }
+    Fields: planned, remaining, status, assignation
+    """
+    body = request.json or {}
+    service_name = body.get('service_name')
+    dept = body.get('department')
+    field = body.get('field')
+    value = body.get('value')
+
+    if not service_name or not dept or not field:
+        return jsonify({'error': 'service_name, department, and field required'}), 400
+
+    valid_fields = {'planned', 'remaining', 'status', 'assignation'}
+    if field not in valid_fields:
+        return jsonify({'error': f'field must be one of {valid_fields}'}), 400
+
+    data = load_services_overrides()
+    if service_name not in data:
+        data[service_name] = {'departments': {}}
+    if 'departments' not in data[service_name]:
+        data[service_name]['departments'] = {}
+    if dept not in data[service_name]['departments']:
+        data[service_name]['departments'][dept] = {}
+
+    if value is None or value == '':
+        data[service_name]['departments'][dept].pop(field, None)
+    else:
+        # Cast to right type
+        if field in ('planned', 'remaining'):
             try:
-                d = date.today()
-                days_left = int(remaining)
-                while days_left > 0:
-                    d = d + timedelta(days=1)
-                    if d.weekday() not in WEEKEND_DAYS:
-                        days_left -= 1
-                s['expected_end'] = d.isoformat()
-            except Exception:
-                s['expected_end'] = None
+                data[service_name]['departments'][dept][field] = float(value)
+            except (ValueError, TypeError):
+                data[service_name]['departments'][dept][field] = None
         else:
-            s['expected_end'] = s.get('planned_end')
+            data[service_name]['departments'][dept][field] = str(value)
 
-        result.append(s)
+    save_services_overrides(data)
+    return jsonify({'ok': True})
 
-    return jsonify(result)
+
+@app.route('/api/services/overrides', methods=['GET'])
+def api_services_overrides_get():
+    return jsonify(load_services_overrides())
 
 @app.route('/api/phases')
 def api_phases():
