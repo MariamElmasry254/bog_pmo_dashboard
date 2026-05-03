@@ -426,6 +426,143 @@ def api_overview():
     })
 
 
+@app.route('/api/overview/tags-analysis')
+def api_overview_tags_analysis():
+    """Group tasks by their Odoo tags and aggregate planned/actual/remaining hours."""
+    if not odoo.uid:
+        if not odoo.connect():
+            return jsonify({'tags': [], 'connected': False, 'error': 'Odoo unreachable'})
+
+    try:
+        # Get all tasks for this project
+        project_domain = []
+        if PROJECT_NAME:
+            project_domain.append(('project_id.name', 'ilike', PROJECT_NAME))
+
+        all_tasks = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [project_domain],
+            {'fields': ['id', 'name', 'planned_hours', 'effective_hours',
+                        'progress', 'parent_id', 'tag_ids', 'stage_id',
+                        'phase_id', 'project_id'],
+             'limit': 10000}
+        )
+
+        # Get all tag definitions
+        all_tag_ids = set()
+        for t in all_tasks:
+            for tid in t.get('tag_ids', []) or []:
+                all_tag_ids.add(tid)
+
+        tag_id_to_name = {}
+        if all_tag_ids:
+            tags = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.tags', 'search_read',
+                [[('id', 'in', list(all_tag_ids))]],
+                {'fields': ['id', 'name', 'color']}
+            )
+            tag_id_to_name = {t['id']: {'name': t['name'], 'color': t.get('color', 0)} for t in tags}
+
+        # Get timesheets for these tasks (for accurate per-tag hours)
+        task_ids = [t['id'] for t in all_tasks]
+        timesheets = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'account.analytic.line', 'search_read',
+            [[('task_id', 'in', task_ids)]],
+            {'fields': ['task_id', 'employee_id', 'unit_amount'], 'limit': 50000}
+        )
+
+        # Aggregate hours per task
+        task_hours = {}
+        task_employees = {}
+        for ts in timesheets:
+            tid = ts['task_id'][0] if ts.get('task_id') else None
+            if not tid:
+                continue
+            h = float(ts.get('unit_amount', 0) or 0)
+            task_hours[tid] = task_hours.get(tid, 0) + h
+            emp = ts.get('employee_id', [None, 'Unknown'])[1] if ts.get('employee_id') else 'Unknown'
+            if tid not in task_employees:
+                task_employees[tid] = {}
+            task_employees[tid][emp] = task_employees[tid].get(emp, 0) + h
+
+        # Aggregate by tag
+        tag_data = {}  # tag_id -> { name, planned, actual, tasks, employees }
+        UNTAGGED = -1
+
+        for t in all_tasks:
+            tid = t['id']
+            planned = float(t.get('planned_hours') or 0)
+            actual = task_hours.get(tid, 0)
+            task_emps = task_employees.get(tid, {})
+
+            tag_ids_for_task = t.get('tag_ids', []) or []
+            if not tag_ids_for_task:
+                tag_ids_for_task = [UNTAGGED]
+
+            for tag_id in tag_ids_for_task:
+                if tag_id not in tag_data:
+                    tag_data[tag_id] = {
+                        'tag_id': tag_id,
+                        'name': tag_id_to_name.get(tag_id, {}).get('name', 'Untagged') if tag_id != UNTAGGED else 'Untagged',
+                        'color': tag_id_to_name.get(tag_id, {}).get('color', 0) if tag_id != UNTAGGED else 0,
+                        'planned': 0,
+                        'actual': 0,
+                        'tasks_count': 0,
+                        'employees': {},
+                        'task_names': [],
+                    }
+                tag_data[tag_id]['planned'] += planned
+                tag_data[tag_id]['actual'] += actual
+                tag_data[tag_id]['tasks_count'] += 1
+                tag_data[tag_id]['task_names'].append(t.get('name', ''))
+                for emp, eh in task_emps.items():
+                    tag_data[tag_id]['employees'][emp] = tag_data[tag_id]['employees'].get(emp, 0) + eh
+
+        # Build response
+        result = []
+        for tag_id, td in tag_data.items():
+            planned = td['planned']
+            actual = td['actual']
+            remaining = max(0, planned - actual)
+            progress = round(min(100, actual / planned * 100), 1) if planned > 0 else 0
+            sorted_emps = sorted(td['employees'].items(), key=lambda x: -x[1])
+            result.append({
+                'tag_id': td['tag_id'],
+                'name': td['name'],
+                'color': td['color'],
+                'planned_hours': round(planned, 1),
+                'actual_hours': round(actual, 1),
+                'remaining_hours': round(remaining, 1),
+                'planned_days': round(planned / WORK_HOURS_PER_DAY, 1),
+                'actual_days': round(actual / WORK_HOURS_PER_DAY, 1),
+                'progress_pct': progress,
+                'tasks_count': td['tasks_count'],
+                'top_employees': [{'name': e[0], 'hours': round(e[1], 1)} for e in sorted_emps[:5]],
+                'employees_count': len(td['employees']),
+                'sample_tasks': td['task_names'][:5],
+            })
+
+        # Sort by actual hours descending (most-worked tags first)
+        result.sort(key=lambda x: -x['actual_hours'])
+
+        return jsonify({
+            'tags': result,
+            'connected': True,
+            'summary': {
+                'total_tags': len(result),
+                'total_planned': round(sum(t['planned_hours'] for t in result), 1),
+                'total_actual': round(sum(t['actual_hours'] for t in result), 1),
+                'total_remaining': round(sum(t['remaining_hours'] for t in result), 1),
+            }
+        })
+    except Exception as e:
+        logger.error(f"api_overview_tags_analysis: {e}\n{traceback.format_exc()}")
+        return jsonify({'tags': [], 'connected': False, 'error': str(e)})
+
+
 @app.route('/api/overview/analysis/<phase_group>')
 def api_overview_analysis(phase_group):
     """Per-task analysis from Odoo with multi-phase + employee filter support.
@@ -704,6 +841,25 @@ def api_overview_analysis(phase_group):
         # Run rollup for every task
         for tid in list(task_id_to_obj.keys()):
             rollup(tid)
+
+        # Inheritance: if a task has no allocation, look at parent's allocation
+        # This handles new tasks where assignee hasn't been set yet (e.g. new resources)
+        for tid, t in task_id_to_obj.items():
+            if not t['allocation'] and t.get('parent_id'):
+                # Walk up to find first ancestor with allocation
+                cur_pid = t['parent_id']
+                visited = set()
+                while cur_pid and cur_pid not in visited:
+                    visited.add(cur_pid)
+                    parent = task_id_to_obj.get(cur_pid)
+                    if not parent:
+                        break
+                    if parent.get('allocation'):
+                        # Inherit allocation as "context" (lower hours = 0 to indicate inherited)
+                        t['inherited_allocation'] = parent['allocation'][:3]  # top 3 from parent
+                        t['allocation_source'] = f"inherited from: {parent['name']}"
+                        break
+                    cur_pid = parent.get('parent_id')
 
         # Apply employee filter (matches allocation OR assignee)
         # Walk UP entire parent chain to keep ancestors visible (for context)
