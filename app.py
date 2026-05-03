@@ -28,6 +28,11 @@ WORK_HOURS_PER_DAY = 8
 WEEKEND_DAYS = [4, 5]  # Friday, Saturday
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Persistent storage path. On Railway, set DATA_PATH env var to mounted volume.
+# Falls back to BASE_DIR/data for local dev.
+PERSIST_DIR = os.environ.get('DATA_PATH', os.path.join(BASE_DIR, 'data'))
+os.makedirs(PERSIST_DIR, exist_ok=True)
+logger.info(f"Persistent storage at: {PERSIST_DIR}")
 DATA_FILE = os.path.join(BASE_DIR, 'data', 'services.xlsx')
 
 app = Flask(
@@ -735,8 +740,8 @@ def api_budget():
 # ============================================================
 # VARIANCE — reads variance.xlsx
 # ============================================================
-VARIANCE_FILE = os.path.join(BASE_DIR, 'data', 'variance.xlsx')
-TRAVEL_FILE = os.path.join(BASE_DIR, 'data', 'travel.json')
+VARIANCE_FILE = os.path.join(BASE_DIR, 'data', 'variance.xlsx')  # Read-only Excel from repo
+TRAVEL_FILE = os.path.join(PERSIST_DIR, 'travel.json')
 
 # Sub-tab definitions: which sheets feed which tab
 VARIANCE_TABS = {
@@ -993,14 +998,41 @@ DEFAULT_WEEKEND = [4, 5]  # Friday, Saturday
 RAMADAN_HOURS = 6
 NORMAL_HOURS = 8
 
+def get_country_from_employee_name(name):
+    """Detect country from Odoo employee code prefix.
+    Format: '[E109] Basem Mohamed' → EGY
+            '[R323] Talal Abdulwahed' → KSA
+            '[T...] Name' → TUN (verify by name as well)
+    """
+    if not name:
+        return 'EGY'
+    import re
+    # Match [X###] or [X##] at the start
+    m = re.match(r'^\s*\[([A-Z])(\d+)\]', str(name).strip())
+    if m:
+        letter = m.group(1).upper()
+        if letter == 'E':
+            return 'EGY'
+        elif letter == 'R':
+            return 'KSA'
+        elif letter == 'T':
+            return 'TUN'
+    # Fallback: check name for hints
+    n = str(name).upper()
+    if 'TUNIS' in n or 'TUN ' in n:
+        return 'TUN'
+    if 'SAUDI' in n or 'KSA' in n:
+        return 'KSA'
+    return 'EGY'  # default
+
 def get_country_from_position(position_name):
-    """Detect country from position name like 'KSA - PM' or 'EGY - Software Engineer'"""
+    """Backward compat: detect country from position string"""
     if not position_name:
-        return 'EGY'  # default
+        return 'EGY'
     pn = str(position_name).upper()
     if 'KSA' in pn or 'SAUDI' in pn:
         return 'KSA'
-    if 'TUNIS' in pn or 'TUN' in pn:
+    if 'TUN' in pn or 'TUNIS' in pn:
         return 'TUN'
     return 'EGY'
 
@@ -1015,18 +1047,46 @@ def get_weekend_for_country(country):
         return TUNIS_WEEKEND
     return DEFAULT_WEEKEND
 
+def get_travel_periods_for_employee(name):
+    """Returns list of (start_date, end_date_or_None) tuples for an employee's travel periods"""
+    records = load_travel()
+    periods = []
+    for r in records:
+        if r.get('name', '').strip().lower() == name.strip().lower():
+            periods.append((r.get('start_date'), r.get('end_date')))
+    return periods
+
+def is_onsite_on_date(name, date_str):
+    """Check if employee was onsite on a given date"""
+    periods = get_travel_periods_for_employee(name)
+    for start, end in periods:
+        if not start:
+            continue
+        if date_str < start:
+            continue
+        if end is None or date_str <= end:
+            return True
+    return False
+
+def get_position_rates(positions_list):
+    """Build dict {position_name: {hour_rate, md_rate}} from positions list"""
+    rate_map = {}
+    for p in positions_list:
+        if p.get('name'):
+            rate_map[p['name'].strip()] = {
+                'hour_rate': p.get('hour_rate'),
+                'md_rate': p.get('md_rate'),
+            }
+    return rate_map
+
 def compute_effort_from_odoo(phase_key, year, month, position_lookup=None):
     """Compute Regular / Ramadan / Overtime hours per person for a specific month.
-    phase_key: 'development', 'consultation', 'support'
-    year, month: int
-    position_lookup: dict {employee_name: position} from positions sheet/Odoo
-    Returns: {team: [...], months: [month_label]}
+    Now also tracks onsite days based on travel records and computes effective rate.
     """
     phases = PHASE_MAPPING.get(phase_key, [])
     if not phases and phase_key != 'support':
         return {'team': [], 'months': [], 'error': f'No phases mapped for {phase_key}'}
 
-    # Date range for the month
     month_start = date(year, month, 1).isoformat()
     if month == 12:
         next_month_start = date(year + 1, 1, 1)
@@ -1034,7 +1094,6 @@ def compute_effort_from_odoo(phase_key, year, month, position_lookup=None):
         next_month_start = date(year, month + 1, 1)
     month_end = (next_month_start - timedelta(days=1)).isoformat()
 
-    # Fetch timesheets
     raw = odoo.get_timesheets(
         date_from=month_start,
         date_to=month_end,
@@ -1044,6 +1103,10 @@ def compute_effort_from_odoo(phase_key, year, month, position_lookup=None):
         return {'team': [], 'months': [date(year, month, 1).strftime('%B')], 'error': 'Odoo unreachable'}
 
     entries = [normalize_timesheet(e) for e in raw]
+
+    # Load positions + rates from Excel
+    positions_list = get_positions_from_excel()
+    rate_map = get_position_rates(positions_list)
 
     # Group by employee, then by date
     by_emp = {}
@@ -1057,16 +1120,23 @@ def compute_effort_from_odoo(phase_key, year, month, position_lookup=None):
             by_emp[emp][d] = 0
         by_emp[emp][d] += h
 
-    # Compute per employee
     team = []
     for emp_name, day_hours in by_emp.items():
-        position = (position_lookup or {}).get(emp_name) or ''
-        country = get_country_from_position(position)
+        # Country from Odoo employee code prefix [E###], [R###], [T###]
+        country = get_country_from_employee_name(emp_name)
         weekend_days = get_weekend_for_country(country)
+
+        # Base role from Odoo position lookup (e.g. "Senior Business Analyst")
+        # We strip any country prefix or onsite suffix to get the bare role
+        odoo_role = (position_lookup or {}).get(emp_name) or ''
 
         regular_mh = 0
         ramadan_mh = 0
         overtime_mh = 0
+        onsite_hours = 0
+        non_onsite_hours = 0
+        onsite_days = 0
+        total_days = 0
 
         for day_str, total_h in day_hours.items():
             try:
@@ -1076,12 +1146,18 @@ def compute_effort_from_odoo(phase_key, year, month, position_lookup=None):
             wd = d_obj.weekday()
             is_weekend = wd in weekend_days
             in_ramadan = is_in_ramadan(day_str, country)
+            is_onsite = is_onsite_on_date(emp_name, day_str)
+
+            total_days += 1
+            if is_onsite:
+                onsite_days += 1
+                onsite_hours += total_h
+            else:
+                non_onsite_hours += total_h
 
             if is_weekend:
-                # All weekend hours are overtime
                 overtime_mh += total_h
             else:
-                # Working day
                 expected = RAMADAN_HOURS if in_ramadan else NORMAL_HOURS
                 if total_h <= expected:
                     if in_ramadan:
@@ -1089,7 +1165,6 @@ def compute_effort_from_odoo(phase_key, year, month, position_lookup=None):
                     else:
                         regular_mh += total_h
                 else:
-                    # Excess is overtime
                     if in_ramadan:
                         ramadan_mh += expected
                     else:
@@ -1099,15 +1174,65 @@ def compute_effort_from_odoo(phase_key, year, month, position_lookup=None):
         total_h = regular_mh + ramadan_mh + overtime_mh
         total_md = round(total_h / NORMAL_HOURS, 2)
 
+        # Position resolution:
+        # - If onsite_days == 0: position = "{COUNTRY} - {role}" (e.g. "EGY - Senior Business Analyst")
+        # - If onsite_days > 0: position = "{COUNTRY} - {role} - onsite"
+        # We try multiple match strategies against the Positions sheet
+        country_position = f"{country} - {odoo_role}".strip(' -') if odoo_role else ''
+        onsite_position = f"{country} - {odoo_role} - onsite".strip(' -') if odoo_role else ''
+
+        # Direct lookup in rate_map (case-sensitive first, then case-insensitive)
+        def _find_position_match(target):
+            if not target:
+                return None
+            if target in rate_map:
+                return target, rate_map[target]
+            # Case-insensitive search
+            target_lower = target.lower()
+            for k, v in rate_map.items():
+                if k.lower() == target_lower:
+                    return k, v
+            # Try fuzzy: ignore extra spaces and common variations
+            target_clean = target_lower.replace('.', '').replace('-', ' ').replace('  ', ' ').strip()
+            for k, v in rate_map.items():
+                k_clean = k.lower().replace('.', '').replace('-', ' ').replace('  ', ' ').strip()
+                if k_clean == target_clean:
+                    return k, v
+            return None
+
+        base_match = _find_position_match(country_position)
+        onsite_match = _find_position_match(onsite_position)
+
+        base_position = base_match[0] if base_match else country_position
+        base_rate_info = base_match[1] if base_match else None
+        onsite_rate_info = onsite_match[1] if onsite_match else None
+
+        effective_hour_rate = None
+        if total_h > 0:
+            base_hr = (base_rate_info or {}).get('hour_rate') or 0
+            onsite_hr = (onsite_rate_info or {}).get('hour_rate') or base_hr
+            if base_hr or onsite_hr:
+                effective_hour_rate = round(
+                    (onsite_hours * (onsite_hr or 0) + non_onsite_hours * (base_hr or 0)) / total_h, 2
+                ) if total_h else 0
+
         team.append({
             'name': emp_name,
-            'position': position,
+            'odoo_role': odoo_role,
+            'position': base_position,  # what we use as base
+            'has_base_rate': bool(base_rate_info),
+            'has_onsite_rate': bool(onsite_rate_info),
             'country': country,
             'regular_mh': round(regular_mh, 2),
             'ramadan_mh': round(ramadan_mh, 2),
             'overtime_mh': round(overtime_mh, 2),
             'total_hours': round(total_h, 2),
             'mds': total_md,
+            'onsite_days': onsite_days,
+            'onsite_hours': round(onsite_hours, 2),
+            'base_hour_rate': (base_rate_info or {}).get('hour_rate'),
+            'onsite_hour_rate': (onsite_rate_info or {}).get('hour_rate'),
+            'effective_hour_rate': effective_hour_rate,
         })
 
     # Sort alphabetically
@@ -1174,7 +1299,7 @@ def get_odoo_position_for_employee(employee_name):
 # ============================================================
 # PLAN OVERRIDES (stored in JSON)
 # ============================================================
-PLAN_FILE = os.path.join(BASE_DIR, 'data', 'plan_overrides.json')
+PLAN_FILE = os.path.join(PERSIST_DIR, 'plan_overrides.json')
 
 def load_plan_overrides():
     if not os.path.exists(PLAN_FILE):
@@ -1245,25 +1370,107 @@ def api_plan_overrides_get():
 def api_plan_overrides_save():
     body = request.json or {}
     data = load_plan_overrides()
-    # body should be {phase, month_key, plan_md}
     phase = body.get('phase')
-    month_key = body.get('month_key')  # e.g. "2026-04"
-    plan_md = body.get('plan_md')
-    if not phase or not month_key:
-        return jsonify({'error': 'phase and month_key required'}), 400
+    month_key = body.get('month_key')
+    field = body.get('field')  # 'completion' or 'remaining'
+    value = body.get('value')
+
+    # Backward compat: 'plan_md' key
+    if 'plan_md' in body and not field:
+        field = 'plan'
+        value = body.get('plan_md')
+
+    if not phase or not month_key or not field:
+        return jsonify({'error': 'phase, month_key, and field required'}), 400
     if 'plan_overrides' not in data:
         data['plan_overrides'] = {}
     if phase not in data['plan_overrides']:
         data['plan_overrides'][phase] = {}
-    if plan_md is None or plan_md == '':
-        data['plan_overrides'][phase].pop(month_key, None)
+    if month_key not in data['plan_overrides'][phase]:
+        data['plan_overrides'][phase][month_key] = {}
+    if value is None or value == '':
+        data['plan_overrides'][phase][month_key].pop(field, None)
     else:
-        data['plan_overrides'][phase][month_key] = float(plan_md)
+        data['plan_overrides'][phase][month_key][field] = float(value)
     save_plan_overrides(data)
     return jsonify({'ok': True, 'data': data})
 
 
 @app.route('/api/position-overrides', methods=['POST'])
+def api_position_overrides_save():
+    """Manual position override for an employee (when Odoo doesn't have it)"""
+    body = request.json or {}
+    name = body.get('name')
+    position = body.get('position')
+    if not name:
+        return jsonify({'error': 'name required'}), 400
+    data = load_plan_overrides()
+    if 'position_overrides' not in data:
+        data['position_overrides'] = {}
+    if not position:
+        data['position_overrides'].pop(name, None)
+    else:
+        data['position_overrides'][name] = position
+    save_plan_overrides(data)
+    return jsonify({'ok': True})
+
+
+@app.route('/api/plan-overrides/backup')
+def api_overrides_backup():
+    """Download all overrides as JSON for manual backup"""
+    data = {
+        'plan_overrides': load_plan_overrides(),
+        'travel_records': load_travel(),
+        'exported_at': datetime.now().isoformat(),
+    }
+    import json
+    return Response(
+        json.dumps(data, indent=2, ensure_ascii=False),
+        mimetype='application/json',
+        headers={'Content-Disposition': f'attachment; filename="dashboard_backup_{date.today().isoformat()}.json"'}
+    )
+
+@app.route('/api/plan-overrides/restore', methods=['POST'])
+def api_overrides_restore():
+    """Upload a backup JSON to restore overrides + travel records"""
+    body = request.json or {}
+    if not body:
+        return jsonify({'error': 'Empty body'}), 400
+    if 'plan_overrides' in body:
+        save_plan_overrides(body['plan_overrides'])
+    if 'travel_records' in body:
+        save_travel(body['travel_records'])
+    return jsonify({'ok': True, 'restored': {
+        'plan_overrides': len(body.get('plan_overrides', {})),
+        'travel_records': len(body.get('travel_records', [])),
+    }})
+
+
+@app.route('/api/storage-info')
+def api_storage_info():
+    """Diagnostic endpoint to verify storage is working"""
+    info = {
+        'persist_dir': PERSIST_DIR,
+        'persist_dir_exists': os.path.isdir(PERSIST_DIR),
+        'persist_dir_writable': os.access(PERSIST_DIR, os.W_OK),
+        'data_path_env': os.environ.get('DATA_PATH'),
+        'files': [],
+    }
+    if info['persist_dir_exists']:
+        for f in os.listdir(PERSIST_DIR):
+            full = os.path.join(PERSIST_DIR, f)
+            if os.path.isfile(full):
+                info['files'].append({
+                    'name': f,
+                    'size_bytes': os.path.getsize(full),
+                    'modified': datetime.fromtimestamp(os.path.getmtime(full)).isoformat(),
+                })
+    info['plan_overrides_count'] = sum(
+        len(v) if isinstance(v, dict) else 0
+        for v in load_plan_overrides().get('plan_overrides', {}).values()
+    )
+    info['travel_records_count'] = len(load_travel())
+    return jsonify(info)
 def api_position_overrides_save():
     """Manual position override for an employee (when Odoo doesn't have it)"""
     body = request.json or {}
@@ -1365,12 +1572,78 @@ def api_variance():
 
 @app.route('/api/variance/export')
 def api_variance_export():
-    """Export the variance Excel file as-is"""
+    """Export variance Excel with current overrides applied"""
     from flask import send_file
+    import shutil
     if not os.path.exists(VARIANCE_FILE):
         return jsonify({'error': 'File not found'}), 404
+
+    # Copy original to a temp file in PERSIST_DIR
+    out_path = os.path.join(PERSIST_DIR, f'variance_export_{date.today().isoformat()}.xlsx')
+    try:
+        shutil.copyfile(VARIANCE_FILE, out_path)
+
+        # Apply overrides — open with openpyxl to preserve formatting
+        try:
+            from openpyxl import load_workbook
+            wb = load_workbook(out_path)
+            overrides_data = load_plan_overrides()
+            plan_overrides = overrides_data.get('plan_overrides', {})
+
+            # Map phase to sheet name
+            phase_to_sheet = {
+                'development': 'Profitability - Development',
+                'consultation': 'Profitability - Consultation',
+            }
+
+            for phase_key, sheet_name in phase_to_sheet.items():
+                if sheet_name not in wb.sheetnames:
+                    continue
+                ws = wb[sheet_name]
+                phase_overrides = plan_overrides.get(phase_key, {})
+
+                # Header at row 6 (1-indexed in openpyxl), data starts row 8
+                # Find Month col (col A) and key columns
+                # Reading row 6 to find column indices
+                header_row = 6
+                col_indices = {}
+                for col in range(1, ws.max_column + 1):
+                    val = ws.cell(row=header_row, column=col).value
+                    if val:
+                        col_indices[str(val).strip()] = col
+
+                completion_col = col_indices.get('% Completion from plan')
+                remaining_col = col_indices.get('Estimated Remaining (MD)')
+
+                # Walk rows 8+ and apply overrides
+                for row in range(8, ws.max_row + 1):
+                    month_val = ws.cell(row=row, column=1).value
+                    if not month_val:
+                        continue
+                    if isinstance(month_val, datetime):
+                        month_key = month_val.strftime('%Y-%m')
+                    else:
+                        month_key = str(month_val)[:7]
+
+                    if month_key in phase_overrides:
+                        mo = phase_overrides[month_key]
+                        if isinstance(mo, dict):
+                            if 'completion' in mo and completion_col:
+                                # Stored as percentage, convert back to fraction
+                                ws.cell(row=row, column=completion_col).value = mo['completion'] / 100
+                            if 'remaining' in mo and remaining_col:
+                                ws.cell(row=row, column=remaining_col).value = mo['remaining']
+
+            wb.save(out_path)
+        except Exception as e:
+            logger.warning(f"Could not apply overrides to export: {e}")
+
+    except Exception as e:
+        logger.error(f"Export failed: {e}")
+        return jsonify({'error': str(e)}), 500
+
     return send_file(
-        VARIANCE_FILE,
+        out_path,
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         as_attachment=True,
         download_name=f'BOG_Variance_{date.today().isoformat()}.xlsx'
