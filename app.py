@@ -84,9 +84,40 @@ class OdooClient:
                 ODOO_DB, self.uid, ODOO_PASSWORD,
                 'account.analytic.line', 'search_read', [domain],
                 {'fields': ['date', 'employee_id', 'project_id', 'task_id',
-                            'parent_task_id', 'name', 'unit_amount'], 'limit': 5000}
+                            'name', 'unit_amount'], 'limit': 5000}
             )
             logger.info(f"Odoo timesheets fetched: {len(result)} entries (filter: {domain})")
+
+            # Enrich with parent task info (Odoo v14 doesn't have parent_task_id on timesheet)
+            # We need to fetch task records to get their parent_id
+            task_ids = list(set(e['task_id'][0] for e in result if e.get('task_id')))
+            parent_map = {}  # task_id -> parent_task_name
+            if task_ids:
+                try:
+                    tasks = self.models.execute_kw(
+                        ODOO_DB, self.uid, ODOO_PASSWORD,
+                        'project.task', 'read',
+                        [task_ids],
+                        {'fields': ['id', 'name', 'parent_id']}
+                    )
+                    for t in tasks:
+                        parent = t.get('parent_id')
+                        if parent and isinstance(parent, list) and len(parent) > 1:
+                            parent_map[t['id']] = parent[1]
+                        else:
+                            parent_map[t['id']] = t.get('name')  # task is its own parent
+                    logger.info(f"Loaded parent mapping for {len(tasks)} tasks")
+                except Exception as e:
+                    logger.warning(f"Could not load parent tasks: {e}")
+
+            # Attach parent task name to each entry
+            for entry in result:
+                task = entry.get('task_id')
+                if task and task[0] in parent_map:
+                    entry['_parent_name'] = parent_map[task[0]]
+                else:
+                    entry['_parent_name'] = task[1] if task else ''
+
             return result
         except Exception as e:
             self.last_error = f"{type(e).__name__}: {str(e)}"
@@ -176,20 +207,22 @@ def load_services():
 
 def normalize_timesheet(entry):
     """Convert Odoo timesheet entry to flat dict.
-    Uses parent_task_id when available — that's the SERVICE the task belongs to."""
+    'service' = parent task name (the umbrella service the task belongs to).
+    For Odoo v14, parent name is computed via task lookup and stored in '_parent_name'.
+    """
     project = entry.get('project_id', [None, ''])
     task = entry.get('task_id', [None, ''])
-    parent = entry.get('parent_task_id', [None, ''])
+    task_name = task[1] if task and task[1] else (entry.get('name') or '')
 
-    # SERVICE = parent task name (if exists), else task name
-    service_name = parent[1] if (parent and parent[1]) else (task[1] if task and task[1] else '')
+    # SERVICE = parent task name (computed in get_timesheets), fallback to task name itself
+    service_name = entry.get('_parent_name') or task_name
 
     return {
         'date': entry.get('date'),
         'employee': entry.get('employee_id', [None, 'Unknown'])[1] if entry.get('employee_id') else 'Unknown',
         'project': project[1] if project else '',
-        'task': task[1] if task and task[1] else (entry.get('name') or ''),
-        'service': service_name,  # this is what we group actuals by
+        'task': task_name,
+        'service': service_name,  # umbrella/parent — used to group actuals per service
         'description': entry.get('name', ''),
         'hours': float(entry.get('unit_amount', 0)),
     }
