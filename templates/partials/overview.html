@@ -40,8 +40,8 @@
   </div>
 
   <div class="banner banner-info">
-    <strong>Per-task breakdown:</strong> Initially Planned (from Odoo task) vs Actual hours (from timesheets).
-    Each task shows the people working on it and progress percentage.
+    <strong>Per-task breakdown from Odoo:</strong> Initially Planned (planned_hours) vs Actual (timesheets).
+    Click any parent task to expand its sub-tasks.
   </div>
 
   <!-- Sub-tabs: Development / Consultation -->
@@ -50,25 +50,30 @@
     <button class="sub-tab" data-ovphase="consultation">Consultation</button>
   </div>
 
-  <!-- Filters -->
-  <div class="filters-bar" style="margin-bottom: 16px;">
+  <!-- Filters Bar -->
+  <div class="filters-bar" style="margin-bottom: 16px; flex-wrap: wrap;">
+    <div class="filter-group" id="ovPhaseFilters" style="min-width: 280px;"></div>
+    <div class="filter-group" id="ovEmployeeFilters" style="min-width: 280px;"></div>
     <div class="filter-group">
-      <input type="text" id="ovTaskSearch" placeholder="🔍 Search task..." class="search-input" style="width: 280px;">
+      <label class="filter-label">SEARCH</label>
+      <input type="text" id="ovTaskSearch" placeholder="🔍 Search task..." class="search-input" style="width: 220px;">
     </div>
     <div class="filter-group">
-      <select id="ovTaskType" class="search-input" style="width: 200px;">
+      <label class="filter-label">TYPE</label>
+      <select id="ovTaskType" class="search-input" style="width: 170px;">
         <option value="all">All tasks</option>
         <option value="parents">Parent tasks only</option>
         <option value="subtasks">Sub-tasks only</option>
       </select>
     </div>
     <div class="filter-group">
-      <select id="ovTaskStatus" class="search-input" style="width: 200px;">
-        <option value="all">All statuses</option>
-        <option value="not_started">Not started (0%)</option>
-        <option value="in_progress">In progress (1-99%)</option>
-        <option value="completed">Completed (100%+)</option>
-        <option value="overdue">Overdue (>100%)</option>
+      <label class="filter-label">PROGRESS</label>
+      <select id="ovTaskStatus" class="search-input" style="width: 170px;">
+        <option value="all">All</option>
+        <option value="not_started">Not started</option>
+        <option value="in_progress">In progress</option>
+        <option value="completed">Completed</option>
+        <option value="overdue">Over budget</option>
       </select>
     </div>
   </div>
