@@ -29,6 +29,21 @@ window.loadOverview = async function() {
 
   await loadOverviewKPIs();
   await loadTaskAnalysis(AppState.currentOverviewPhase);
+
+  // Tags wiring
+  AppState.currentTagPhase = AppState.currentTagPhase || 'development';
+  AppState.activeTagPhases = null;
+  AppState.expandedTags = AppState.expandedTags || new Set();
+  document.querySelectorAll('#tagSubTabs .sub-tab').forEach(b => {
+    b.addEventListener('click', () => {
+      const ph = b.dataset.tagphase;
+      AppState.currentTagPhase = ph;
+      AppState.activeTagPhases = null;
+      document.querySelectorAll('#tagSubTabs .sub-tab').forEach(x =>
+        x.classList.toggle('active', x.dataset.tagphase === ph));
+      loadTagsAnalysis();
+    });
+  });
   await loadTagsAnalysis();
 };
 
@@ -38,8 +53,15 @@ async function loadTagsAnalysis() {
   if (!cont) return;
   cont.innerHTML = '<div class="loading">Loading tags from Odoo…</div>';
 
+  const phaseGroup = AppState.currentTagPhase || 'development';
+  const params = new URLSearchParams();
+  params.set('phase_group', phaseGroup);
+  if (AppState.activeTagPhases && AppState.activeTagPhases.length) {
+    params.set('phases', AppState.activeTagPhases.join(','));
+  }
+
   try {
-    const res = await fetch('/api/overview/tags-analysis');
+    const res = await fetch('/api/overview/tags-analysis?' + params.toString());
     const d = await res.json();
 
     if (!d.connected) {
@@ -48,13 +70,17 @@ async function loadTagsAnalysis() {
       return;
     }
 
+    AppState.tagsData = d;
+    if (!AppState.activeTagPhases) AppState.activeTagPhases = d.phases_active || [];
+
+    renderTagPhaseFilters(phaseGroup, d.phases_available || []);
+
     if (!d.tags || !d.tags.length) {
-      cont.innerHTML = '<div class="card"><div class="loading">No tagged tasks found in this project.</div></div>';
+      cont.innerHTML = '<div class="card"><div class="loading">No tagged tasks found in this phase.</div></div>';
       summary.innerHTML = '';
       return;
     }
 
-    // Summary KPIs
     const s = d.summary;
     summary.innerHTML = `
       <div class="kpi-strip kpi-strip-small" style="margin-bottom: 16px;">
@@ -77,8 +103,7 @@ async function loadTagsAnalysis() {
       </div>
     `;
 
-    // Tag cards
-    let html = '<div class="card"><h3 class="card-title" style="margin-bottom: 12px;">Tags Breakdown <span class="muted-text">— sorted by actual hours</span></h3><div class="tags-grid">';
+    let html = `<div class="card"><h3 class="card-title" style="margin-bottom: 12px;">Tags Breakdown <span class="muted-text">— click a tag to see per-task breakdown</span></h3><div class="tags-grid">`;
 
     d.tags.forEach(tag => {
       const p = tag.progress_pct || 0;
@@ -91,30 +116,29 @@ async function loadTagsAnalysis() {
 
       const widthBar = Math.min(100, p);
       const tagColorClass = tag.color ? `tag-color-${tag.color}` : 'tag-color-default';
-
       const empPills = (tag.top_employees || []).slice(0, 4).map(e =>
         `<span class="alloc-pill-mini" title="${e.hours}h">${e.name} <small>${fmt.decimal(e.hours)}h</small></span>`
       ).join('');
       const moreEmpCount = Math.max(0, (tag.employees_count || 0) - 4);
+      const isExpanded = AppState.expandedTags.has(tag.tag_id);
 
       html += `
-        <div class="tag-card">
-          <div class="tag-card-head">
+        <div class="tag-card ${isExpanded ? 'tag-card-expanded' : ''}">
+          <div class="tag-card-head" data-tag-toggle="${tag.tag_id}" style="cursor: pointer;">
             <div class="tag-name-block">
               <div class="tag-name-row">
                 <span class="tag-pill ${tagColorClass}">🏷️ ${tag.name}</span>
                 <span class="tag-task-count">${tag.tasks_count} task${tag.tasks_count !== 1 ? 's' : ''}</span>
+                <span class="tag-expand-arrow">${isExpanded ? '▼' : '▶'}</span>
               </div>
             </div>
             <div class="tag-progress-num" style="color: ${progressColor};">
               ${fmt.decimal(p)}<small>%</small>
             </div>
           </div>
-
           <div class="tcc-progress-bar">
             <div class="tcc-progress-fill" style="width: ${widthBar}%; background: ${progressColor};"></div>
           </div>
-
           <div class="tag-stats">
             <div class="tag-stat">
               <div class="tag-stat-lbl">PLANNED</div>
@@ -131,7 +155,6 @@ async function loadTagsAnalysis() {
               <div class="tag-stat-val">${fmt.decimal(tag.remaining_hours)}<small>h</small></div>
             </div>
           </div>
-
           ${empPills ? `
             <div class="tag-employees">
               <div class="tag-emp-label">Contributors (${tag.employees_count}):</div>
@@ -141,15 +164,120 @@ async function loadTagsAnalysis() {
               </div>
             </div>
           ` : ''}
+          ${isExpanded && tag.tasks ? `
+            <div class="tag-tasks-list">
+              <div class="tag-tasks-header">📋 Tasks under this tag (${tag.tasks.length}):</div>
+              ${tag.tasks.map(t => {
+                const tp = t.planned_hours > 0 ? Math.min(100, t.actual_hours / t.planned_hours * 100) : 0;
+                const tc = tp >= 100 ? '#10B981' : tp >= 75 ? '#10B981' : tp >= 40 ? '#F59E0B' : '#3B82F6';
+                const tEmps = (t.employees || []).slice(0, 3).map(e =>
+                  `<span class="alloc-pill-mini">${e.name} ${fmt.decimal(e.hours)}h</span>`).join('');
+                return `
+                  <div class="tag-task-row">
+                    <div class="tag-task-name" dir="auto">${t.name}</div>
+                    <div class="tag-task-stats">
+                      <span class="tag-task-stat">P: <b>${fmt.decimal(t.planned_hours)}h</b></span>
+                      <span class="tag-task-stat">A: <b style="color: ${tc};">${fmt.decimal(t.actual_hours)}h</b></span>
+                      <span class="tag-task-stat">${fmt.decimal(tp)}%</span>
+                    </div>
+                    ${tEmps ? `<div class="tag-task-emps">${tEmps}</div>` : ''}
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          ` : ''}
         </div>
       `;
     });
 
     html += '</div></div>';
     cont.innerHTML = html;
+
+    // Wire tag expand/collapse
+    cont.querySelectorAll('[data-tag-toggle]').forEach(el => {
+      el.addEventListener('click', () => {
+        const id = parseInt(el.dataset.tagToggle);
+        if (AppState.expandedTags.has(id)) AppState.expandedTags.delete(id);
+        else AppState.expandedTags.add(id);
+        loadTagsAnalysis();
+      });
+    });
   } catch (e) {
     cont.innerHTML = `<div class="banner banner-warn"><strong>Error:</strong> ${e.message}</div>`;
   }
+}
+
+function renderTagPhaseFilters(phaseGroup, available) {
+  const cont = document.getElementById('tagPhaseFilters');
+  if (!cont) return;
+  if (!available.length) { cont.innerHTML = ''; return; }
+
+  let html = '<label class="filter-label">PHASES (multi-select)</label>';
+  html += '<div class="phase-dropdown" id="tagPhaseDropdown">';
+  html += '<button type="button" class="phase-toggle" id="tagPhaseToggle">';
+  html += `<span id="tagPhaseLabel">${tagPhaseLabel(AppState.activeTagPhases || [], available.length)}</span>`;
+  html += '<span style="margin-left:8px; color: var(--text-muted);">▼</span>';
+  html += '</button>';
+  html += '<div class="phase-menu" id="tagPhaseMenu" style="display:none;">';
+  html += '<div class="phase-menu-actions"><a id="tagPhaseAll">Select all</a><a id="tagPhaseNone">Clear</a></div>';
+  available.forEach(p => {
+    const checked = (AppState.activeTagPhases || []).includes(p);
+    html += `<label class="phase-option ${checked ? 'selected' : ''}" data-phase="${encodeURIComponent(p)}">
+      <input type="checkbox" ${checked ? 'checked' : ''}><span dir="auto">${p}</span>
+    </label>`;
+  });
+  html += '</div></div>';
+  cont.innerHTML = html;
+
+  const toggle = document.getElementById('tagPhaseToggle');
+  const menu = document.getElementById('tagPhaseMenu');
+  toggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+    toggle.classList.toggle('open', menu.style.display === 'block');
+  });
+  document.addEventListener('click', (e) => {
+    if (!document.getElementById('tagPhaseDropdown')?.contains(e.target)) {
+      menu.style.display = 'none';
+      toggle.classList.remove('open');
+    }
+  });
+
+  menu.querySelectorAll('.phase-option').forEach(opt => {
+    opt.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const phase = decodeURIComponent(opt.dataset.phase);
+      const cb = opt.querySelector('input');
+      if (e.target !== cb) cb.checked = !cb.checked;
+      AppState.activeTagPhases = AppState.activeTagPhases || [];
+      if (cb.checked) {
+        if (!AppState.activeTagPhases.includes(phase)) AppState.activeTagPhases.push(phase);
+        opt.classList.add('selected');
+      } else {
+        AppState.activeTagPhases = AppState.activeTagPhases.filter(p => p !== phase);
+        opt.classList.remove('selected');
+      }
+      document.getElementById('tagPhaseLabel').textContent = tagPhaseLabel(AppState.activeTagPhases, available.length);
+      loadTagsAnalysis();
+    });
+  });
+  menu.querySelector('#tagPhaseAll').addEventListener('click', (e) => {
+    e.stopPropagation();
+    AppState.activeTagPhases = [...available];
+    loadTagsAnalysis();
+  });
+  menu.querySelector('#tagPhaseNone').addEventListener('click', (e) => {
+    e.stopPropagation();
+    AppState.activeTagPhases = [];
+    loadTagsAnalysis();
+  });
+}
+
+function tagPhaseLabel(phases, total) {
+  if (!phases || phases.length === 0) return 'No phase selected';
+  if (phases.length === 1) return phases[0];
+  if (phases.length === total) return `All phases (${total})`;
+  return `${phases.length} phases selected`;
 }
 
 async function loadOverviewKPIs() {
