@@ -284,15 +284,292 @@ async function loadEmployeeDetail(name) {
   const res = await fetch(`/api/timesheets/employee/${encodeURIComponent(name)}?` + buildParams(f).toString());
   const d = await res.json();
 
-  document.getElementById('tsDetailH').textContent = fmt.decimal(d.total_hours);
-  document.getElementById('tsDetailD').textContent = d.total_days;
+  AppState.detailEmployee = name;
+  AppState.detailDays = d.days || [];
+  AppState.detailTotalH = d.total_hours || 0;
+  AppState.detailTotalD = d.total_days || 0;
 
+  // Build unique tasks + dates lists
+  const taskSet = new Set();
+  const dateSet = new Set();
+  AppState.detailDays.forEach(day => {
+    dateSet.add(day.date);
+    day.tasks.forEach(t => { if (t.task) taskSet.add(t.task); });
+  });
+  AppState.detailTasks = Array.from(taskSet).sort();
+  AppState.detailDates = Array.from(dateSet).sort().reverse();
+
+  // Default: all tasks selected
+  AppState.detailSelectedTasks = [...AppState.detailTasks];
+  AppState.detailSelectedDates = [...AppState.detailDates];
+  AppState.detailDescQuery = '';
+  AppState.detailFilterMode = 'tasks';
+
+  // Setup filter UI (only once per session)
+  if (!AppState.detailFiltersWired) {
+    setupDetailFilters();
+    AppState.detailFiltersWired = true;
+  }
+
+  // Reset filter UI to default
+  document.querySelectorAll('.filter-mode-tab').forEach(b => {
+    b.classList.toggle('active', b.dataset.mode === 'tasks');
+  });
+  document.getElementById('detailTasksPane').style.display = '';
+  document.getElementById('detailDatesPane').style.display = 'none';
+  document.getElementById('detailDescPane').style.display = 'none';
+  document.getElementById('descSearch').value = '';
+
+  renderTaskFilterMenu();
+  renderDateFilterMenu();
+  updateTaskFilterLabel();
+  updateDateFilterLabel();
+  renderDetailDays();
+}
+
+function setupDetailFilters() {
+  // Mode tabs
+  document.querySelectorAll('.filter-mode-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const mode = btn.dataset.mode;
+      AppState.detailFilterMode = mode;
+      document.querySelectorAll('.filter-mode-tab').forEach(b => b.classList.toggle('active', b === btn));
+      document.getElementById('detailTasksPane').style.display = mode === 'tasks' ? '' : 'none';
+      document.getElementById('detailDatesPane').style.display = mode === 'dates' ? '' : 'none';
+      document.getElementById('detailDescPane').style.display = mode === 'desc' ? '' : 'none';
+    });
+  });
+
+  // Task dropdown toggle
+  setupGenericDropdown('taskFilterToggle', 'taskFilterMenu', 'taskFilterDropdown');
+  setupGenericDropdown('dateFilterToggle', 'dateFilterMenu', 'dateFilterDropdown');
+
+  // Description search
+  document.getElementById('descSearch').addEventListener('input', (e) => {
+    AppState.detailDescQuery = e.target.value.toLowerCase().trim();
+    renderDetailDays();
+  });
+
+  // Reset
+  document.getElementById('detailReset').addEventListener('click', () => {
+    AppState.detailSelectedTasks = [...AppState.detailTasks];
+    AppState.detailSelectedDates = [...AppState.detailDates];
+    AppState.detailDescQuery = '';
+    document.getElementById('descSearch').value = '';
+    renderTaskFilterMenu();
+    renderDateFilterMenu();
+    updateTaskFilterLabel();
+    updateDateFilterLabel();
+    renderDetailDays();
+  });
+}
+
+function setupGenericDropdown(toggleId, menuId, wrapId) {
+  const toggle = document.getElementById(toggleId);
+  const menu = document.getElementById(menuId);
+  if (toggle._wired) return;
+  toggle._wired = true;
+  toggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isOpen = menu.style.display !== 'none';
+    menu.style.display = isOpen ? 'none' : 'block';
+    toggle.classList.toggle('open', !isOpen);
+  });
+  document.addEventListener('click', (e) => {
+    const wrap = document.getElementById(wrapId);
+    if (wrap && !wrap.contains(e.target)) {
+      menu.style.display = 'none';
+      toggle.classList.remove('open');
+    }
+  });
+}
+
+function renderTaskFilterMenu() {
+  const menu = document.getElementById('taskFilterMenu');
+  if (!menu) return;
+  let html = `
+    <div class="phase-menu-actions">
+      <a id="taskSelectAll">Select all</a>
+      <a id="taskSelectNone">Clear</a>
+    </div>
+  `;
+  AppState.detailTasks.forEach(t => {
+    const checked = AppState.detailSelectedTasks.includes(t);
+    html += `
+      <label class="phase-option ${checked ? 'selected' : ''}" data-task="${encodeURIComponent(t)}">
+        <input type="checkbox" ${checked ? 'checked' : ''}>
+        <span dir="auto">${t}</span>
+      </label>
+    `;
+  });
+  menu.innerHTML = html;
+  menu.querySelectorAll('.phase-option').forEach(opt => {
+    opt.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const task = decodeURIComponent(opt.dataset.task);
+      const cb = opt.querySelector('input');
+      if (e.target !== cb) cb.checked = !cb.checked;
+      if (cb.checked) {
+        if (!AppState.detailSelectedTasks.includes(task)) AppState.detailSelectedTasks.push(task);
+        opt.classList.add('selected');
+      } else {
+        AppState.detailSelectedTasks = AppState.detailSelectedTasks.filter(x => x !== task);
+        opt.classList.remove('selected');
+      }
+      updateTaskFilterLabel();
+      renderDetailDays();
+    });
+  });
+  menu.querySelector('#taskSelectAll').addEventListener('click', (e) => {
+    e.stopPropagation();
+    AppState.detailSelectedTasks = [...AppState.detailTasks];
+    renderTaskFilterMenu();
+    updateTaskFilterLabel();
+    renderDetailDays();
+  });
+  menu.querySelector('#taskSelectNone').addEventListener('click', (e) => {
+    e.stopPropagation();
+    AppState.detailSelectedTasks = [];
+    renderTaskFilterMenu();
+    updateTaskFilterLabel();
+    renderDetailDays();
+  });
+}
+
+function renderDateFilterMenu() {
+  const menu = document.getElementById('dateFilterMenu');
+  if (!menu) return;
+  let html = `
+    <div class="phase-menu-actions">
+      <a id="dateSelectAll">Select all</a>
+      <a id="dateSelectNone">Clear</a>
+    </div>
+  `;
+  AppState.detailDates.forEach(d => {
+    const checked = AppState.detailSelectedDates.includes(d);
+    html += `
+      <label class="phase-option ${checked ? 'selected' : ''}" data-date="${d}">
+        <input type="checkbox" ${checked ? 'checked' : ''}>
+        <span style="font-family: var(--mono); font-size: 12px;">${d}</span>
+      </label>
+    `;
+  });
+  menu.innerHTML = html;
+  menu.querySelectorAll('.phase-option').forEach(opt => {
+    opt.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const dt = opt.dataset.date;
+      const cb = opt.querySelector('input');
+      if (e.target !== cb) cb.checked = !cb.checked;
+      if (cb.checked) {
+        if (!AppState.detailSelectedDates.includes(dt)) AppState.detailSelectedDates.push(dt);
+        opt.classList.add('selected');
+      } else {
+        AppState.detailSelectedDates = AppState.detailSelectedDates.filter(x => x !== dt);
+        opt.classList.remove('selected');
+      }
+      updateDateFilterLabel();
+      renderDetailDays();
+    });
+  });
+  menu.querySelector('#dateSelectAll').addEventListener('click', (e) => {
+    e.stopPropagation();
+    AppState.detailSelectedDates = [...AppState.detailDates];
+    renderDateFilterMenu();
+    updateDateFilterLabel();
+    renderDetailDays();
+  });
+  menu.querySelector('#dateSelectNone').addEventListener('click', (e) => {
+    e.stopPropagation();
+    AppState.detailSelectedDates = [];
+    renderDateFilterMenu();
+    updateDateFilterLabel();
+    renderDetailDays();
+  });
+}
+
+function updateTaskFilterLabel() {
+  const lbl = document.getElementById('taskFilterLabel');
+  if (!lbl) return;
+  const sel = AppState.detailSelectedTasks || [];
+  const total = AppState.detailTasks?.length || 0;
+  if (sel.length === 0) {
+    lbl.innerHTML = '<span style="color: var(--text-muted);">No task selected</span>';
+  } else if (sel.length === total) {
+    lbl.innerHTML = `All tasks <span class="phase-count-badge">${total}</span>`;
+  } else if (sel.length === 1) {
+    lbl.innerHTML = `<span dir="auto">${sel[0]}</span>`;
+  } else {
+    lbl.innerHTML = `${sel.length} tasks <span class="phase-count-badge">${sel.length}</span>`;
+  }
+}
+
+function updateDateFilterLabel() {
+  const lbl = document.getElementById('dateFilterLabel');
+  if (!lbl) return;
+  const sel = AppState.detailSelectedDates || [];
+  const total = AppState.detailDates?.length || 0;
+  if (sel.length === 0) {
+    lbl.innerHTML = '<span style="color: var(--text-muted);">No date selected</span>';
+  } else if (sel.length === total) {
+    lbl.innerHTML = `All dates <span class="phase-count-badge">${total}</span>`;
+  } else if (sel.length === 1) {
+    lbl.innerHTML = `<span style="font-family: var(--mono); font-size: 12px;">${sel[0]}</span>`;
+  } else {
+    lbl.innerHTML = `${sel.length} dates <span class="phase-count-badge">${sel.length}</span>`;
+  }
+}
+
+function renderDetailDays() {
+  const cont = document.getElementById('tsDetailDays');
   cont.innerHTML = '';
-  if (!d.days.length) {
+
+  const allDays = AppState.detailDays || [];
+  if (!allDays.length) {
     cont.innerHTML = '<div class="loading">No entries for this employee in selected range</div>';
     return;
   }
-  d.days.forEach(day => {
+
+  const mode = AppState.detailFilterMode || 'tasks';
+  const selectedTasks = AppState.detailSelectedTasks || [];
+  const selectedDates = AppState.detailSelectedDates || [];
+  const descQ = (AppState.detailDescQuery || '').toLowerCase();
+
+  // Apply filters
+  const filteredDays = [];
+  let totalH = 0, totalDays = 0;
+
+  allDays.forEach(day => {
+    // Date filter
+    if (mode === 'dates' && !selectedDates.includes(day.date)) return;
+
+    let tasks = day.tasks;
+    if (mode === 'tasks') {
+      tasks = tasks.filter(t => selectedTasks.includes(t.task));
+    } else if (mode === 'desc' && descQ) {
+      tasks = tasks.filter(t =>
+        (t.description || '').toLowerCase().includes(descQ) ||
+        (t.task || '').toLowerCase().includes(descQ)
+      );
+    }
+
+    if (tasks.length === 0) return;
+    const dayTotal = tasks.reduce((s, t) => s + (t.hours || 0), 0);
+    filteredDays.push({ ...day, tasks, total_hours: dayTotal });
+    totalH += dayTotal;
+    totalDays += 1;
+  });
+
+  // Update header stats based on filter
+  document.getElementById('tsDetailH').textContent = fmt.decimal(totalH);
+  document.getElementById('tsDetailD').textContent = totalDays;
+
+  if (!filteredDays.length) {
+    cont.innerHTML = '<div class="loading">No entries match the current filter</div>';
+    return;
+  }
+
+  filteredDays.forEach(day => {
     const card = document.createElement('div');
     card.className = 'day-card';
     let tasksHtml = '';
