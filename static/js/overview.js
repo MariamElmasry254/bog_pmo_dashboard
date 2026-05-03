@@ -288,28 +288,46 @@ function renderTaskList(phaseGroup) {
   const typeFilter = document.getElementById('ovTaskType')?.value || 'all';
   const statusFilter = document.getElementById('ovTaskStatus')?.value || 'all';
 
-  let tasks = data.tasks;
+  // Build full task lookup
+  const allTasks = data.tasks;
+  const taskById = new Map(allTasks.map(t => [t.id, t]));
 
-  if (search) {
-    tasks = tasks.filter(t =>
-      (t.name || '').toLowerCase().includes(search) ||
-      (t.parent_name || '').toLowerCase().includes(search)
-    );
-  }
-  if (typeFilter === 'parents') {
-    tasks = tasks.filter(t => t.is_parent);
-  } else if (typeFilter === 'subtasks') {
-    tasks = tasks.filter(t => !t.is_parent);
-  }
-  if (statusFilter === 'not_started') {
-    tasks = tasks.filter(t => t.progress_pct === 0);
-  } else if (statusFilter === 'in_progress') {
-    tasks = tasks.filter(t => t.progress_pct > 0 && t.progress_pct < 100);
-  } else if (statusFilter === 'completed') {
-    tasks = tasks.filter(t => t.progress_pct >= 100 && t.progress_pct <= 110);
-  } else if (statusFilter === 'overdue') {
-    tasks = tasks.filter(t => t.progress_pct > 110);
-  }
+  // Step 1: find which tasks match the filters (direct matches)
+  let matchedIds = new Set();
+  allTasks.forEach(t => {
+    let pass = true;
+    if (search) {
+      const matchSearch = (t.name || '').toLowerCase().includes(search);
+      if (!matchSearch) pass = false;
+    }
+    if (pass && typeFilter === 'parents' && !t.is_parent) pass = false;
+    if (pass && typeFilter === 'subtasks' && t.is_parent) pass = false;
+    if (pass) {
+      const p = t.is_parent ? (t.rollup_progress_pct || 0) : (t.progress_pct || 0);
+      if (statusFilter === 'not_started' && p !== 0) pass = false;
+      else if (statusFilter === 'in_progress' && (p === 0 || p >= 100)) pass = false;
+      else if (statusFilter === 'completed' && (p < 100 || p > 110)) pass = false;
+      else if (statusFilter === 'overdue' && p <= 110) pass = false;
+    }
+    if (pass) matchedIds.add(t.id);
+  });
+
+  // Step 2: include all ancestors of matched tasks (so the tree shows context)
+  const visibleIds = new Set(matchedIds);
+  const expandedForSearch = new Set();
+  matchedIds.forEach(id => {
+    let cur = taskById.get(id);
+    while (cur && cur.parent_id) {
+      const parent = taskById.get(cur.parent_id);
+      if (!parent) break;
+      visibleIds.add(parent.id);
+      // Auto-expand parents when searching so matches are visible
+      if (search) expandedForSearch.add(parent.id);
+      cur = parent;
+    }
+  });
+
+  let tasks = allTasks.filter(t => visibleIds.has(t.id));
 
   if (!tasks.length) {
     cont.innerHTML = '<div class="card"><div class="loading">No tasks match the filters.</div></div>';
@@ -317,28 +335,25 @@ function renderTaskList(phaseGroup) {
   }
 
   // Group all tasks by their immediate parent_id (handles multi-level hierarchy)
-  const byParent = new Map(); // parent_id -> [children at this level]
+  const byParent = new Map();
   const taskIdSet = new Set(tasks.map(t => t.id));
-  const rootTasks = []; // tasks whose parent is NOT in our list
+  const rootTasks = [];
 
   tasks.forEach(t => {
     if (t.parent_id && taskIdSet.has(t.parent_id)) {
-      // Has a parent that's in our task list — group under it
       if (!byParent.has(t.parent_id)) byParent.set(t.parent_id, []);
       byParent.get(t.parent_id).push(t);
     } else {
-      // No parent in our list (top-level / orphan)
       rootTasks.push(t);
     }
   });
 
-  // Recursive renderer that handles unlimited nesting
   function renderTaskBranch(task, depth) {
     const children = byParent.get(task.id) || [];
-    let html = renderTaskCard(task, children.length, depth > 0);
-    if (children.length && AppState.expandedTasks.has(task.id)) {
-      html += `<div class="task-children" style="margin-left: ${depth * 12}px;">`;
-      // Sort children by progress desc, then name
+    let html = renderTaskCard(task, children.length, depth, matchedIds.has(task.id));
+    const isExpanded = AppState.expandedTasks.has(task.id) || expandedForSearch.has(task.id);
+    if (children.length && isExpanded) {
+      html += `<div class="task-children" style="margin-left: ${Math.min(depth * 12, 36)}px;">`;
       children.sort((a, b) => (b.progress_pct || 0) - (a.progress_pct || 0)
                               || (a.name || '').localeCompare(b.name || ''));
       children.forEach(c => { html += renderTaskBranch(c, depth + 1); });
@@ -347,13 +362,12 @@ function renderTaskList(phaseGroup) {
     return html;
   }
 
-  // Sort root tasks alphabetically
   rootTasks.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
   let html = `<div class="card">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-      <h3 class="card-title" style="margin:0;">Tasks <span class="muted-text">— ${tasks.length} item${tasks.length !== 1 ? 's' : ''}</span></h3>
-      <span class="muted-text" style="font-size: 11px;">Click parent to expand sub-tasks · Live from Odoo</span>
+      <h3 class="card-title" style="margin:0;">Tasks <span class="muted-text">— ${matchedIds.size} match${matchedIds.size !== 1 ? 'es' : ''}${matchedIds.size < tasks.length ? ` · ${tasks.length - matchedIds.size} parent context` : ''}</span></h3>
+      <span class="muted-text" style="font-size: 11px;">Click parent to expand · Live from Odoo</span>
     </div>
     <div class="task-analysis-list">`;
 
@@ -375,94 +389,104 @@ function renderTaskList(phaseGroup) {
   });
 }
 
-function renderTaskCard(t, childCount, isChild) {
-  const p = t.progress_pct || 0;
+function renderTaskCard(t, childCount, depth, isMatched) {
+  // For PARENT (has children): use roll-up data from sub-tasks
+  // For LEAF (no children, has its own work): use direct data
+  const hasChildren = childCount > 0;
+
+  let plannedH, actualH, remainingH, progressP;
+  if (hasChildren) {
+    // Parent: show sum of sub-tasks
+    plannedH = t.subtask_planned_hours || 0;
+    actualH = t.subtask_actual_hours || 0;
+    remainingH = Math.max(0, plannedH - actualH);
+    progressP = plannedH > 0 ? Math.min(150, (actualH / plannedH * 100)) : 0;
+  } else {
+    // Leaf task: own data
+    plannedH = t.planned_hours || 0;
+    actualH = t.actual_hours || 0;
+    remainingH = Math.max(0, plannedH - actualH);
+    progressP = t.progress_pct || 0;
+  }
+
   let progressColor, progressLabel;
-  if (p === 0) { progressColor = 'var(--text-muted)'; progressLabel = 'Not started'; }
-  else if (p >= 100 && p <= 110) { progressColor = 'var(--green)'; progressLabel = 'Done'; }
-  else if (p > 110) { progressColor = 'var(--red)'; progressLabel = 'Over budget'; }
-  else if (p >= 75) { progressColor = '#10B981'; progressLabel = 'On track'; }
-  else if (p >= 40) { progressColor = '#F59E0B'; progressLabel = 'In progress'; }
+  if (progressP === 0) { progressColor = '#9CA3AF'; progressLabel = 'Not started'; }
+  else if (progressP >= 100 && progressP <= 110) { progressColor = '#10B981'; progressLabel = 'Done'; }
+  else if (progressP > 110) { progressColor = '#EF4444'; progressLabel = 'Over budget'; }
+  else if (progressP >= 75) { progressColor = '#10B981'; progressLabel = 'On track'; }
+  else if (progressP >= 40) { progressColor = '#F59E0B'; progressLabel = 'In progress'; }
   else { progressColor = '#EF4444'; progressLabel = 'Behind'; }
 
-  // Stage badge color
   const stageColor = stageColorMap(t.stage);
-
-  const allocHtml = (t.allocation || []).slice(0, 4).map(a =>
-    `<span class="alloc-pill" title="${a.hours}h">${a.name} <small>${fmt.decimal(a.hours)}h</small></span>`
-  ).join('');
-  const moreCount = Math.max(0, (t.allocation?.length || 0) - 4);
-
-  const dateRange = t.first_log
-    ? `${t.first_log}${t.last_log && t.last_log !== t.first_log ? ' → ' + t.last_log : ''}`
-    : '';
-
-  const widthBar = Math.min(150, p);
   const isExpanded = AppState.expandedTasks.has(t.id);
-  const expandIcon = childCount > 0
+  const widthBar = Math.min(150, progressP);
+  const isChild = depth > 0;
+
+  // For parent display, show rolled-up allocation; for leaf, show own
+  const displayAlloc = hasChildren
+    ? Object.entries(t.rollup_allocation || {}).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([n, h]) => ({ name: n, hours: h }))
+    : (t.allocation || []).slice(0, 3);
+
+  const allocHtml = displayAlloc.map(a =>
+    `<span class="alloc-pill-mini" title="${a.hours}h">${a.name}</span>`
+  ).join('');
+  const totalAllocCount = hasChildren
+    ? Object.keys(t.rollup_allocation || {}).length
+    : (t.allocation?.length || 0);
+  const moreCount = Math.max(0, totalAllocCount - 3);
+
+  const expandIcon = hasChildren
     ? `<span class="task-expand-icon" data-expand-id="${t.id}">${isExpanded ? '▼' : '▶'}</span>`
-    : '';
+    : '<span class="task-expand-spacer"></span>';
+
+  const matchedClass = isMatched ? '' : ' task-context-only';
 
   return `
-    <div class="task-card ${t.is_parent ? 'task-parent' : 'task-sub'} ${isChild ? 'task-is-child' : ''}">
-      <div class="task-card-head">
-        <div style="flex: 1; min-width: 0; display: flex; gap: 8px; align-items: flex-start;">
-          ${expandIcon}
-          <div style="flex: 1; min-width: 0;">
-            ${t.parent_name && !isChild ? `<div class="task-parent-link" dir="auto">↳ ${t.parent_name}</div>` : ''}
-            <div class="task-name" dir="auto">
-              ${t.is_parent ? '📁 ' : ''}${t.name || '—'}
-              ${childCount > 0 ? `<span class="subtask-count" data-expand-id="${t.id}">${childCount} sub-task${childCount !== 1 ? 's' : ''}</span>` : ''}
-            </div>
-            <div class="task-meta">
-              ${t.phase ? `<span class="task-meta-badge">${t.phase}</span>` : ''}
-              ${t.stage ? `<span class="task-meta-badge stage-pill" style="background: ${stageColor}20; color: ${stageColor}; border: 1px solid ${stageColor};">${t.stage}</span>` : ''}
-              ${t.deadline ? `<span class="task-meta-badge deadline-badge">⏰ ${t.deadline}</span>` : ''}
-            </div>
+    <div class="task-card-compact ${hasChildren ? 'task-parent-c' : 'task-leaf-c'}${matchedClass}">
+      <div class="tcc-row1">
+        ${expandIcon}
+        <div class="tcc-name-block">
+          <div class="tcc-name" dir="auto">
+            ${hasChildren ? '📁' : '📄'} ${t.name || '—'}
+            ${hasChildren ? `<span class="tcc-sub-count" data-expand-id="${t.id}">${childCount} sub${childCount !== 1 ? 's' : ''}</span>` : ''}
+          </div>
+          <div class="tcc-meta">
+            ${t.stage ? `<span class="tcc-pill" style="background: ${stageColor}18; color: ${stageColor}; border-color: ${stageColor}40;">${t.stage}</span>` : ''}
+            ${t.deadline ? `<span class="tcc-pill tcc-deadline">⏰ ${t.deadline}</span>` : ''}
           </div>
         </div>
-        <div class="task-progress-num" style="color: ${progressColor};">
-          ${fmt.decimal(p)}<small>%</small>
-        </div>
-      </div>
-
-      <div class="task-progress-bar">
-        <div class="task-progress-fill" style="width: ${widthBar}%; background: ${progressColor};"></div>
-        ${p > 100 ? `<div class="task-progress-overflow" style="width: ${Math.min(50, p - 100)}%;"></div>` : ''}
-      </div>
-
-      <div class="task-card-stats">
-        <div class="task-stat">
-          <div class="task-stat-label">PLANNED</div>
-          <div class="task-stat-value">${fmt.decimal(t.planned_hours)}<small>h</small></div>
-          <div class="task-stat-sub">${fmt.decimal(t.planned_days)} d</div>
-        </div>
-        <div class="task-stat-arrow">→</div>
-        <div class="task-stat">
-          <div class="task-stat-label">ACTUAL</div>
-          <div class="task-stat-value" style="color: ${progressColor};">${fmt.decimal(t.actual_hours)}<small>h</small></div>
-          <div class="task-stat-sub">${fmt.decimal(t.actual_days)} d</div>
-        </div>
-        <div class="task-stat-spacer"></div>
-        <div class="task-stat-status">
-          <span class="status-pill" style="background: ${progressColor}20; color: ${progressColor}; border: 1px solid ${progressColor};">${progressLabel}</span>
-        </div>
-      </div>
-
-      ${t.allocation && t.allocation.length ? `
-        <div class="task-allocation">
-          <div class="task-alloc-label">Allocation:</div>
-          <div class="task-alloc-list">
-            ${allocHtml}
-            ${moreCount ? `<span class="alloc-more">+${moreCount} more</span>` : ''}
+        <div class="tcc-stats">
+          <div class="tcc-stat">
+            <div class="tcc-stat-lbl">${hasChildren ? 'SUB-PLANNED' : 'PLANNED'}</div>
+            <div class="tcc-stat-val">${fmt.decimal(plannedH)}<small>h</small></div>
           </div>
+          <div class="tcc-stat">
+            <div class="tcc-stat-lbl">${hasChildren ? 'SUB-SPENT' : 'SPENT'}</div>
+            <div class="tcc-stat-val" style="color: ${progressColor};">${fmt.decimal(actualH)}<small>h</small></div>
+          </div>
+          <div class="tcc-stat">
+            <div class="tcc-stat-lbl">REMAIN</div>
+            <div class="tcc-stat-val">${fmt.decimal(remainingH)}<small>h</small></div>
+          </div>
+          <div class="tcc-progress-num" style="color: ${progressColor};">
+            ${fmt.decimal(progressP)}<small>%</small>
+          </div>
+        </div>
+      </div>
+      <div class="tcc-progress-bar">
+        <div class="tcc-progress-fill" style="width: ${widthBar}%; background: ${progressColor};"></div>
+        ${progressP > 100 ? `<div class="tcc-progress-over" style="width: ${Math.min(50, progressP - 100)}%;"></div>` : ''}
+      </div>
+      ${(allocHtml || progressLabel) ? `
+        <div class="tcc-row2">
+          <span class="tcc-status" style="background: ${progressColor}18; color: ${progressColor};">${progressLabel}</span>
+          ${allocHtml ? `<div class="tcc-allocs">${allocHtml}${moreCount ? `<span class="tcc-more">+${moreCount}</span>` : ''}</div>` : ''}
         </div>
       ` : ''}
-
-      ${dateRange ? `<div class="task-dates">📅 ${dateRange}</div>` : ''}
     </div>
   `;
 }
+
 
 function stageColorMap(stage) {
   if (!stage) return 'var(--text-muted)';
