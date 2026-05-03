@@ -1,64 +1,83 @@
 <section class="tab-panel active" id="overview">
   <div class="period-tag">
     <span>PERIOD</span>
-    <strong>2026-04-05 → 2027-05-13</strong>
+    <strong id="ovPeriod">—</strong>
   </div>
 
+  <!-- KPIs from Roadmap (PPT) -->
   <div class="kpi-strip">
     <div class="kpi-card kpi-blue">
       <div class="kpi-bar"></div>
       <div class="kpi-label">TOTAL SERVICES</div>
-      <div class="kpi-value"><span id="kpiServices">—</span><span class="kpi-unit">in scope</span></div>
-      <div class="kpi-foot">From Excel + Roadmap</div>
+      <div class="kpi-value"><span id="kpiServices">—</span><span class="kpi-unit">in roadmap</span></div>
+      <div class="kpi-foot">From Roadmap (PPT)</div>
     </div>
     <div class="kpi-card kpi-green">
       <div class="kpi-bar"></div>
-      <div class="kpi-label">TOTAL WORKING DAYS</div>
-      <div class="kpi-value"><span id="kpiWD">—</span><span class="kpi-unit">WD</span></div>
-      <div class="kpi-foot">Baseline estimate</div>
+      <div class="kpi-label">TOTAL MANDAYS</div>
+      <div class="kpi-value"><span id="kpiMandays">—</span><span class="kpi-unit">MD</span></div>
+      <div class="kpi-foot">Roadmap baseline</div>
     </div>
     <div class="kpi-card kpi-navy">
       <div class="kpi-bar"></div>
-      <div class="kpi-label">TOTAL MANDAYS</div>
-      <div class="kpi-value"><span>6,556</span><span class="kpi-unit">MD</span></div>
-      <div class="kpi-foot">Contracted</div>
+      <div class="kpi-label">TEAMS</div>
+      <div class="kpi-value"><span id="kpiTeams">—</span><span class="kpi-unit">teams</span></div>
+      <div class="kpi-foot" id="kpiTeamsList">—</div>
     </div>
     <div class="kpi-card kpi-amber">
       <div class="kpi-bar"></div>
-      <div class="kpi-label">BUDGET PROFIT</div>
-      <div class="kpi-value"><span id="kpiProfit">49</span><span class="kpi-unit">%</span></div>
-      <div class="kpi-foot">SAR 9.89M net</div>
+      <div class="kpi-label">PROJECT PROGRESS</div>
+      <div class="kpi-value"><span id="kpiProgress">—</span><span class="kpi-unit">%</span></div>
+      <div class="kpi-foot" id="kpiDays">—</div>
     </div>
   </div>
 
+  <!-- Tasks Analysis from Odoo -->
   <div class="section-bar">
-    <span class="section-num">01</span>
-    <h2>Project Health Snapshot</h2>
+    <span class="section-num">A</span>
+    <h2>Tasks Analysis</h2>
+    <span class="section-source">Live from Odoo</span>
   </div>
 
-  <div class="grid-2">
-    <div class="card">
-      <h3 class="card-title">Complexity Distribution</h3>
-      <div class="chart-wrap"><canvas id="complexityChart"></canvas></div>
+  <div class="banner banner-info">
+    <strong>Per-task breakdown:</strong> Initially Planned (from Odoo task) vs Actual hours (from timesheets).
+    Each task shows the people working on it and progress percentage.
+  </div>
+
+  <!-- Sub-tabs: Development / Consultation -->
+  <div class="sub-tabs-bar" id="overviewSubTabs">
+    <button class="sub-tab active" data-ovphase="development">Development</button>
+    <button class="sub-tab" data-ovphase="consultation">Consultation</button>
+  </div>
+
+  <!-- Filters -->
+  <div class="filters-bar" style="margin-bottom: 16px;">
+    <div class="filter-group">
+      <input type="text" id="ovTaskSearch" placeholder="🔍 Search task..." class="search-input" style="width: 280px;">
     </div>
-    <div class="card">
-      <h3 class="card-title">Project Progress</h3>
-      <div class="progress-section">
-        <div class="big-stat"><span id="progressVal">0</span><span class="big-stat-unit">%</span></div>
-        <div class="progress-bar"><div id="progressBar" class="progress-fill" style="width:0%"></div></div>
-        <div class="progress-dates">
-          <div><span>SUPPORT STARTS</span><b>18 May 2027</b></div>
-          <div><span>SUPPORT ENDS</span><b>17 May 2028</b></div>
-        </div>
-      </div>
+    <div class="filter-group">
+      <select id="ovTaskType" class="search-input" style="width: 200px;">
+        <option value="all">All tasks</option>
+        <option value="parents">Parent tasks only</option>
+        <option value="subtasks">Sub-tasks only</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <select id="ovTaskStatus" class="search-input" style="width: 200px;">
+        <option value="all">All statuses</option>
+        <option value="not_started">Not started (0%)</option>
+        <option value="in_progress">In progress (1-99%)</option>
+        <option value="completed">Completed (100%+)</option>
+        <option value="overdue">Overdue (>100%)</option>
+      </select>
     </div>
   </div>
 
-  <div class="section-bar">
-    <span class="section-num">02</span>
-    <h2>Recent Activity (last 7 days)</h2>
-  </div>
-  <div class="card">
-    <div id="recentActivity"><div class="loading">Loading activity…</div></div>
+  <!-- Summary KPIs (per phase) -->
+  <div id="ovAnalysisSummary"></div>
+
+  <!-- Tasks list -->
+  <div id="ovAnalysisContent">
+    <div class="loading">Loading task analysis…</div>
   </div>
 </section>
