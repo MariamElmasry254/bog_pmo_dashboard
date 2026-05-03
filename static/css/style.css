@@ -822,6 +822,112 @@ th[data-sort-key]:hover {
   box-shadow: 0 1px 3px rgba(0,0,0,0.08);
 }
 
+/* ============ VARIANCE SUB-TABS ============ */
+.sub-tabs-bar {
+  display: flex;
+  gap: 4px;
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+  margin-bottom: 24px;
+  overflow-x: auto;
+}
+.sub-tab {
+  background: transparent;
+  border: none;
+  padding: 12px 24px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 6px;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.sub-tab:hover { background: var(--bg-subtle); color: var(--text); }
+.sub-tab.active {
+  background: var(--navy);
+  color: white;
+  box-shadow: 0 2px 8px rgba(27, 42, 78, 0.2);
+}
+
+.section-nav-pills {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.section-pill {
+  background: white;
+  border: 1px solid var(--border);
+  padding: 6px 14px;
+  border-radius: 100px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-weight: 500;
+  transition: all 0.15s;
+}
+.section-pill:hover {
+  background: var(--blue-light);
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.variance-section { margin-bottom: 32px; }
+.section-source {
+  margin-left: auto;
+  font-size: 11px;
+  color: rgba(255,255,255,0.6);
+  font-family: var(--mono);
+  letter-spacing: 0.05em;
+}
+
+/* Effort table specific */
+.effort-table .month-header {
+  text-align: center;
+  background: var(--blue-light);
+  color: var(--blue);
+  border-bottom: 1px solid var(--blue);
+  border-left: 1px solid var(--border);
+}
+.effort-table .small-num {
+  font-size: 11px;
+  padding: 8px 6px;
+}
+.effort-table th.small-th { font-size: 9px; }
+
+/* ============ TRAVEL FORM ============ */
+.travel-form { display: flex; flex-direction: column; gap: 14px; }
+.form-row {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.form-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 220px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.form-row label.full-width { flex: 1 1 100%; }
+.form-row label small { font-weight: 400; }
+.form-row input { width: 100%; }
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  padding-top: 14px;
+}
+
 .missing-detail-row {
   background: var(--bg-subtle);
 }
