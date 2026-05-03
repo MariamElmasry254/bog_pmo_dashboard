@@ -44,26 +44,34 @@ class OdooClient:
     def __init__(self):
         self.uid = None
         self.models = None
+        self.last_error = None
 
     def connect(self):
         if not ODOO_USERNAME or not ODOO_PASSWORD:
+            self.last_error = "Credentials not set"
             return False
         try:
             common = xmlrpc.client.ServerProxy(f'{ODOO_URL}/xmlrpc/2/common')
             self.uid = common.authenticate(ODOO_DB, ODOO_USERNAME, ODOO_PASSWORD, {})
             if self.uid:
                 self.models = xmlrpc.client.ServerProxy(f'{ODOO_URL}/xmlrpc/2/object')
+                logger.info(f"Odoo connected: uid={self.uid}")
+                self.last_error = None
                 return True
+            self.last_error = "Authentication failed"
             return False
         except Exception as e:
+            self.last_error = f"{type(e).__name__}: {str(e)}"
             logger.error(f"Odoo connect: {e}")
             return False
 
     def get_timesheets(self, project_name=PROJECT_NAME, date_from=None, date_to=None,
                        service_filter=None, all_projects=False):
         """Get timesheets. If all_projects=True, fetch all (for cross-project missing hours check)."""
-        if not self.uid and not self.connect():
-            return None
+        # Always re-attempt connection if not connected
+        if not self.uid:
+            if not self.connect():
+                return None
         try:
             domain = []
             if not all_projects and project_name:
@@ -72,14 +80,20 @@ class OdooClient:
                 domain.append(('date', '>=', date_from))
             if date_to:
                 domain.append(('date', '<=', date_to))
-            return self.models.execute_kw(
+            result = self.models.execute_kw(
                 ODOO_DB, self.uid, ODOO_PASSWORD,
                 'account.analytic.line', 'search_read', [domain],
                 {'fields': ['date', 'employee_id', 'project_id', 'task_id',
                             'parent_task_id', 'name', 'unit_amount'], 'limit': 5000}
             )
+            logger.info(f"Odoo timesheets fetched: {len(result)} entries (filter: {domain})")
+            return result
         except Exception as e:
+            self.last_error = f"{type(e).__name__}: {str(e)}"
             logger.error(f"Odoo timesheets: {e}")
+            # Reset connection on error
+            self.uid = None
+            self.models = None
             return None
 
 odoo = OdooClient()
@@ -606,6 +620,38 @@ def api_budget():
 @app.route('/health')
 def health():
     return jsonify({'status': 'ok', 'time': datetime.now().isoformat()})
+
+@app.route('/debug/timesheets')
+def debug_timesheets():
+    """Test the actual timesheet fetching path used by the app"""
+    date_from = request.args.get('from', (date.today() - timedelta(days=30)).isoformat())
+    date_to = request.args.get('to', date.today().isoformat())
+
+    info = {
+        'date_from': date_from,
+        'date_to': date_to,
+        'project_name': PROJECT_NAME,
+        'odoo_uid': odoo.uid,
+        'odoo_last_error': odoo.last_error,
+    }
+
+    # Try fetching
+    raw = odoo.get_timesheets(date_from=date_from, date_to=date_to)
+    if raw is None:
+        info['result'] = 'FAILED — odoo.get_timesheets returned None'
+        info['odoo_last_error_after'] = odoo.last_error
+    else:
+        info['result'] = f'SUCCESS — {len(raw)} entries'
+        info['sample_raw'] = raw[:2] if raw else []
+        normalized = [normalize_timesheet(e) for e in raw[:3]]
+        info['sample_normalized'] = normalized
+
+    # Test with no date filter
+    raw_all = odoo.get_timesheets()
+    info['no_filter_count'] = len(raw_all) if raw_all is not None else 'FAILED'
+
+    return jsonify(info)
+
 
 @app.route('/debug')
 def debug():
