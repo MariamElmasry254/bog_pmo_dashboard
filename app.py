@@ -969,6 +969,353 @@ def parse_estimated_sheet(df):
             positions.append(row_data)
     return {'columns': headers, 'positions': positions}
 
+# ============================================================
+# COMPUTED EFFORT FROM ODOO TIMESHEETS
+# ============================================================
+
+# Phase mapping: variance tab → list of Odoo phases
+PHASE_MAPPING = {
+    'development': ['Development Phase'],
+    'consultation': ['Consultation phase - Initiation', 'Consultation phase - Analysis',
+                     'Consultation phase - General', 'Consultation phase - UX'],
+    'support': [],  # Support phase doesn't exist as Odoo phase yet
+}
+
+# Ramadan dates (current year). Update annually.
+RAMADAN_RANGES = {
+    'KSA': {'start': '2026-02-18', 'end': '2026-03-19'},  # Saudi
+    'EGY': {'start': '2026-02-19', 'end': '2026-03-20'},  # Egypt
+}
+
+# Tunisia weekend exception
+TUNIS_WEEKEND = [5, 6]  # Saturday, Sunday (Mon=0)
+DEFAULT_WEEKEND = [4, 5]  # Friday, Saturday
+RAMADAN_HOURS = 6
+NORMAL_HOURS = 8
+
+def get_country_from_position(position_name):
+    """Detect country from position name like 'KSA - PM' or 'EGY - Software Engineer'"""
+    if not position_name:
+        return 'EGY'  # default
+    pn = str(position_name).upper()
+    if 'KSA' in pn or 'SAUDI' in pn:
+        return 'KSA'
+    if 'TUNIS' in pn or 'TUN' in pn:
+        return 'TUN'
+    return 'EGY'
+
+def is_in_ramadan(date_str, country):
+    """Check if a date falls within Ramadan for the given country"""
+    rng = RAMADAN_RANGES.get(country, RAMADAN_RANGES['EGY'])
+    return rng['start'] <= date_str <= rng['end']
+
+def get_weekend_for_country(country):
+    """Tunis: Sat+Sun. Others: Fri+Sat"""
+    if country == 'TUN':
+        return TUNIS_WEEKEND
+    return DEFAULT_WEEKEND
+
+def compute_effort_from_odoo(phase_key, year, month, position_lookup=None):
+    """Compute Regular / Ramadan / Overtime hours per person for a specific month.
+    phase_key: 'development', 'consultation', 'support'
+    year, month: int
+    position_lookup: dict {employee_name: position} from positions sheet/Odoo
+    Returns: {team: [...], months: [month_label]}
+    """
+    phases = PHASE_MAPPING.get(phase_key, [])
+    if not phases and phase_key != 'support':
+        return {'team': [], 'months': [], 'error': f'No phases mapped for {phase_key}'}
+
+    # Date range for the month
+    month_start = date(year, month, 1).isoformat()
+    if month == 12:
+        next_month_start = date(year + 1, 1, 1)
+    else:
+        next_month_start = date(year, month + 1, 1)
+    month_end = (next_month_start - timedelta(days=1)).isoformat()
+
+    # Fetch timesheets
+    raw = odoo.get_timesheets(
+        date_from=month_start,
+        date_to=month_end,
+        phase_filter=phases if phases else None
+    )
+    if raw is None:
+        return {'team': [], 'months': [date(year, month, 1).strftime('%B')], 'error': 'Odoo unreachable'}
+
+    entries = [normalize_timesheet(e) for e in raw]
+
+    # Group by employee, then by date
+    by_emp = {}
+    for entry in entries:
+        emp = entry['employee']
+        d = entry['date']
+        h = entry['hours']
+        if emp not in by_emp:
+            by_emp[emp] = {}
+        if d not in by_emp[emp]:
+            by_emp[emp][d] = 0
+        by_emp[emp][d] += h
+
+    # Compute per employee
+    team = []
+    for emp_name, day_hours in by_emp.items():
+        position = (position_lookup or {}).get(emp_name) or ''
+        country = get_country_from_position(position)
+        weekend_days = get_weekend_for_country(country)
+
+        regular_mh = 0
+        ramadan_mh = 0
+        overtime_mh = 0
+
+        for day_str, total_h in day_hours.items():
+            try:
+                d_obj = datetime.strptime(day_str, '%Y-%m-%d').date()
+            except Exception:
+                continue
+            wd = d_obj.weekday()
+            is_weekend = wd in weekend_days
+            in_ramadan = is_in_ramadan(day_str, country)
+
+            if is_weekend:
+                # All weekend hours are overtime
+                overtime_mh += total_h
+            else:
+                # Working day
+                expected = RAMADAN_HOURS if in_ramadan else NORMAL_HOURS
+                if total_h <= expected:
+                    if in_ramadan:
+                        ramadan_mh += total_h
+                    else:
+                        regular_mh += total_h
+                else:
+                    # Excess is overtime
+                    if in_ramadan:
+                        ramadan_mh += expected
+                    else:
+                        regular_mh += expected
+                    overtime_mh += (total_h - expected)
+
+        total_h = regular_mh + ramadan_mh + overtime_mh
+        total_md = round(total_h / NORMAL_HOURS, 2)
+
+        team.append({
+            'name': emp_name,
+            'position': position,
+            'country': country,
+            'regular_mh': round(regular_mh, 2),
+            'ramadan_mh': round(ramadan_mh, 2),
+            'overtime_mh': round(overtime_mh, 2),
+            'total_hours': round(total_h, 2),
+            'mds': total_md,
+        })
+
+    # Sort alphabetically
+    team.sort(key=lambda x: (x['name'] or '').lower())
+
+    return {
+        'team': team,
+        'month_label': date(year, month, 1).strftime('%B %Y'),
+        'year': year,
+        'month': month,
+        'date_from': month_start,
+        'date_to': month_end,
+        'phases_used': phases,
+    }
+
+
+def get_positions_from_excel():
+    """Read Positions sheet and return list of {position, hour_rate, md_rate}"""
+    if not os.path.exists(VARIANCE_FILE):
+        return []
+    try:
+        df = pd.read_excel(VARIANCE_FILE, sheet_name='Positions', header=None)
+        rows = df.values.tolist()
+        positions = []
+        for r in rows[1:]:  # skip header row
+            if not r or pd.isna(r[0]):
+                continue
+            positions.append({
+                'name': str(r[0]).strip(),
+                'hour_rate': safe_val(r[1]) if len(r) > 1 else None,
+                'md_rate': safe_val(r[2]) if len(r) > 2 else None,
+            })
+        return positions
+    except Exception as e:
+        logger.error(f"Positions parse: {e}")
+        return []
+
+
+def get_odoo_position_for_employee(employee_name):
+    """Try to fetch position from Odoo hr.employee model for an employee by name.
+    Returns position name or None.
+    """
+    if not odoo.uid:
+        if not odoo.connect():
+            return None
+    try:
+        emps = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'hr.employee', 'search_read',
+            [[('name', '=', employee_name)]],
+            {'fields': ['name', 'job_title', 'job_id'], 'limit': 1}
+        )
+        if not emps:
+            return None
+        emp = emps[0]
+        if emp.get('job_id'):
+            return emp['job_id'][1]
+        return emp.get('job_title') or None
+    except Exception as e:
+        logger.warning(f"Odoo position lookup for {employee_name}: {e}")
+        return None
+
+
+# ============================================================
+# PLAN OVERRIDES (stored in JSON)
+# ============================================================
+PLAN_FILE = os.path.join(BASE_DIR, 'data', 'plan_overrides.json')
+
+def load_plan_overrides():
+    if not os.path.exists(PLAN_FILE):
+        return {}
+    try:
+        import json
+        with open(PLAN_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_plan_overrides(data):
+    import json
+    os.makedirs(os.path.dirname(PLAN_FILE), exist_ok=True)
+    with open(PLAN_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+@app.route('/api/positions')
+def api_positions():
+    """Get list of positions from Excel + simple lookup"""
+    positions = get_positions_from_excel()
+    return jsonify({
+        'positions': positions,
+        'count': len(positions),
+    })
+
+
+@app.route('/api/effort/<phase_key>')
+def api_effort(phase_key):
+    """Computed effort for a phase + month from Odoo"""
+    year = int(request.args.get('year') or date.today().year)
+    month = int(request.args.get('month') or date.today().month)
+
+    # Build position lookup: try Odoo first, fallback to manual map
+    employees_in_data = set()
+    raw = odoo.get_timesheets(
+        date_from=date(year, month, 1).isoformat(),
+        date_to=(date(year, month + 1, 1) if month < 12 else date(year + 1, 1, 1)).isoformat(),
+    )
+    if raw:
+        for e in raw:
+            emp = e.get('employee_id')
+            if emp and emp[1]:
+                employees_in_data.add(emp[1])
+
+    # Try to fetch positions from Odoo for each
+    position_lookup = {}
+    for emp_name in employees_in_data:
+        pos = get_odoo_position_for_employee(emp_name)
+        if pos:
+            position_lookup[emp_name] = pos
+
+    # Manual override file (for missing positions)
+    overrides = load_plan_overrides().get('position_overrides', {})
+    position_lookup.update(overrides)
+
+    result = compute_effort_from_odoo(phase_key, year, month, position_lookup)
+    return jsonify(result)
+
+
+@app.route('/api/plan-overrides', methods=['GET'])
+def api_plan_overrides_get():
+    return jsonify(load_plan_overrides())
+
+
+@app.route('/api/plan-overrides', methods=['POST'])
+def api_plan_overrides_save():
+    body = request.json or {}
+    data = load_plan_overrides()
+    # body should be {phase, month_key, plan_md}
+    phase = body.get('phase')
+    month_key = body.get('month_key')  # e.g. "2026-04"
+    plan_md = body.get('plan_md')
+    if not phase or not month_key:
+        return jsonify({'error': 'phase and month_key required'}), 400
+    if 'plan_overrides' not in data:
+        data['plan_overrides'] = {}
+    if phase not in data['plan_overrides']:
+        data['plan_overrides'][phase] = {}
+    if plan_md is None or plan_md == '':
+        data['plan_overrides'][phase].pop(month_key, None)
+    else:
+        data['plan_overrides'][phase][month_key] = float(plan_md)
+    save_plan_overrides(data)
+    return jsonify({'ok': True, 'data': data})
+
+
+@app.route('/api/position-overrides', methods=['POST'])
+def api_position_overrides_save():
+    """Manual position override for an employee (when Odoo doesn't have it)"""
+    body = request.json or {}
+    name = body.get('name')
+    position = body.get('position')
+    if not name:
+        return jsonify({'error': 'name required'}), 400
+    data = load_plan_overrides()
+    if 'position_overrides' not in data:
+        data['position_overrides'] = {}
+    if not position:
+        data['position_overrides'].pop(name, None)
+    else:
+        data['position_overrides'][name] = position
+    save_plan_overrides(data)
+    return jsonify({'ok': True})
+
+
+@app.route('/api/project-employees')
+def api_project_employees():
+    """Get list of employees who have logged time on the project, with their positions"""
+    raw = odoo.get_timesheets()
+    if raw is None:
+        return jsonify({'employees': [], 'connected': False})
+
+    seen = {}
+    for e in raw:
+        emp = e.get('employee_id')
+        if emp and emp[1]:
+            name = emp[1]
+            if name not in seen:
+                seen[name] = {'name': name}
+
+    # Try to fetch positions
+    overrides = load_plan_overrides().get('position_overrides', {})
+    for name, info in seen.items():
+        if name in overrides:
+            info['position'] = overrides[name]
+            info['source'] = 'override'
+        else:
+            pos = get_odoo_position_for_employee(name)
+            if pos:
+                info['position'] = pos
+                info['source'] = 'odoo'
+            else:
+                info['position'] = None
+                info['source'] = None
+
+    employees = sorted(seen.values(), key=lambda x: x['name'].lower())
+    return jsonify({'employees': employees, 'connected': True, 'count': len(employees)})
+
+
 # Main API endpoint for variance data
 @app.route('/api/variance')
 def api_variance():
