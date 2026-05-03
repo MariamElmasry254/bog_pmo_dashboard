@@ -897,10 +897,54 @@ th[data-sort-key]:hover {
 }
 
 /* ============ TASK ANALYSIS CARDS (Overview tab) ============ */
+.task-analysis-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
 .task-analysis-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
   gap: 16px;
+}
+.task-children {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 32px;
+  border-left: 2px solid var(--blue);
+  margin-left: 16px;
+  margin-bottom: 8px;
+}
+.task-is-child {
+  background: var(--bg-subtle) !important;
+  border-style: dashed !important;
+}
+.task-expand-icon {
+  font-size: 11px;
+  color: var(--blue);
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.task-expand-icon:hover {
+  background: var(--blue-light);
+}
+.subtask-count {
+  background: var(--blue-light);
+  color: var(--blue);
+  padding: 2px 8px;
+  border-radius: 100px;
+  font-size: 10px;
+  font-weight: 600;
+  margin-left: 8px;
+  cursor: pointer;
+}
+.subtask-count:hover {
+  background: var(--blue);
+  color: white;
 }
 .task-card {
   background: white;
