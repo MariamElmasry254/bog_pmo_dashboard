@@ -900,8 +900,211 @@ th[data-sort-key]:hover {
 .task-analysis-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 6px;
 }
+
+/* Compact card design */
+.task-card-compact {
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: all 0.15s;
+  font-size: 13px;
+}
+.task-card-compact:hover {
+  box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+  border-color: var(--border-strong);
+}
+.task-card-compact.task-parent-c {
+  background: linear-gradient(180deg, white 0%, rgba(59,130,246,0.04) 100%);
+  border-left: 3px solid var(--blue);
+}
+.task-card-compact.task-leaf-c {
+  border-left: 3px solid #E5E7EB;
+}
+.task-card-compact.task-context-only {
+  opacity: 0.55;
+}
+
+.tcc-row1 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.task-expand-icon {
+  font-size: 10px;
+  color: var(--blue);
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  width: 22px;
+  text-align: center;
+}
+.task-expand-icon:hover { background: var(--blue-light); }
+.task-expand-spacer {
+  display: inline-block;
+  width: 22px;
+  flex-shrink: 0;
+}
+.tcc-name-block {
+  flex: 1;
+  min-width: 0;
+}
+.tcc-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--navy);
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tcc-sub-count {
+  background: var(--blue-light);
+  color: var(--blue);
+  padding: 1px 7px;
+  border-radius: 100px;
+  font-size: 10px;
+  font-weight: 600;
+  margin-left: 6px;
+  cursor: pointer;
+}
+.tcc-meta {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 3px;
+}
+.tcc-pill {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid;
+}
+.tcc-pill.tcc-deadline {
+  background: rgba(245, 158, 11, 0.15);
+  color: #92400E;
+  border-color: rgba(245, 158, 11, 0.4);
+}
+.tcc-stats {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-shrink: 0;
+}
+.tcc-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 56px;
+  text-align: right;
+}
+.tcc-stat-lbl {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.tcc-stat-val {
+  font-size: 13px;
+  font-weight: 700;
+  font-family: var(--mono);
+  color: var(--text);
+}
+.tcc-stat-val small {
+  font-size: 9px;
+  font-weight: 500;
+  color: var(--text-muted);
+  margin-left: 1px;
+}
+.tcc-progress-num {
+  font-size: 18px;
+  font-weight: 700;
+  font-family: var(--mono);
+  line-height: 1;
+  min-width: 65px;
+  text-align: right;
+}
+.tcc-progress-num small {
+  font-size: 10px;
+  margin-left: 1px;
+}
+.tcc-progress-bar {
+  position: relative;
+  height: 4px;
+  background: var(--bg-subtle);
+  border-radius: 100px;
+  overflow: hidden;
+}
+.tcc-progress-fill {
+  height: 100%;
+  border-radius: 100px;
+  transition: width 0.3s ease;
+}
+.tcc-progress-over {
+  position: absolute;
+  top: 0;
+  left: 100%;
+  height: 100%;
+  background: var(--red);
+  opacity: 0.4;
+}
+.tcc-row2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.tcc-status {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 100px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.tcc-allocs {
+  display: flex;
+  gap: 3px;
+  flex-wrap: wrap;
+  flex: 1;
+}
+.alloc-pill-mini {
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  padding: 1px 7px;
+  border-radius: 100px;
+  font-size: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.tcc-more {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-style: italic;
+  align-self: center;
+}
+
+.task-children {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-left: 2px solid #DBEAFE;
+  padding-left: 8px;
+  margin-top: 2px;
+  margin-bottom: 4px;
+}
+
+/* Old verbose card styles kept for backward compatibility */
 .task-analysis-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
