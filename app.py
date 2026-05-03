@@ -470,12 +470,12 @@ def api_overview_analysis(phase_group):
         if not phase_ids:
             return jsonify({'tasks': [], 'connected': True, 'error': 'No matching phases in Odoo'})
 
-        # Get all tasks under those phases
+        # Step 1: Get parent tasks (those with phase_id set directly)
         project_domain = [('phase_id', 'in', phase_ids)]
         if PROJECT_NAME:
             project_domain.append(('project_id.name', 'ilike', PROJECT_NAME))
 
-        tasks = odoo.models.execute_kw(
+        parent_tasks = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'project.task', 'search_read',
             [project_domain],
@@ -486,8 +486,31 @@ def api_overview_analysis(phase_group):
              'limit': 5000}
         )
 
-        if not tasks:
+        if not parent_tasks:
             return jsonify({'tasks': [], 'connected': True, 'phases_available': phase_names})
+
+        # Step 2: Collect all child IDs from parent_tasks
+        all_child_ids = []
+        for t in parent_tasks:
+            if t.get('child_ids'):
+                all_child_ids.extend(t['child_ids'])
+
+        # Step 3: Fetch sub-tasks (children) — these typically have parent_id set but no phase_id
+        child_tasks = []
+        if all_child_ids:
+            child_tasks = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.task', 'search_read',
+                [[('id', 'in', all_child_ids)]],
+                {'fields': ['id', 'name', 'planned_hours', 'effective_hours',
+                            'progress', 'parent_id', 'user_id',
+                            'date_deadline', 'stage_id', 'kanban_state',
+                            'phase_id', 'date_start', 'date_end', 'child_ids'],
+                 'limit': 5000}
+            )
+
+        # Combine parents + children
+        tasks = parent_tasks + child_tasks
 
         # Get all timesheet entries for these tasks
         task_ids = [t['id'] for t in tasks]
