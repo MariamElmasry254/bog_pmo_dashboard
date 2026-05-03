@@ -422,13 +422,31 @@ async function loadEffortLive(phaseKey, containerId, yearSelectId, monthSelectId
 
       // Position display: show resolved position with badges
       let posBadges = '';
-      if (!m.has_base_rate) {
+      if (!m.has_base_rate && m.country !== 'TUN') {
         posBadges += ' <span class="badge badge-amber" style="font-size: 9px;">no base rate</span>';
       }
-      if (m.onsite_days > 0 && !m.has_onsite_rate) {
+      if (m.onsite_days > 0 && !m.has_onsite_rate && m.country !== 'TUN') {
         posBadges += ' <span class="badge badge-amber" style="font-size: 9px;">no onsite rate</span>';
       }
-      const posDisplay = `<span style="font-size: 11px;" dir="auto">${m.position || '<i class="muted-text">— no position —</i>'}</span>${posBadges}`;
+      // Allow manually overriding the position by selecting from positions list
+      const selectedRole = m.odoo_role || '';
+      const allPositionNames = positions.map(p => p.name).filter(n => !n.endsWith(' - onsite'));
+      const overrideOptions = allPositionNames.map(p => {
+        // Strip country prefix to show just the role
+        const cleanRole = p.replace(/^(EGY|KSA|TUN)\s*-\s*/, '').replace(/\s*-\s*onsite\s*$/, '');
+        return `<option value="${cleanRole}" ${cleanRole === selectedRole ? 'selected' : ''}>${cleanRole}</option>`;
+      }).filter((v, i, a) => a.indexOf(v) === i);
+
+      const posDisplay = `
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+          <span style="font-size: 11px;" dir="auto">
+            ${m.position || '<i class="muted-text">— no position —</i>'}${posBadges}
+          </span>
+          <select class="position-override" data-emp="${encodeURIComponent(m.name)}" style="font-size: 10px; padding: 2px 4px; max-width: 220px; ${m.has_base_rate ? 'border-color: var(--green); background: var(--green-light);' : ''}">
+            <option value="">— change role —</option>
+            ${overrideOptions.join('')}
+          </select>
+        </div>`;
 
       const onsiteCell = m.onsite_days > 0
         ? `<b style="color: var(--amber);">${m.onsite_days}</b><span class="muted-text" style="font-size: 10px;"> d</span>`
