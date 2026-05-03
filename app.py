@@ -489,28 +489,52 @@ def api_overview_analysis(phase_group):
         if not parent_tasks:
             return jsonify({'tasks': [], 'connected': True, 'phases_available': phase_names})
 
-        # Step 2: Collect all child IDs from parent_tasks
-        all_child_ids = []
-        for t in parent_tasks:
-            if t.get('child_ids'):
-                all_child_ids.extend(t['child_ids'])
+        # Step 2: Fetch ALL tasks in this project (without phase filter)
+        # Then filter in Python by walking up parent chain to one of our parent_tasks
+        all_project_domain = []
+        if PROJECT_NAME:
+            all_project_domain.append(('project_id.name', 'ilike', PROJECT_NAME))
 
-        # Step 3: Fetch sub-tasks (children) — these typically have parent_id set but no phase_id
-        child_tasks = []
-        if all_child_ids:
-            child_tasks = odoo.models.execute_kw(
-                ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                'project.task', 'search_read',
-                [[('id', 'in', all_child_ids)]],
-                {'fields': ['id', 'name', 'planned_hours', 'effective_hours',
-                            'progress', 'parent_id', 'user_id',
-                            'date_deadline', 'stage_id', 'kanban_state',
-                            'phase_id', 'date_start', 'date_end', 'child_ids'],
-                 'limit': 5000}
-            )
+        all_project_tasks = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [all_project_domain],
+            {'fields': ['id', 'name', 'planned_hours', 'effective_hours',
+                        'progress', 'parent_id', 'user_id',
+                        'date_deadline', 'stage_id', 'kanban_state',
+                        'phase_id', 'date_start', 'date_end', 'child_ids'],
+             'limit': 10000}
+        )
+        logger.info(f"Total project tasks fetched: {len(all_project_tasks)}")
 
-        # Combine parents + children
-        tasks = parent_tasks + child_tasks
+        # Build lookup: id -> task
+        task_by_id = {t['id']: t for t in all_project_tasks}
+        parent_task_ids = {t['id'] for t in parent_tasks}
+
+        # For each task, walk up parent chain to see if it descends from a parent_task
+        all_tasks_by_id = {}
+        for t in all_project_tasks:
+            cur = t
+            visited = set()
+            depth = 0
+            while cur and cur['id'] not in visited and depth < 10:
+                visited.add(cur['id'])
+                depth += 1
+                if cur['id'] in parent_task_ids:
+                    # this task descends from one of our parents (or IS a parent)
+                    # add the original task t (not cur)
+                    all_tasks_by_id[t['id']] = t
+                    break
+                # Move up
+                if not cur.get('parent_id'):
+                    break
+                parent_id = cur['parent_id'][0] if isinstance(cur['parent_id'], list) else cur['parent_id']
+                cur = task_by_id.get(parent_id)
+                if not cur:
+                    break
+
+        tasks = list(all_tasks_by_id.values())
+        logger.info(f"Tasks in scope: {len(parent_tasks)} parents → {len(tasks)} total (after walking parent chains)")
 
         # Get all timesheet entries for these tasks
         task_ids = [t['id'] for t in tasks]
