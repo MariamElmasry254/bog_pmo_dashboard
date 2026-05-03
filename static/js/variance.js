@@ -9,6 +9,14 @@ window.loadVariance = async function() {
     document.querySelectorAll('.sub-tab').forEach(b => {
       b.addEventListener('click', () => switchSubTab(b.dataset.subtab));
     });
+    // Pre-load positions list
+    try {
+      const pres = await fetch('/api/positions');
+      const pd = await pres.json();
+      AppState.positions = pd.positions || [];
+    } catch (e) {
+      AppState.positions = [];
+    }
   }
   const cont = document.getElementById('varianceContent');
   cont.innerHTML = '<div class="loading">Loading variance data…</div>';
@@ -57,8 +65,8 @@ function renderVarianceSubTab(key) {
       html += `<div class="banner banner-warn"><strong>Parse error:</strong> ${sect.error}</div>`;
     } else if (sect.data) {
       if (sect.key === 'budget') html += renderBudget(sect.data);
-      else if (sect.key === 'profitability') html += renderProfitability(sect.data);
-      else if (sect.key === 'effort') html += renderEffort(sect.data);
+      else if (sect.key === 'profitability') html += renderProfitability(sect.data, key);
+      else if (sect.key === 'effort') html += renderEffort(sect.data, key);
       else if (sect.key === 'estimated') html += renderEstimated(sect.data);
     }
     html += '</div>';
@@ -137,58 +145,26 @@ function renderBudget(data) {
   return html;
 }
 
-function renderProfitability(data) {
+function renderProfitability(data, phaseKey) {
   if (!data.months || !data.months.length) {
     return '<div class="loading">No profitability data</div>';
   }
-  // Pick key columns
-  const keyCols = [
-    { k: 'Month', label: 'Month', type: 'date' },
-    { k: 'Estimated Effort MDs', label: 'Estimated MDs', type: 'num' },
-    { k: 'This month MDs', label: 'This Month', type: 'num' },
-    { k: 'Actual Effort to Date (MD)', label: 'Actual MDs', type: 'num' },
-    { k: '% Completion from plan', label: '% Complete', type: 'pct' },
-    { k: 'Estimated Remaining (MD)', label: 'Remaining (MD)', type: 'num' },
-    { k: 'EAC MDs', label: 'EAC MDs', type: 'num' },
-    { k: 'Variance', label: 'Variance', type: 'money' },
-    { k: 'Variance (%)', label: 'Var %', type: 'pct' },
-    { k: 'CPI', label: 'CPI', type: 'num' },
-    { k: 'Profit at Completion', label: 'Profit @ Comp', type: 'money' },
-    { k: 'Profit at Completion (%)', label: 'Profit %', type: 'pct' },
-  ];
 
-  let html = '<div class="card"><h3 class="card-title">Monthly Variance</h3><div class="table-scroll"><table class="data-table"><thead><tr>';
-  keyCols.forEach(c => html += `<th class="${c.type !== 'date' ? 'num' : ''}">${c.label}</th>`);
-  html += '</tr></thead><tbody>';
-  data.months.forEach(m => {
-    html += '<tr>';
-    keyCols.forEach(c => {
-      let v = m[c.k];
-      let cell = '—';
-      if (v != null && v !== '') {
-        if (c.type === 'date') {
-          cell = String(v).slice(0, 10);
-        } else if (c.type === 'pct') {
-          cell = fmt.decimal((parseFloat(v) || 0) * 100) + '%';
-        } else if (c.type === 'money') {
-          cell = fmt.money(v);
-        } else {
-          cell = fmt.decimal(v);
-        }
-      }
-      html += `<td class="${c.type !== 'date' ? 'num' : ''}">${cell}</td>`;
-    });
-    html += '</tr>';
+  // Pre-fetch overrides (async, but render with what's available)
+  fetch('/api/plan-overrides').then(r => r.json()).then(o => {
+    AppState.planOverrides = o.plan_overrides || {};
+    // Re-apply overrides to inputs after render
+    setTimeout(() => applyPlanOverrides(phaseKey), 100);
   });
-  html += '</tbody></table></div></div>';
 
-  // KPI summary from latest month
+  // Latest month KPIs
   const latest = data.months[data.months.length - 1];
+  let kpiHtml = '';
   if (latest) {
     const completion = (parseFloat(latest['% Completion from plan']) || 0) * 100;
     const variance = parseFloat(latest['Variance']) || 0;
     const remainingMD = parseFloat(latest['Estimated Remaining (MD)']) || 0;
-    html = `
+    kpiHtml = `
       <div class="kpi-strip kpi-strip-small">
         <div class="kpi-card kpi-blue compact">
           <div class="kpi-label">% COMPLETION</div>
@@ -210,43 +186,281 @@ function renderProfitability(data) {
           <div class="kpi-foot">cost performance</div>
         </div>
       </div>
-    ` + html;
+    `;
   }
+
+  // Editable plan table
+  const cols = [
+    { k: 'Month', label: 'Month', type: 'date' },
+    { k: 'Plan MDs', label: 'Plan MDs (editable)', type: 'plan' },
+    { k: 'Estimated Effort MDs', label: 'Estimated MDs', type: 'num' },
+    { k: 'This month MDs', label: 'This Month', type: 'num' },
+    { k: 'Actual Effort to Date (MD)', label: 'Actual MDs', type: 'num' },
+    { k: '% Completion', label: '% Completion (auto)', type: 'computed-pct' },
+    { k: 'Remaining', label: 'Remaining (auto)', type: 'computed-num' },
+    { k: 'EAC MDs', label: 'EAC MDs', type: 'num' },
+    { k: 'Variance', label: 'Variance', type: 'money' },
+    { k: 'CPI', label: 'CPI', type: 'num' },
+    { k: 'Profit at Completion', label: 'Profit @ Comp', type: 'money' },
+    { k: 'Profit at Completion (%)', label: 'Profit %', type: 'pct' },
+  ];
+
+  let html = kpiHtml + `<div class="card">
+    <h3 class="card-title">Monthly Variance
+      <span class="muted-text">— Plan MDs editable; Completion & Remaining auto-calculated</span>
+    </h3>
+    <div class="table-scroll"><table class="data-table" id="profit-table-${phaseKey}">
+    <thead><tr>`;
+  cols.forEach(c => html += `<th class="${c.type !== 'date' ? 'num' : ''}">${c.label}</th>`);
+  html += '</tr></thead><tbody>';
+
+  data.months.forEach((m, idx) => {
+    const monthDate = String(m['Month'] || '').slice(0, 10);
+    const monthKey = monthDate.slice(0, 7);  // YYYY-MM
+    const actual = parseFloat(m['Actual Effort to Date (MD)']) || 0;
+    // Default plan from sheet's "% Completion from plan" * "Estimated Effort MDs" or use Estimated MDs
+    const sheetCompletion = parseFloat(m['% Completion from plan']) || 0;
+    const sheetEstimated = parseFloat(m['Estimated Effort MDs']) || 0;
+    let defaultPlan = sheetCompletion > 0 ? (actual / sheetCompletion) : sheetEstimated;
+    if (!isFinite(defaultPlan) || defaultPlan === 0) defaultPlan = sheetEstimated;
+
+    html += `<tr data-month-key="${monthKey}" data-actual="${actual}">`;
+    cols.forEach(c => {
+      let cell = '—';
+      if (c.type === 'date') {
+        cell = monthDate;
+      } else if (c.type === 'plan') {
+        cell = `<input type="number" step="0.01" class="plan-input" data-phase="${phaseKey}" data-month="${monthKey}" value="${defaultPlan.toFixed(2)}" style="width: 90px; padding: 4px 8px; font-family: var(--mono); font-size: 12px; text-align: right; border: 1px solid var(--border-strong); border-radius: 4px;">`;
+      } else if (c.type === 'computed-pct' || c.type === 'computed-num') {
+        cell = `<span class="computed-${c.k.toLowerCase()}-${monthKey}">—</span>`;
+      } else {
+        let v = m[c.k];
+        if (v != null && v !== '') {
+          if (c.type === 'pct') cell = fmt.decimal((parseFloat(v) || 0) * 100) + '%';
+          else if (c.type === 'money') cell = fmt.money(v);
+          else cell = fmt.decimal(v);
+        }
+      }
+      const align = c.type !== 'date' ? 'num' : '';
+      html += `<td class="${align}">${cell}</td>`;
+    });
+    html += '</tr>';
+  });
+  html += '</tbody></table></div></div>';
+
+  // Wire after render
+  setTimeout(() => {
+    const table = document.getElementById(`profit-table-${phaseKey}`);
+    if (!table) return;
+    // Initial computation
+    table.querySelectorAll('.plan-input').forEach(inp => {
+      recomputePlanRow(inp);
+      inp.addEventListener('input', () => recomputePlanRow(inp));
+      inp.addEventListener('change', () => savePlanOverride(inp));
+    });
+  }, 50);
+
   return html;
 }
 
-function renderEffort(data) {
-  if (!data.team || !data.team.length) {
-    return '<div class="loading">No effort data</div>';
-  }
-  let html = '<div class="card"><h3 class="card-title">Team Effort by Month <span class="muted-text">(scroll right for all months)</span></h3><div class="table-scroll"><table class="data-table effort-table"><thead><tr>';
-  html += '<th>Name</th><th>Position</th><th class="num">Hour Rate</th>';
-  data.months.forEach(m => {
-    html += `<th colspan="3" class="month-header">${m}</th>`;
+function recomputePlanRow(inp) {
+  const monthKey = inp.dataset.month;
+  const tr = inp.closest('tr');
+  if (!tr) return;
+  const actual = parseFloat(tr.dataset.actual) || 0;
+  const plan = parseFloat(inp.value) || 0;
+  const completion = plan > 0 ? (actual / plan * 100) : 0;
+  const remaining = plan - actual;
+  // Update computed cells (find by class containing 'computed-')
+  const computedEls = tr.querySelectorAll('span[class*="computed-"]');
+  computedEls.forEach(el => {
+    const cls = el.className || '';
+    if (cls.includes('% completion')) {
+      el.textContent = fmt.decimal(completion) + '%';
+      el.style.color = completion >= 100 ? 'var(--green)' : completion >= 75 ? 'var(--blue)' : 'var(--amber)';
+      el.style.fontWeight = '600';
+    } else if (cls.includes('remaining')) {
+      el.textContent = fmt.decimal(remaining);
+      el.style.color = remaining < 0 ? 'var(--red)' : 'var(--text)';
+      el.style.fontWeight = '600';
+    }
   });
-  html += '<th class="num">Total Cost</th><th class="num">MDs</th></tr><tr>';
-  html += '<th></th><th></th><th></th>';
-  data.months.forEach(() => {
-    html += '<th class="num small-th">Reg</th><th class="num small-th">Ram</th><th class="num small-th">OT</th>';
-  });
-  html += '<th></th><th></th></tr></thead><tbody>';
+}
 
-  data.team.forEach(m => {
-    html += `<tr>
-      <td><b>${m.name || '—'}</b></td>
-      <td><span class="muted-text" style="font-size: 11px;">${m.position || '—'}</span></td>
-      <td class="num">$${fmt.decimal(m.hour_rate)}</td>`;
-    m.monthly.forEach(mn => {
-      html += `<td class="num small-num">${mn.regular || ''}</td>
-               <td class="num small-num">${mn.ramadan || ''}</td>
-               <td class="num small-num">${mn.overtime || ''}</td>`;
-    });
-    html += `<td class="num"><b>$${fmt.money(m.total_cost)}</b></td>
-             <td class="num">${fmt.decimal(m.current_mds)}</td>
-           </tr>`;
+async function savePlanOverride(inp) {
+  const phase = inp.dataset.phase;
+  const month_key = inp.dataset.month;
+  const plan_md = parseFloat(inp.value) || 0;
+  await fetch('/api/plan-overrides', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phase, month_key, plan_md })
   });
-  html += '</tbody></table></div></div>';
+  inp.style.borderColor = 'var(--green)';
+  setTimeout(() => { inp.style.borderColor = 'var(--border-strong)'; }, 1200);
+}
+
+function applyPlanOverrides(phaseKey) {
+  const overrides = (AppState.planOverrides || {})[phaseKey] || {};
+  document.querySelectorAll(`.plan-input[data-phase="${phaseKey}"]`).forEach(inp => {
+    const monthKey = inp.dataset.month;
+    if (overrides[monthKey] !== undefined) {
+      inp.value = parseFloat(overrides[monthKey]).toFixed(2);
+      recomputePlanRow(inp);
+    }
+  });
+}
+
+function renderEffort(data, phaseKey) {
+  // Container with placeholder; we fetch live data after render
+  const containerId = `effort-live-${phaseKey}`;
+  const monthSelectId = `effort-month-${phaseKey}`;
+  const yearSelectId = `effort-year-${phaseKey}`;
+
+  // Default: April 2026
+  const today = new Date();
+  let defaultYear = 2026;
+  let defaultMonth = 4;
+
+  // Build month options (April → today's month)
+  const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+  let html = `
+    <div class="card">
+      <div style="display: flex; gap: 12px; align-items: flex-end; margin-bottom: 16px; flex-wrap: wrap;">
+        <div class="filter-group">
+          <label class="filter-label">YEAR</label>
+          <select id="${yearSelectId}" class="search-input" style="width: 100px;">
+            <option value="2026">2026</option>
+            <option value="2025">2025</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label class="filter-label">MONTH</label>
+          <select id="${monthSelectId}" class="search-input" style="width: 160px;">
+            ${months.map((m, i) => `<option value="${i+1}" ${i+1 === defaultMonth ? 'selected' : ''}>${m}</option>`).join('')}
+          </select>
+        </div>
+        <button class="btn-primary" id="effort-reload-${phaseKey}">Refresh from Odoo</button>
+        <span class="muted-text" style="margin-left: auto;">
+          📡 Live from Odoo timesheets · Computed using country-aware Ramadan + weekend rules
+        </span>
+      </div>
+      <div id="${containerId}"><div class="loading">Loading from Odoo…</div></div>
+    </div>
+  `;
+
+  // After insertion, attach event listeners and load data
+  setTimeout(() => {
+    const reload = () => loadEffortLive(phaseKey, containerId, yearSelectId, monthSelectId);
+    document.getElementById(`effort-reload-${phaseKey}`).addEventListener('click', reload);
+    document.getElementById(yearSelectId).addEventListener('change', reload);
+    document.getElementById(monthSelectId).addEventListener('change', reload);
+    reload();
+  }, 50);
+
   return html;
+}
+
+async function loadEffortLive(phaseKey, containerId, yearSelectId, monthSelectId) {
+  const year = document.getElementById(yearSelectId).value;
+  const month = document.getElementById(monthSelectId).value;
+  const cont = document.getElementById(containerId);
+  cont.innerHTML = '<div class="loading">Loading from Odoo…</div>';
+
+  try {
+    const res = await fetch(`/api/effort/${phaseKey}?year=${year}&month=${month}`);
+    const d = await res.json();
+
+    if (d.error) {
+      cont.innerHTML = `<div class="banner banner-warn"><strong>Error:</strong> ${d.error}</div>`;
+      return;
+    }
+
+    if (!d.team || !d.team.length) {
+      cont.innerHTML = `<div class="loading">No timesheet entries found for ${d.month_label || 'this month'}</div>`;
+      return;
+    }
+
+    // Build positions dropdown options for inline override
+    const positions = AppState.positions || [];
+    const posOptions = positions.map(p => `<option value="${p.name}">${p.name}</option>`).join('');
+
+    let totalReg = 0, totalRam = 0, totalOT = 0, totalMD = 0;
+    let html = `
+      <div class="banner banner-info" style="margin-bottom: 12px;">
+        <strong>${d.month_label}</strong> · ${d.team.length} team members ·
+        Phases: ${(d.phases_used || []).join(', ') || 'all'}
+      </div>
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Position</th>
+              <th>Country</th>
+              <th class="num">Regular MH</th>
+              <th class="num">Ramadan MH</th>
+              <th class="num">Overtime MH</th>
+              <th class="num">Total Hours</th>
+              <th class="num">MDs</th>
+            </tr>
+          </thead>
+          <tbody>
+    `;
+    d.team.forEach(m => {
+      totalReg += m.regular_mh || 0;
+      totalRam += m.ramadan_mh || 0;
+      totalOT += m.overtime_mh || 0;
+      totalMD += m.mds || 0;
+      const posDisplay = m.position
+        ? `<span style="font-size: 11px;">${m.position}</span>`
+        : `<select class="position-override" data-emp="${encodeURIComponent(m.name)}" style="font-size: 11px; padding: 4px;">
+             <option value="">— set position —</option>
+             ${posOptions}
+           </select>`;
+      html += `
+        <tr>
+          <td><b>${m.name}</b></td>
+          <td>${posDisplay}</td>
+          <td><span class="team-pill" style="font-size: 10px;">${m.country}</span></td>
+          <td class="num">${fmt.decimal(m.regular_mh)}</td>
+          <td class="num" style="color: ${m.ramadan_mh > 0 ? 'var(--amber)' : 'var(--text-muted)'};">${m.ramadan_mh > 0 ? fmt.decimal(m.ramadan_mh) : '—'}</td>
+          <td class="num" style="color: ${m.overtime_mh > 0 ? 'var(--red)' : 'var(--text-muted)'};">${m.overtime_mh > 0 ? fmt.decimal(m.overtime_mh) : '—'}</td>
+          <td class="num"><b>${fmt.decimal(m.total_hours)}</b></td>
+          <td class="num"><b style="color: var(--blue);">${fmt.decimal(m.mds)}</b></td>
+        </tr>
+      `;
+    });
+    html += `
+        <tr style="background: var(--bg-subtle); font-weight: 700;">
+          <td colspan="3"><b>TOTAL</b></td>
+          <td class="num">${fmt.decimal(totalReg)}</td>
+          <td class="num">${fmt.decimal(totalRam)}</td>
+          <td class="num">${fmt.decimal(totalOT)}</td>
+          <td class="num">${fmt.decimal(totalReg + totalRam + totalOT)}</td>
+          <td class="num"><b style="color: var(--blue);">${fmt.decimal(totalMD)}</b></td>
+        </tr>
+      </tbody></table></div>
+    `;
+    cont.innerHTML = html;
+
+    // Wire position overrides
+    cont.querySelectorAll('.position-override').forEach(sel => {
+      sel.addEventListener('change', async () => {
+        const name = decodeURIComponent(sel.dataset.emp);
+        const position = sel.value;
+        await fetch('/api/position-overrides', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, position })
+        });
+        loadEffortLive(phaseKey, containerId, yearSelectId, monthSelectId);
+      });
+    });
+  } catch (err) {
+    cont.innerHTML = `<div class="banner banner-warn"><strong>Error:</strong> ${err.message}</div>`;
+  }
 }
 
 function renderEstimated(data) {
@@ -277,35 +491,60 @@ function renderEstimated(data) {
 // ====== TRAVEL & ONSITE ======
 async function renderTravelSubTab() {
   const cont = document.getElementById('varianceContent');
+
+  // Load employees + positions in parallel
+  let employees = [];
+  let positions = AppState.positions || [];
+  try {
+    const r = await fetch('/api/project-employees');
+    const d = await r.json();
+    employees = d.employees || [];
+  } catch (e) {}
+
+  AppState.travelEmployees = employees;
+  AppState.travelPositions = positions;
+
   cont.innerHTML = `
     <div class="banner banner-info">
       <strong>Travel & Onsite Records:</strong>
       Track when team members travel onsite. Rates differ between Egypt and onsite work.
-      Leave end date empty if travel is open-ended (returns automatically tracked from today).
+      Leave end date empty if travel is open-ended.
     </div>
 
     <div class="card">
-      <h3 class="card-title">Add Travel Record</h3>
+      <h3 class="card-title" id="travelFormTitle">Add Travel Record</h3>
       <div class="travel-form">
         <div class="form-row">
-          <label>Employee Name <input type="text" id="trName" placeholder="e.g., Moatasem Hatem" class="search-input"></label>
-          <label>Position <input type="text" id="trPos" placeholder="e.g., Lead Business Analyst" class="search-input"></label>
+          <label>Employee Name
+            <input list="empNamesList" id="trName" placeholder="Type or pick from list..." class="search-input" autocomplete="off">
+            <datalist id="empNamesList">
+              ${employees.map(e => `<option value="${e.name}" data-position="${e.position || ''}">`).join('')}
+            </datalist>
+          </label>
+          <label>Position
+            <input list="positionsList" id="trPos" placeholder="Type or pick from list..." class="search-input" autocomplete="off">
+            <datalist id="positionsList">
+              ${positions.map(p => `<option value="${p.name}">`).join('')}
+            </datalist>
+          </label>
         </div>
         <div class="form-row">
           <label>Travel Start <input type="date" id="trStart" class="search-input"></label>
-          <label>End Date <small class="muted-text">(optional)</small> <input type="date" id="trEnd" class="search-input"></label>
+          <label>End Date <small class="muted-text">(optional · leave empty for open trip)</small> <input type="date" id="trEnd" class="search-input"></label>
         </div>
         <div class="form-row">
           <label class="full-width">Notes <input type="text" id="trNotes" placeholder="Optional notes..." class="search-input"></label>
         </div>
         <div class="form-actions">
-          <button id="trAdd" class="btn-primary">+ Add Record</button>
+          <button id="trCancel" class="btn-ghost" style="display:none;">Cancel Edit</button>
+          <button id="trSubmit" class="btn-primary">+ Add Record</button>
         </div>
+        <input type="hidden" id="trEditingId" value="">
       </div>
     </div>
 
     <div class="card">
-      <h3 class="card-title">Travel Records <span class="muted-text">— click "End trip" to set return date</span></h3>
+      <h3 class="card-title">Travel Records <span class="muted-text">— click "Edit" to update</span></h3>
       <div class="table-scroll">
         <table class="data-table" id="travelTable">
           <thead><tr>
@@ -318,7 +557,19 @@ async function renderTravelSubTab() {
     </div>
   `;
 
-  document.getElementById('trAdd').addEventListener('click', addTravel);
+  // Auto-fill position when name selected
+  document.getElementById('trName').addEventListener('input', (e) => {
+    const name = e.target.value;
+    const emp = (AppState.travelEmployees || []).find(x => x.name === name);
+    if (emp && emp.position && !document.getElementById('trPos').value) {
+      // Strip "- onsite" suffix to land on the dropdown value (PM picks onsite manually here)
+      const cleanPos = emp.position.replace(/\s*-\s*onsite\s*$/i, '').trim();
+      document.getElementById('trPos').value = cleanPos;
+    }
+  });
+
+  document.getElementById('trSubmit').addEventListener('click', submitTravel);
+  document.getElementById('trCancel').addEventListener('click', cancelEdit);
   await loadTravelRecords();
 }
 
@@ -330,6 +581,7 @@ async function loadTravelRecords() {
     tbody.innerHTML = '<tr><td colspan="8" class="loading">No travel records yet — add one above</td></tr>';
     return;
   }
+  AppState.travelRecords = d.records;
   tbody.innerHTML = '';
   d.records.forEach(r => {
     const tr = document.createElement('tr');
@@ -345,26 +597,14 @@ async function loadTravelRecords() {
       <td><span class="status-pill ${statusClass}">${r.status}</span></td>
       <td><span class="muted-text" style="font-size: 11px;">${r.notes || ''}</span></td>
       <td>
-        ${!r.end_date ? `<button class="see-details-btn" data-end-id="${r.id}">End trip</button>` : ''}
+        <button class="see-details-btn" data-edit-id="${r.id}">Edit</button>
         <button class="btn-ghost" style="padding: 4px 10px; font-size: 11px;" data-del-id="${r.id}">Delete</button>
       </td>
     `;
     tbody.appendChild(tr);
   });
-  // Wire actions
-  tbody.querySelectorAll('[data-end-id]').forEach(b => {
-    b.addEventListener('click', async () => {
-      const id = b.dataset.endId;
-      const today = new Date().toISOString().split('T')[0];
-      const end = prompt('Set return date (YYYY-MM-DD):', today);
-      if (!end) return;
-      await fetch(`/api/travel/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ end_date: end })
-      });
-      loadTravelRecords();
-    });
+  tbody.querySelectorAll('[data-edit-id]').forEach(b => {
+    b.addEventListener('click', () => startEdit(b.dataset.editId));
   });
   tbody.querySelectorAll('[data-del-id]').forEach(b => {
     b.addEventListener('click', async () => {
@@ -375,7 +615,34 @@ async function loadTravelRecords() {
   });
 }
 
-async function addTravel() {
+function startEdit(id) {
+  const r = (AppState.travelRecords || []).find(x => String(x.id) === String(id));
+  if (!r) return;
+  document.getElementById('trName').value = r.name || '';
+  document.getElementById('trPos').value = r.position || '';
+  document.getElementById('trStart').value = r.start_date || '';
+  document.getElementById('trEnd').value = r.end_date || '';
+  document.getElementById('trNotes').value = r.notes || '';
+  document.getElementById('trEditingId').value = r.id;
+  document.getElementById('trSubmit').textContent = '✓ Save Changes';
+  document.getElementById('trSubmit').className = 'btn-export';
+  document.getElementById('trCancel').style.display = '';
+  document.getElementById('travelFormTitle').textContent = `Edit Travel Record #${r.id} — ${r.name}`;
+  // Scroll to form
+  document.querySelector('.travel-form').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function cancelEdit() {
+  document.getElementById('trEditingId').value = '';
+  ['trName','trPos','trStart','trEnd','trNotes'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('trSubmit').textContent = '+ Add Record';
+  document.getElementById('trSubmit').className = 'btn-primary';
+  document.getElementById('trCancel').style.display = 'none';
+  document.getElementById('travelFormTitle').textContent = 'Add Travel Record';
+}
+
+async function submitTravel() {
+  const editingId = document.getElementById('trEditingId').value;
   const body = {
     name: document.getElementById('trName').value.trim(),
     position: document.getElementById('trPos').value.trim(),
@@ -387,20 +654,25 @@ async function addTravel() {
     alert('Name and start date are required');
     return;
   }
-  const res = await fetch('/api/travel', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
+  let res;
+  if (editingId) {
+    res = await fetch(`/api/travel/${editingId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+  } else {
+    res = await fetch('/api/travel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+  }
   if (res.ok) {
-    document.getElementById('trName').value = '';
-    document.getElementById('trPos').value = '';
-    document.getElementById('trStart').value = '';
-    document.getElementById('trEnd').value = '';
-    document.getElementById('trNotes').value = '';
+    cancelEdit();
     loadTravelRecords();
   } else {
     const e = await res.json();
-    alert('Error: ' + (e.error || 'failed to add'));
+    alert('Error: ' + (e.error || 'failed'));
   }
 }
