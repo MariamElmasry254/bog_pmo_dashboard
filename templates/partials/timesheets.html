@@ -15,10 +15,16 @@
       <input type="date" id="tsTo" class="search-input" style="width: 150px;">
     </div>
     <div class="filter-group">
-      <label class="filter-label">SERVICE / PHASE</label>
-      <select id="tsService" class="search-input" style="width: 240px;">
-        <option value="">All services</option>
-      </select>
+      <label class="filter-label">PHASE (multi-select)</label>
+      <div class="phase-dropdown" id="phaseDropdown">
+        <button type="button" class="phase-toggle" id="phaseToggle">
+          <span id="phaseToggleLabel">Development Phase</span>
+          <span style="margin-left:8px; color: var(--text-muted);">▼</span>
+        </button>
+        <div class="phase-menu" id="phaseMenu" style="display:none;">
+          <!-- Populated by JS -->
+        </div>
+      </div>
     </div>
     <div class="filter-group">
       <label class="filter-label">EMPLOYEE</label>
@@ -51,8 +57,8 @@
         <div class="kpi-value-text" id="tsRange">All time</div>
       </div>
       <div class="kpi-card kpi-navy compact">
-        <div class="kpi-label">FILTER</div>
-        <div class="kpi-value-text" id="tsServiceLabel">All services</div>
+        <div class="kpi-label">PHASE FILTER</div>
+        <div class="kpi-value-text" id="tsServiceLabel">Development Phase</div>
       </div>
     </div>
 
