@@ -12,13 +12,13 @@
 </head>
 <body>
 
-<!-- Executive Header (navy block like the screenshot) -->
+<!-- ============ EXECUTIVE HEADER ============ -->
 <header class="exec-header">
   <div class="exec-content">
     <div class="exec-top">
       <span class="exec-label">PMO DASHBOARD — FY 2026</span>
       <div class="exec-meta">
-        <div><span>REPORTING PERIOD</span><b id="reportPeriod">May 2026</b></div>
+        <div><span>REPORTING PERIOD</span><b>May 2026</b></div>
         <div><span>SOURCE</span><b>Odoo / Excel / Roadmap</b></div>
         <div><span>GENERATED</span><b id="generatedTime">—</b></div>
       </div>
@@ -27,337 +27,38 @@
     <p class="exec-subtitle">{{ project_name }} — مرحلة التطوير | فريق العمل 2 | 14 شهر</p>
 
     <nav class="exec-tabs">
-      <button class="exec-tab active" data-tab="overview">Overview</button>
-      <button class="exec-tab" data-tab="budget">Budget</button>
-      <button class="exec-tab" data-tab="services">Services &amp; Scope</button>
-      <button class="exec-tab" data-tab="timesheets">Timesheets</button>
-      <button class="exec-tab" data-tab="missing">Missing Hours</button>
-      <button class="exec-tab" data-tab="roadmap">Roadmap</button>
+      <button class="exec-tab active" data-tab="overview"><span class="tab-num">01</span> Overview</button>
+      <button class="exec-tab" data-tab="budget"><span class="tab-num">02</span> Budget</button>
+      <button class="exec-tab" data-tab="services"><span class="tab-num">03</span> Services &amp; Scope</button>
+      <button class="exec-tab" data-tab="timesheets"><span class="tab-num">04</span> Timesheets</button>
+      <button class="exec-tab" data-tab="missing"><span class="tab-num">05</span> Missing Hours</button>
+      <button class="exec-tab" data-tab="roadmap"><span class="tab-num">06</span> Roadmap</button>
     </nav>
   </div>
 </header>
 
 <main class="content">
-
-  <!-- ============ OVERVIEW ============ -->
-  <section class="tab-panel active" id="overview">
-    <div class="period-tag">
-      <span>PERIOD</span>
-      <strong>2026-04-05 to 2027-05-13</strong>
-    </div>
-
-    <!-- KPI Strip -->
-    <div class="kpi-strip">
-      <div class="kpi-card kpi-blue">
-        <div class="kpi-bar"></div>
-        <div class="kpi-label">TOTAL SERVICES</div>
-        <div class="kpi-value"><span id="kpiServices">—</span><span class="kpi-unit">in scope</span></div>
-        <div class="kpi-foot">From Excel + Roadmap</div>
-      </div>
-      <div class="kpi-card kpi-green">
-        <div class="kpi-bar"></div>
-        <div class="kpi-label">TOTAL WORKING DAYS</div>
-        <div class="kpi-value"><span id="kpiWD">—</span><span class="kpi-unit">WD</span></div>
-        <div class="kpi-foot">Baseline estimate</div>
-      </div>
-      <div class="kpi-card kpi-navy">
-        <div class="kpi-bar"></div>
-        <div class="kpi-label">TOTAL MANDAYS</div>
-        <div class="kpi-value"><span id="kpiMD">6,556</span><span class="kpi-unit">MD</span></div>
-        <div class="kpi-foot">Contracted</div>
-      </div>
-      <div class="kpi-card kpi-amber">
-        <div class="kpi-bar"></div>
-        <div class="kpi-label">BUDGET PROFIT</div>
-        <div class="kpi-value"><span id="kpiProfit">49</span><span class="kpi-unit">%</span></div>
-        <div class="kpi-foot">SAR 9.89M net</div>
-      </div>
-    </div>
-
-    <!-- Section 01 -->
-    <div class="section-bar">
-      <span class="section-num">01</span>
-      <h2>Project Health Snapshot</h2>
-    </div>
-
-    <div class="grid-2">
-      <div class="card">
-        <h3 class="card-title">Complexity Distribution</h3>
-        <div class="chart-wrap"><canvas id="complexityChart"></canvas></div>
-      </div>
-      <div class="card">
-        <h3 class="card-title">Project Progress</h3>
-        <div class="progress-section">
-          <div class="big-stat">
-            <span id="progressVal">0</span>
-            <span class="big-stat-unit">%</span>
-          </div>
-          <div class="progress-bar"><div id="progressBar" class="progress-fill" style="width:0%"></div></div>
-          <div class="progress-dates">
-            <div><span>SUPPORT STARTS</span><b>18 May 2027</b></div>
-            <div><span>SUPPORT ENDS</span><b>17 May 2028</b></div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Section 02 -->
-    <div class="section-bar">
-      <span class="section-num">02</span>
-      <h2>Recent Activity (last 7 days)</h2>
-    </div>
-    <div class="card">
-      <div id="recentActivity">
-        <div class="loading">Loading activity…</div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============ BUDGET ============ -->
-  <section class="tab-panel" id="budget">
-    <div class="page-header">
-      <span class="page-eyebrow">FINANCIALS</span>
-      <h2 class="page-title">Budget &amp; Profitability</h2>
-    </div>
-
-    <div class="grid-2">
-      <div class="card budget-card">
-        <h3 class="card-title">Approved Budget</h3>
-        <div id="approvedBudget"></div>
-      </div>
-      <div class="card budget-card budget-final">
-        <h3 class="card-title">Final Budget <span class="badge badge-amber">After Changes</span></h3>
-        <div id="finalBudget"></div>
-      </div>
-    </div>
-
-    <div class="card">
-      <h3 class="card-title">Change Log</h3>
-      <table class="data-table" id="changesTable">
-        <thead><tr><th>Reason</th><th>Plan / CR ID</th><th class="num">Δ Cost (SAR)</th><th class="num">Δ Revenue (SAR)</th></tr></thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </section>
-
-  <!-- ============ SERVICES ============ -->
-  <section class="tab-panel" id="services">
-    <div class="page-header">
-      <span class="page-eyebrow">SCOPE</span>
-      <h2 class="page-title">Services &amp; Scope <span class="counter-badge" id="servicesCount">—</span></h2>
-      <div class="page-actions">
-        <input type="text" id="serviceSearch" placeholder="🔍 Search services..." class="search-input">
-      </div>
-    </div>
-
-    <div class="banner banner-info">
-      <strong>Note:</strong> Baseline estimates from Presales (services.xlsx). Planned estimates pull from <a href="https://codelabsys.sharepoint.com/:x:/r/sites/BOGDigitalTransformation/_layouts/15/Doc.aspx?sourcedoc=%7B20F81A87-D75B-42AE-B50C-6F7FD4390955%7D&file=WBD.xlsx" target="_blank">WBD SharePoint</a>. The Assignation column will be populated when business resources are allocated.
-    </div>
-
-    <div class="card">
-      <div class="table-scroll">
-        <table class="data-table services-table" id="servicesTable">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Service Name</th>
-              <th>Priority</th>
-              <th>Complexity</th>
-              <th>Team</th>
-              <th>Assignation (BA / Dev)</th>
-              <th class="num">Baseline WD</th>
-              <th>Planned Start</th>
-              <th>Planned End</th>
-              <th class="num">Total MD</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============ TIMESHEETS ============ -->
-  <section class="tab-panel" id="timesheets">
-    <div class="page-header">
-      <span class="page-eyebrow">LIVE · ODOO</span>
-      <h2 class="page-title">Timesheets</h2>
-      <div class="page-actions">
-        <div class="date-filter">
-          <label>From <input type="date" id="dateFrom" class="date-input"></label>
-          <label>To <input type="date" id="dateTo" class="date-input"></label>
-          <button id="applyDateFilter" class="btn-primary">Apply</button>
-          <button id="resetFilter" class="btn-ghost">Reset</button>
-        </div>
-      </div>
-    </div>
-
-    <div id="connectionBanner" class="banner banner-warn" style="display:none;">
-      <strong>Demo mode:</strong> <span id="bannerMsg"></span>
-    </div>
-
-    <!-- Two views: Employees list (default) + Drill-down -->
-    <div id="employeeListView">
-      <div class="kpi-strip kpi-strip-small">
-        <div class="kpi-card kpi-blue compact">
-          <div class="kpi-label">TOTAL HOURS</div>
-          <div class="kpi-value"><span id="tsTotalHours">—</span><span class="kpi-unit">h</span></div>
-        </div>
-        <div class="kpi-card kpi-green compact">
-          <div class="kpi-label">ACTIVE EMPLOYEES</div>
-          <div class="kpi-value"><span id="tsTotalEmps">—</span></div>
-        </div>
-        <div class="kpi-card kpi-amber compact">
-          <div class="kpi-label">DATE RANGE</div>
-          <div class="kpi-value-text" id="tsRange">All time</div>
-        </div>
-      </div>
-
-      <div class="card">
-        <h3 class="card-title">Hours by Employee <span class="muted-text">(click any row to see daily breakdown)</span></h3>
-        <div class="table-scroll">
-          <table class="data-table" id="employeeTable">
-            <thead>
-              <tr>
-                <th>Employee</th>
-                <th class="num">Total Hours</th>
-                <th class="num">Days Logged</th>
-                <th class="num">Avg / Day</th>
-                <th class="num">Entries</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
-    <!-- Drill-down view -->
-    <div id="employeeDetailView" style="display:none;">
-      <button class="btn-back" id="backToList">← Back to all employees</button>
-      <div class="detail-header">
-        <h3 id="detailEmpName">—</h3>
-        <div class="detail-stats">
-          <span><b id="detailTotalH">0</b>h total</span>
-          <span><b id="detailTotalD">0</b> days</span>
-        </div>
-      </div>
-      <div id="detailDays" class="days-list"></div>
-    </div>
-  </section>
-
-  <!-- ============ MISSING HOURS ============ -->
-  <section class="tab-panel" id="missing">
-    <div class="page-header">
-      <span class="page-eyebrow">COMPLIANCE</span>
-      <h2 class="page-title">Missing Hours Report</h2>
-      <div class="page-actions">
-        <span class="muted-text">Tracks 8h/day · Excludes Friday + Saturday</span>
-      </div>
-    </div>
-
-    <div class="banner banner-info">
-      <strong>How it works:</strong> For each employee, the system tracks from <b>their first timesheet entry date</b> to today. Working days only (Sunday–Thursday). Expected: 8 hours/day.
-    </div>
-
-    <div class="card">
-      <h3 class="card-title">Employee Compliance Status</h3>
-      <div class="table-scroll">
-        <table class="data-table" id="missingTable">
-          <thead>
-            <tr>
-              <th>Employee</th>
-              <th>First Entry</th>
-              <th class="num">Expected Days</th>
-              <th class="num">Logged Days</th>
-              <th class="num">Missing Days</th>
-              <th class="num">Logged Hrs</th>
-              <th class="num">Expected Hrs</th>
-              <th class="num">Missing Hrs</th>
-              <th>Compliance</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============ ROADMAP ============ -->
-  <section class="tab-panel" id="roadmap">
-    <div class="page-header">
-      <span class="page-eyebrow">PLAN</span>
-      <h2 class="page-title">خارطة الطريق — Roadmap</h2>
-    </div>
-
-    <div class="kpi-strip">
-      <div class="kpi-card kpi-blue compact">
-        <div class="kpi-label">TOTAL SERVICES</div>
-        <div class="kpi-value"><span id="rmServices">50</span></div>
-      </div>
-      <div class="kpi-card kpi-green compact">
-        <div class="kpi-label">TEAMS</div>
-        <div class="kpi-value"><span>2</span></div>
-      </div>
-      <div class="kpi-card kpi-amber compact">
-        <div class="kpi-label">DURATION</div>
-        <div class="kpi-value"><span>14</span><span class="kpi-unit">months</span></div>
-      </div>
-      <div class="kpi-card kpi-navy compact">
-        <div class="kpi-label">EXECUTION</div>
-        <div class="kpi-value-text">Parallel</div>
-      </div>
-    </div>
-
-    <!-- Milestones Timeline -->
-    <div class="section-bar">
-      <span class="section-num">M</span>
-      <h2>Key Milestones</h2>
-    </div>
-    <div class="card">
-      <div class="milestones-timeline" id="milestonesTimeline"></div>
-    </div>
-
-    <!-- Team breakdown -->
-    <div class="section-bar">
-      <span class="section-num">T</span>
-      <h2>Team Workload</h2>
-    </div>
-    <div class="grid-3" id="teamBreakdown"></div>
-
-    <!-- Services Roadmap Table -->
-    <div class="section-bar">
-      <span class="section-num">S</span>
-      <h2>Services Schedule</h2>
-    </div>
-    <div class="card">
-      <div class="table-scroll">
-        <table class="data-table" id="roadmapTable">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Service Name</th>
-              <th>Team</th>
-              <th>Start</th>
-              <th>End</th>
-              <th class="num">Working Days</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </div>
-  </section>
-
+  {% include 'partials/overview.html' %}
+  {% include 'partials/budget.html' %}
+  {% include 'partials/services.html' %}
+  {% include 'partials/timesheets.html' %}
+  {% include 'partials/missing.html' %}
+  {% include 'partials/roadmap.html' %}
 </main>
 
 <footer class="footer">
   <span>BOG · Digital Transformation — Internal PMO Dashboard</span>
-  <span>v2.0 · Built for {{ project_name }}</span>
+  <span>v3.0 · Modular</span>
 </footer>
 
-<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+<!-- Modular JS -->
+<script src="{{ url_for('static', filename='js/utils.js') }}"></script>
+<script src="{{ url_for('static', filename='js/overview.js') }}"></script>
+<script src="{{ url_for('static', filename='js/budget.js') }}"></script>
+<script src="{{ url_for('static', filename='js/services.js') }}"></script>
+<script src="{{ url_for('static', filename='js/timesheets.js') }}"></script>
+<script src="{{ url_for('static', filename='js/missing.js') }}"></script>
+<script src="{{ url_for('static', filename='js/roadmap.js') }}"></script>
+<script src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>
 </html>
