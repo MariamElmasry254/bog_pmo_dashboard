@@ -316,21 +316,39 @@ function renderTaskList(phaseGroup) {
     return;
   }
 
-  // Group by parent: parents first, sub-tasks shown only when parent is expanded
-  const byParent = new Map(); // parent_id -> [children]
-  const standaloneTasks = [];
+  // Group all tasks by their immediate parent_id (handles multi-level hierarchy)
+  const byParent = new Map(); // parent_id -> [children at this level]
+  const taskIdSet = new Set(tasks.map(t => t.id));
+  const rootTasks = []; // tasks whose parent is NOT in our list
+
   tasks.forEach(t => {
-    if (t.is_parent) {
-      if (!byParent.has(t.id)) byParent.set(t.id, []);
-    } else if (t.parent_id) {
+    if (t.parent_id && taskIdSet.has(t.parent_id)) {
+      // Has a parent that's in our task list — group under it
       if (!byParent.has(t.parent_id)) byParent.set(t.parent_id, []);
       byParent.get(t.parent_id).push(t);
     } else {
-      standaloneTasks.push(t);
+      // No parent in our list (top-level / orphan)
+      rootTasks.push(t);
     }
   });
 
-  const parents = tasks.filter(t => t.is_parent);
+  // Recursive renderer that handles unlimited nesting
+  function renderTaskBranch(task, depth) {
+    const children = byParent.get(task.id) || [];
+    let html = renderTaskCard(task, children.length, depth > 0);
+    if (children.length && AppState.expandedTasks.has(task.id)) {
+      html += `<div class="task-children" style="margin-left: ${depth * 12}px;">`;
+      // Sort children by progress desc, then name
+      children.sort((a, b) => (b.progress_pct || 0) - (a.progress_pct || 0)
+                              || (a.name || '').localeCompare(b.name || ''));
+      children.forEach(c => { html += renderTaskBranch(c, depth + 1); });
+      html += '</div>';
+    }
+    return html;
+  }
+
+  // Sort root tasks alphabetically
+  rootTasks.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
   let html = `<div class="card">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
@@ -339,18 +357,9 @@ function renderTaskList(phaseGroup) {
     </div>
     <div class="task-analysis-list">`;
 
-  parents.forEach(p => {
-    const children = byParent.get(p.id) || [];
-    html += renderTaskCard(p, children.length);
-    if (AppState.expandedTasks.has(p.id) && children.length) {
-      html += '<div class="task-children">';
-      children.forEach(c => { html += renderTaskCard(c, 0, true); });
-      html += '</div>';
-    }
+  rootTasks.forEach(t => {
+    html += renderTaskBranch(t, 0);
   });
-
-  // Standalone tasks (children whose parent is not in result)
-  standaloneTasks.forEach(t => { html += renderTaskCard(t, 0); });
 
   html += `</div></div>`;
   cont.innerHTML = html;
