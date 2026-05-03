@@ -18,8 +18,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
-
 ODOO_URL = os.environ.get('ODOO_URL', 'https://erp.envnt.co')
 ODOO_DB = os.environ.get('ODOO_DB', 'envnt')
 ODOO_USERNAME = os.environ.get('ODOO_USERNAME', '')
@@ -28,6 +26,12 @@ PROJECT_NAME = os.environ.get('PROJECT_NAME', 'BOG Digital Transformation')
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(BASE_DIR, 'data', 'services.xlsx')
+
+app = Flask(
+    __name__,
+    template_folder=os.path.join(BASE_DIR, 'templates'),
+    static_folder=os.path.join(BASE_DIR, 'static')
+)
 
 logger.info(f"Starting app — BASE_DIR={BASE_DIR}")
 logger.info(f"DATA_FILE={DATA_FILE} exists={os.path.exists(DATA_FILE)}")
@@ -279,6 +283,8 @@ def health():
 @app.route('/debug')
 def debug():
     """Diagnostic endpoint — visit /debug on your Railway URL to see what's wrong"""
+    templates_dir = os.path.join(BASE_DIR, 'templates')
+    static_dir = os.path.join(BASE_DIR, 'static')
     info = {
         'cwd': os.getcwd(),
         'base_dir': BASE_DIR,
@@ -286,8 +292,13 @@ def debug():
         'data_file_exists': os.path.exists(DATA_FILE),
         'base_dir_listing': sorted(os.listdir(BASE_DIR)) if os.path.exists(BASE_DIR) else 'missing',
         'data_dir_listing': sorted(os.listdir(os.path.join(BASE_DIR, 'data'))) if os.path.exists(os.path.join(BASE_DIR, 'data')) else 'data/ not found',
-        'templates_dir_exists': os.path.exists(os.path.join(BASE_DIR, 'templates')),
-        'static_dir_exists': os.path.exists(os.path.join(BASE_DIR, 'static')),
+        'templates_dir_exists': os.path.exists(templates_dir),
+        'templates_dir_listing': sorted(os.listdir(templates_dir)) if os.path.exists(templates_dir) else 'NOT FOUND',
+        'index_html_exists': os.path.exists(os.path.join(templates_dir, 'index.html')),
+        'static_dir_exists': os.path.exists(static_dir),
+        'static_dir_listing': sorted(os.listdir(static_dir)) if os.path.exists(static_dir) else 'NOT FOUND',
+        'flask_template_folder': app.template_folder,
+        'flask_static_folder': app.static_folder,
         'env_vars_set': {
             'ODOO_URL': bool(os.environ.get('ODOO_URL')),
             'ODOO_DB': bool(os.environ.get('ODOO_DB')),
