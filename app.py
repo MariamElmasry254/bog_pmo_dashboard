@@ -609,12 +609,81 @@ def health():
 
 @app.route('/debug')
 def debug():
-    return jsonify({
+    info = {
         'base_dir': BASE_DIR,
         'data_file_exists': os.path.exists(DATA_FILE),
         'templates': sorted(os.listdir(os.path.join(BASE_DIR, 'templates'))) if os.path.exists(os.path.join(BASE_DIR, 'templates')) else 'NA',
         'partials': sorted(os.listdir(os.path.join(BASE_DIR, 'templates', 'partials'))) if os.path.exists(os.path.join(BASE_DIR, 'templates', 'partials')) else 'NA',
-    })
+        'env_vars': {
+            'ODOO_URL': ODOO_URL,
+            'ODOO_DB': ODOO_DB,
+            'ODOO_USERNAME_set': bool(ODOO_USERNAME),
+            'ODOO_USERNAME_preview': ODOO_USERNAME[:3] + '***' if ODOO_USERNAME else None,
+            'ODOO_PASSWORD_set': bool(ODOO_PASSWORD),
+            'ODOO_PASSWORD_length': len(ODOO_PASSWORD) if ODOO_PASSWORD else 0,
+            'PROJECT_NAME': PROJECT_NAME,
+        },
+        'odoo_test': {}
+    }
+
+    # Test Odoo connection step by step
+    try:
+        common = xmlrpc.client.ServerProxy(f'{ODOO_URL}/xmlrpc/2/common')
+        version = common.version()
+        info['odoo_test']['1_server_reachable'] = True
+        info['odoo_test']['2_odoo_version'] = version.get('server_version', 'unknown') if version else 'unknown'
+    except Exception as e:
+        info['odoo_test']['1_server_reachable'] = False
+        info['odoo_test']['error'] = f"Cannot reach {ODOO_URL}: {str(e)}"
+        return jsonify(info)
+
+    if not ODOO_USERNAME or not ODOO_PASSWORD:
+        info['odoo_test']['3_credentials'] = 'NOT SET — add ODOO_USERNAME and ODOO_PASSWORD in Railway Variables'
+        return jsonify(info)
+
+    try:
+        common = xmlrpc.client.ServerProxy(f'{ODOO_URL}/xmlrpc/2/common')
+        uid = common.authenticate(ODOO_DB, ODOO_USERNAME, ODOO_PASSWORD, {})
+        if uid:
+            info['odoo_test']['3_auth'] = f'SUCCESS — uid={uid}'
+        else:
+            info['odoo_test']['3_auth'] = 'FAILED — check ODOO_DB, ODOO_USERNAME, ODOO_PASSWORD'
+            info['odoo_test']['hint'] = 'Most common: wrong ODOO_DB name OR using regular password instead of API key'
+            return jsonify(info)
+    except Exception as e:
+        info['odoo_test']['3_auth'] = f'ERROR — {type(e).__name__}: {str(e)}'
+        return jsonify(info)
+
+    # Test fetching timesheets
+    try:
+        models = xmlrpc.client.ServerProxy(f'{ODOO_URL}/xmlrpc/2/object')
+        # Check if project exists
+        projects = models.execute_kw(
+            ODOO_DB, uid, ODOO_PASSWORD,
+            'project.project', 'search_read',
+            [[('name', 'ilike', PROJECT_NAME)]],
+            {'fields': ['name', 'id'], 'limit': 5}
+        )
+        info['odoo_test']['4_project_search'] = {
+            'matches_found': len(projects),
+            'projects': [{'id': p['id'], 'name': p['name']} for p in projects]
+        }
+
+        # Sample timesheets
+        ts = models.execute_kw(
+            ODOO_DB, uid, ODOO_PASSWORD,
+            'account.analytic.line', 'search_read',
+            [[('project_id.name', 'ilike', PROJECT_NAME)]],
+            {'fields': ['date', 'employee_id', 'project_id'], 'limit': 3}
+        )
+        info['odoo_test']['5_sample_timesheets'] = {
+            'count': len(ts),
+            'sample': ts[:2] if ts else []
+        }
+    except Exception as e:
+        info['odoo_test']['4_data_fetch'] = f'ERROR — {type(e).__name__}: {str(e)}'
+
+    return jsonify(info)
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
