@@ -10,6 +10,7 @@ document.querySelectorAll('.exec-tab').forEach(t => {
     if (target === 'services' && !AppState.loaded.services) loadServices();
     else if (target === 'timesheets') loadTimesheets();
     else if (target === 'missing') loadMissing();
+    else if (target === 'risks') loadRisks();
     else if (target === 'roadmap' && !AppState.loaded.roadmap) loadRoadmap();
     else if (target === 'variance') loadVariance();
   });
