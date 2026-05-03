@@ -480,7 +480,7 @@ def api_overview_analysis(phase_group):
             'project.task', 'search_read',
             [project_domain],
             {'fields': ['id', 'name', 'planned_hours', 'effective_hours',
-                        'progress', 'parent_id', 'user_id', 'user_ids',
+                        'progress', 'parent_id', 'user_id',
                         'date_deadline', 'stage_id', 'kanban_state',
                         'phase_id', 'date_start', 'date_end', 'child_ids'],
              'limit': 5000}
