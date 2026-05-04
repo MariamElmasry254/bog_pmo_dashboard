@@ -822,6 +822,27 @@ def api_overview_analysis(phase_group):
             if t.get('stage_id') and isinstance(t['stage_id'], list) and len(t['stage_id']) > 1:
                 stages_used[t['stage_id'][0]] = t['stage_id'][1]
 
+        # Pre-batch: collect ALL user_ids from all tasks into one set, then resolve in single query
+        all_user_ids_to_resolve = set()
+        if use_multi_assignee:
+            for t in tasks:
+                if t.get('user_ids') and isinstance(t['user_ids'], list):
+                    for uid in t['user_ids']:
+                        all_user_ids_to_resolve.add(uid)
+
+        user_id_to_name = {}
+        if all_user_ids_to_resolve:
+            try:
+                users_data = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'res.users', 'read',
+                    [list(all_user_ids_to_resolve)], {'fields': ['name']}
+                )
+                user_id_to_name = {u['id']: u['name'] for u in users_data if u.get('name')}
+                logger.info(f"Resolved {len(user_id_to_name)} user_ids for assignees")
+            except Exception as ue:
+                logger.warning(f"Batch user_ids resolution failed: {ue}")
+
         # Build task list
         task_id_to_obj = {}
         for t in tasks:
@@ -839,21 +860,12 @@ def api_overview_analysis(phase_group):
             # Collect ALL assignee names (user_ids = multi-user, user_id = single)
             assignee_names = []
 
-            # 1. Multi-user field (user_ids) - returns list of IDs, need to resolve names
+            # 1. Multi-user field (user_ids) - resolved from batch above
             if use_multi_assignee and t.get('user_ids') and isinstance(t['user_ids'], list):
-                # user_ids returns list of integer IDs in v14
-                if t['user_ids']:
-                    try:
-                        users_data = odoo.models.execute_kw(
-                            ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                            'res.users', 'read',
-                            [t['user_ids']], {'fields': ['name']}
-                        )
-                        for u in users_data:
-                            if u.get('name') and u['name'] not in assignee_names:
-                                assignee_names.append(u['name'])
-                    except Exception as ue:
-                        logger.warning(f"Could not resolve user_ids: {ue}")
+                for uid in t['user_ids']:
+                    name = user_id_to_name.get(uid)
+                    if name and name not in assignee_names:
+                        assignee_names.append(name)
 
             # 2. Single user field (user_id) - returns [id, name] tuple
             assignee_name = None
