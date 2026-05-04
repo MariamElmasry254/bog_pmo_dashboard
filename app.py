@@ -1029,6 +1029,251 @@ def api_overview_analysis(phase_group):
 SERVICES_OVERRIDES_FILE = os.path.join(PERSIST_DIR, 'services_overrides.json')
 RISKS_FILE = os.path.join(PERSIST_DIR, 'risks_issues.json')
 
+# Google Sheet for team members
+TEAM_SHEET_ID = os.environ.get('TEAM_SHEET_ID', '1MtpNyBKnoayhdgpDbe2WacjZgJOLCSeMjhDuOhabo0Y')
+TEAM_SHEET_GID = os.environ.get('TEAM_SHEET_GID', '0')
+
+def fetch_team_members_from_sheet():
+    """Fetch team members from public Google Sheet (CSV export).
+    Returns: {success: bool, members: [...], error: str, columns: [...]}
+    """
+    if not TEAM_SHEET_ID:
+        return {'success': False, 'error': 'TEAM_SHEET_ID not configured', 'members': []}
+
+    csv_url = f'https://docs.google.com/spreadsheets/d/{TEAM_SHEET_ID}/export?format=csv&gid={TEAM_SHEET_GID}'
+    try:
+        import urllib.request
+        req = urllib.request.Request(csv_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            content = resp.read().decode('utf-8', errors='replace')
+
+        import csv
+        from io import StringIO
+        reader = csv.reader(StringIO(content))
+        rows = list(reader)
+        if not rows:
+            return {'success': False, 'error': 'Sheet is empty', 'members': []}
+
+        # First row = headers
+        headers = [h.strip() for h in rows[0]]
+        members = []
+        for r in rows[1:]:
+            if not r or all(not (c or '').strip() for c in r):
+                continue
+            row_dict = {}
+            for i, h in enumerate(headers):
+                if h:
+                    row_dict[h] = (r[i] if i < len(r) else '').strip()
+            # Skip if entirely empty
+            if not any(row_dict.values()):
+                continue
+            members.append(row_dict)
+
+        return {
+            'success': True,
+            'members': members,
+            'columns': headers,
+            'total': len(members),
+            'sheet_url': f'https://docs.google.com/spreadsheets/d/{TEAM_SHEET_ID}/edit'
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'error': f'Could not fetch sheet: {e}. Make sure sheet is shared "Anyone with link can view".',
+            'members': [],
+            'sheet_url': f'https://docs.google.com/spreadsheets/d/{TEAM_SHEET_ID}/edit'
+        }
+
+
+@app.route('/api/team/summary')
+def api_team_summary():
+    """Returns just the count for the overview KPI card"""
+    result = fetch_team_members_from_sheet()
+    return jsonify({
+        'success': result['success'],
+        'total': result.get('total', 0),
+        'error': result.get('error'),
+    })
+
+
+@app.route('/api/team/members')
+def api_team_members():
+    """Returns full team list with auto-detected hierarchy"""
+    result = fetch_team_members_from_sheet()
+    if not result['success']:
+        return jsonify(result)
+
+    members = result['members']
+    columns = result['columns']
+
+    # Auto-detect column intent (case-insensitive matching)
+    col_map = {}
+    cols_lower = {c.lower(): c for c in columns}
+    for keyword, key in [
+        ('name', 'name'), ('full name', 'name'),
+        ('role', 'role'), ('position', 'role'), ('title', 'role'), ('job', 'role'),
+        ('team', 'team'), ('squad', 'team'), ('group', 'team'),
+        ('manager', 'manager'), ('reports to', 'manager'), ('reporting', 'manager'),
+        ('department', 'department'), ('dept', 'department'),
+        ('email', 'email'), ('mail', 'email'),
+        ('phone', 'phone'), ('mobile', 'phone'),
+        ('country', 'country'), ('location', 'country'),
+        ('start date', 'start_date'), ('joined', 'start_date'),
+        ('status', 'status'),
+    ]:
+        for c_lower, c_orig in cols_lower.items():
+            if keyword in c_lower and key not in col_map:
+                col_map[key] = c_orig
+                break
+
+    # Normalize each member
+    normalized = []
+    for m in members:
+        normalized.append({
+            'name': m.get(col_map.get('name', ''), '') or m.get(columns[0] if columns else '', ''),
+            'role': m.get(col_map.get('role', ''), ''),
+            'team': m.get(col_map.get('team', ''), ''),
+            'manager': m.get(col_map.get('manager', ''), ''),
+            'department': m.get(col_map.get('department', ''), ''),
+            'email': m.get(col_map.get('email', ''), ''),
+            'phone': m.get(col_map.get('phone', ''), ''),
+            'country': m.get(col_map.get('country', ''), ''),
+            'status': m.get(col_map.get('status', ''), ''),
+            'raw': m,  # keep all original fields too
+        })
+
+    # Build hierarchy: Management group first, then Departments
+    # Within each group, sort by position rank (Lead/Manager → Senior → Mid → Junior)
+
+    def position_rank(role):
+        """Return rank: 0 = highest (Lead/Manager), higher = lower position"""
+        r = (role or '').lower()
+        # Manager/Director level
+        if any(k in r for k in ['director', 'head of', 'manager', 'pmo', 'pm ', ' pm', 'project manager',
+                                 'project coordinator', 'coordinator', 'chief']):
+            return 0
+        # Lead level
+        if 'lead' in r or 'principal' in r:
+            return 1
+        # Senior level
+        if 'senior' in r or 'sr.' in r or 'sr ' in r:
+            return 2
+        # Mid level (default for engineers without prefix)
+        if any(k in r for k in ['engineer', 'analyst', 'designer', 'developer', 'consultant', 'specialist']):
+            if 'junior' in r or 'jr' in r:
+                return 4
+            return 3
+        # Junior level
+        if 'junior' in r or 'jr' in r or 'intern' in r or 'trainee' in r:
+            return 4
+        return 5
+
+    def is_management(role):
+        """Check if role is management-level (top tier)"""
+        r = (role or '').lower()
+        return any(k in r for k in [
+            'director', 'head of', 'manager', 'pmo', 'project coordinator',
+            'coordinator', 'chief', 'cto', 'cio', 'ceo'
+        ]) or r.strip() in ['pm', 'project manager']
+
+    def detect_department(m):
+        """Detect department from member fields. Order matters: most specific first."""
+        # 1. Check explicit department column
+        dept = (m.get('department') or '').strip()
+        if dept:
+            return dept
+        # 2. Infer from role - check most specific patterns first
+        role = (m.get('role') or '').lower()
+        # QC/QA first (because "QC Engineer" has 'engineer')
+        if any(k in role for k in ['qc', 'qa', 'quality', 'tester', 'testing']):
+            return 'QC'
+        # UI/UX before generic designer
+        if any(k in role for k in ['ui/ux', 'ux ', ' ux', 'ui ', ' ui', 'designer', 'design']):
+            return 'UI/UX'
+        # UAT
+        if any(k in role for k in ['uat', 'acceptance']):
+            return 'UAT'
+        # DevOps
+        if any(k in role for k in ['devops', 'infrastructure', 'sre', 'sysadmin', 'system admin']):
+            return 'DevOps'
+        # Analysis
+        if any(k in role for k in ['analyst', 'analysis', 'business analyst']) or role.strip() == 'ba':
+            return 'Analysis'
+        # Development (last - most generic)
+        if any(k in role for k in ['developer', 'engineer', 'backend', 'frontend', 'fullstack', 'software', 'programmer']):
+            return 'Development'
+        # 3. Use team field as last resort
+        team = (m.get('team') or '').strip()
+        if team:
+            return team
+        return 'Other'
+
+    # Step 1: Separate Management from rest
+    management = []
+    others = []
+    for m in normalized:
+        if is_management(m.get('role')):
+            management.append(m)
+        else:
+            others.append(m)
+
+    # Step 2: Group "others" by detected department
+    dept_groups = {}
+    for m in others:
+        dept = detect_department(m)
+        if dept not in dept_groups:
+            dept_groups[dept] = []
+        dept_groups[dept].append(m)
+
+    # Step 3: Sort within each group by position rank, then alphabetically
+    def sort_key(m):
+        return (position_rank(m.get('role')), (m.get('name') or '').lower())
+
+    management.sort(key=sort_key)
+    for d in dept_groups:
+        dept_groups[d].sort(key=sort_key)
+
+    # Step 4: Build final ordered groups list
+    grouped_list = []
+
+    # Management always first (if any)
+    if management:
+        grouped_list.append({
+            'name': '👑 Management',
+            'members': management,
+            'count': len(management),
+            'is_management': True,
+        })
+
+    # Departments after, sorted by predefined order then by size
+    DEPT_ORDER = ['Development', 'Analysis', 'UI/UX', 'QC', 'UAT', 'DevOps']
+    sorted_depts = sorted(dept_groups.items(), key=lambda x: (
+        DEPT_ORDER.index(x[0]) if x[0] in DEPT_ORDER else 999,
+        -len(x[1])
+    ))
+
+    for dept_name, dept_members in sorted_depts:
+        grouped_list.append({
+            'name': dept_name,
+            'members': dept_members,
+            'count': len(dept_members),
+            'is_management': False,
+        })
+
+    return jsonify({
+        'success': True,
+        'total': len(normalized),
+        'columns': columns,
+        'col_map': col_map,
+        'hierarchy_key': 'management_then_department',
+        'groups': grouped_list,
+        'all_members': normalized,
+        'sheet_url': result['sheet_url'],
+    })
+
+
+@app.route('/api/risks')
+
 def load_risks():
     if not os.path.exists(RISKS_FILE):
         return []
