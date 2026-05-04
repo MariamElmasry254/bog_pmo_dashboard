@@ -304,7 +304,6 @@ async function loadOverviewKPIs() {
       const sub = [];
       if (d.onsite > 0) sub.push(`${d.onsite} onsite`);
       if (d.offshore > 0) sub.push(`${d.offshore} offshore`);
-      const subText = sub.length ? sub.join(' · ') : 'Live from Google Sheet';
       document.getElementById('kpiTeamSubtext').textContent = subText;
     } else {
       document.getElementById('kpiTeamMembers').textContent = '—';
