@@ -698,33 +698,41 @@ def api_overview_analysis(phase_group):
         if PROJECT_NAME:
             project_domain.append(('project_id.name', 'ilike', PROJECT_NAME))
 
-        # Try to detect if multi-assignee field exists in this Odoo version
-        # We'll first attempt with user_ids; if it fails, we fallback to user_id only
+        # Try to detect available assignment fields in this Odoo version.
+        # Common multi-assignee field names:
+        #   user_ids       (Odoo standard - newer)
+        #   project_user_ids (Custom v14 - this codebase)
+        #   users_list     (string with comma-separated names - this codebase)
         TASK_FIELDS_BASE = ['id', 'name', 'planned_hours', 'effective_hours',
                             'progress', 'parent_id', 'user_id', 'project_id',
                             'date_deadline', 'stage_id', 'kanban_state',
-                            'phase_id', 'date_start', 'date_end', 'child_ids']
-        TASK_FIELDS_MULTI = TASK_FIELDS_BASE + ['user_ids']
-
-        # First, try with user_ids
+                            'phase_id', 'date_start', 'date_end', 'child_ids',
+                            'project_user_ids', 'users_list']
+        # Set to true if extra fields were accepted
         use_multi_assignee = True
         try:
             parent_tasks = odoo.models.execute_kw(
                 ODOO_DB, odoo.uid, ODOO_PASSWORD,
                 'project.task', 'search_read',
                 [project_domain],
-                {'fields': TASK_FIELDS_MULTI, 'limit': 5000}
+                {'fields': TASK_FIELDS_BASE, 'limit': 5000}
             )
         except Exception as e:
-            if 'user_ids' in str(e) or 'Invalid field' in str(e):
+            if 'Invalid field' in str(e):
+                # Drop the multi-assignee fields if not available
+                FALLBACK_FIELDS = ['id', 'name', 'planned_hours', 'effective_hours',
+                                   'progress', 'parent_id', 'user_id', 'project_id',
+                                   'date_deadline', 'stage_id', 'kanban_state',
+                                   'phase_id', 'date_start', 'date_end', 'child_ids']
                 use_multi_assignee = False
-                logger.info("user_ids field not available, using user_id only")
+                logger.info(f"Multi-assignee fields not available: {e}, falling back to user_id only")
                 parent_tasks = odoo.models.execute_kw(
                     ODOO_DB, odoo.uid, ODOO_PASSWORD,
                     'project.task', 'search_read',
                     [project_domain],
-                    {'fields': TASK_FIELDS_BASE, 'limit': 5000}
+                    {'fields': FALLBACK_FIELDS, 'limit': 5000}
                 )
+                TASK_FIELDS_BASE = FALLBACK_FIELDS
             else:
                 raise
 
@@ -753,8 +761,7 @@ def api_overview_analysis(phase_group):
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'project.task', 'search_read',
             [all_project_domain],
-            {'fields': TASK_FIELDS_MULTI if use_multi_assignee else TASK_FIELDS_BASE,
-             'limit': 10000}
+            {'fields': TASK_FIELDS_BASE, 'limit': 10000}
         )
         logger.info(f"Total project tasks fetched: {len(all_project_tasks)} (multi_assignee={use_multi_assignee})")
 
@@ -822,20 +829,18 @@ def api_overview_analysis(phase_group):
             if t.get('stage_id') and isinstance(t['stage_id'], list) and len(t['stage_id']) > 1:
                 stages_used[t['stage_id'][0]] = t['stage_id'][1]
 
-        # Pre-batch: collect ALL user_ids from all tasks into one set, then resolve in single query
+        # Pre-batch: collect ALL project_user_ids from all tasks → resolve in single query
         all_user_ids_to_resolve = set()
-        tasks_with_user_ids = 0
-        tasks_with_user_id_only = 0
+        tasks_with_assignees = 0
         if use_multi_assignee:
             for t in tasks:
-                if t.get('user_ids') and isinstance(t['user_ids'], list) and t['user_ids']:
-                    tasks_with_user_ids += 1
-                    for uid in t['user_ids']:
+                # project_user_ids is the multi-assignee field in this Odoo
+                if t.get('project_user_ids') and isinstance(t['project_user_ids'], list) and t['project_user_ids']:
+                    tasks_with_assignees += 1
+                    for uid in t['project_user_ids']:
                         all_user_ids_to_resolve.add(uid)
-                elif t.get('user_id'):
-                    tasks_with_user_id_only += 1
 
-        logger.info(f"Tasks with user_ids: {tasks_with_user_ids}, tasks with user_id only: {tasks_with_user_id_only}, total to resolve: {len(all_user_ids_to_resolve)}")
+        logger.info(f"Tasks with assignees: {tasks_with_assignees}, total user_ids to resolve: {len(all_user_ids_to_resolve)}")
 
         user_id_to_name = {}
         if all_user_ids_to_resolve:
@@ -846,9 +851,9 @@ def api_overview_analysis(phase_group):
                     [list(all_user_ids_to_resolve)], {'fields': ['name']}
                 )
                 user_id_to_name = {u['id']: u['name'] for u in users_data if u.get('name')}
-                logger.info(f"Resolved {len(user_id_to_name)} user_ids for assignees")
+                logger.info(f"Resolved {len(user_id_to_name)} assignees")
             except Exception as ue:
-                logger.warning(f"Batch user_ids resolution failed: {ue}")
+                logger.warning(f"Batch user resolution failed: {ue}")
 
         # Build task list
         task_id_to_obj = {}
@@ -864,24 +869,35 @@ def api_overview_analysis(phase_group):
             sorted_emps = sorted(ts_info['employees'].items(), key=lambda x: -x[1])
             allocation = [{'name': e[0], 'hours': round(e[1], 1)} for e in sorted_emps]
 
-            # Collect ALL assignee names (user_ids = multi-user, user_id = single)
+            # Collect ALL assignee names
+            # Priority: project_user_ids (resolved IDs) > users_list (string) > user_id (single)
             assignee_names = []
 
-            # 1. Multi-user field (user_ids) - resolved from batch above
-            if use_multi_assignee and t.get('user_ids') and isinstance(t['user_ids'], list):
-                for uid in t['user_ids']:
+            # 1. Multi-user field (project_user_ids) - list of integer IDs
+            if use_multi_assignee and t.get('project_user_ids') and isinstance(t['project_user_ids'], list):
+                for uid in t['project_user_ids']:
                     name = user_id_to_name.get(uid)
                     if name and name not in assignee_names:
                         assignee_names.append(name)
 
-            # 2. Single user field (user_id) - returns [id, name] tuple
+            # 2. users_list (comma-separated string of names) - fallback if IDs didn't resolve
+            if not assignee_names and use_multi_assignee and t.get('users_list'):
+                ulist_str = str(t['users_list']).strip()
+                if ulist_str:
+                    # Split by common separators
+                    for n in ulist_str.replace(';', ',').split(','):
+                        n = n.strip()
+                        if n and n not in assignee_names:
+                            assignee_names.append(n)
+
+            # 3. Single user field (user_id) - returns [id, name] tuple
             assignee_name = None
             if t.get('user_id') and isinstance(t['user_id'], list) and len(t['user_id']) > 1:
                 assignee_name = t['user_id'][1]
                 if assignee_name and assignee_name not in assignee_names:
                     assignee_names.append(assignee_name)
 
-            # Add all assignees to all_employees_set + allocation (with 0 hours if no time logged)
+            # Add all assignees to all_employees_set + allocation
             for aname in assignee_names:
                 all_employees_set.add(aname)
                 if aname not in ts_info['employees']:
