@@ -295,13 +295,17 @@ async function loadOverviewKPIs() {
     console.error('Overview KPIs error:', e);
   }
 
-  // Team members count from Google Sheet
+  // Team members count from Google Sheet (active only)
   try {
     const res = await fetch('/api/team/summary');
     const d = await res.json();
     if (d.success) {
       document.getElementById('kpiTeamMembers').textContent = d.total || 0;
-      document.getElementById('kpiTeamSubtext').textContent = 'Live from Google Sheet';
+      const sub = [];
+      if (d.onsite > 0) sub.push(`${d.onsite} onsite`);
+      if (d.offshore > 0) sub.push(`${d.offshore} offshore`);
+      const subText = sub.length ? sub.join(' · ') : 'Live from Google Sheet';
+      document.getElementById('kpiTeamSubtext').textContent = subText;
     } else {
       document.getElementById('kpiTeamMembers').textContent = '—';
       document.getElementById('kpiTeamSubtext').textContent = 'Sheet not accessible';
@@ -354,65 +358,98 @@ async function openTeamModal() {
     }
 
     document.getElementById('teamCountBadge').textContent =
-      `— ${d.total} member${d.total !== 1 ? 's' : ''}`;
+      `— ${d.total_active || 0} member${(d.total_active || 0) !== 1 ? 's' : ''}`;
 
-    let html = '<div class="team-hierarchy">';
+    let html = `
+      <div class="team-kpi-strip">
+        <div class="team-kpi"><div class="team-kpi-num">${d.total_active || 0}</div><div class="team-kpi-lbl">TOTAL</div></div>
+        <div class="team-kpi"><div class="team-kpi-num" style="color: var(--blue);">${d.total_onsite || 0}</div><div class="team-kpi-lbl">ONSITE</div></div>
+        <div class="team-kpi"><div class="team-kpi-num" style="color: #6366F1;">${d.total_offshore || 0}</div><div class="team-kpi-lbl">OFFSHORE</div></div>
+        <div class="team-kpi"><div class="team-kpi-num" style="color: #10B981;">${(d.groups || []).length}</div><div class="team-kpi-lbl">DEPARTMENTS</div></div>
+      </div>
+      <div class="team-hierarchy">`;
 
     (d.groups || []).forEach(group => {
       const isManagement = group.is_management;
       const groupClass = isManagement ? 'team-group team-mgmt' : 'team-group';
 
+      // Group header counts (no "active" wording since all shown are active scope)
+      const memberWord = group.count !== 1 ? 'members' : 'member';
+      const onSiteBadge = group.onsite_count > 0 ? `<span class="grp-site-badge grp-onsite">${group.onsite_count} onsite</span>` : '';
+      const offBadge = group.offshore_count > 0 ? `<span class="grp-site-badge grp-offshore">${group.offshore_count} offshore</span>` : '';
+
       html += `
         <div class="${groupClass}">
           <div class="team-group-head ${isManagement ? 'mgmt-head' : ''}">
             <h4>${group.name || 'Unassigned'}</h4>
-            <span class="team-group-count">${group.count} member${group.count !== 1 ? 's' : ''}</span>
+            <div class="team-group-meta">
+              ${onSiteBadge}${offBadge}
+              <span class="team-group-count">${group.count} ${memberWord}</span>
+            </div>
           </div>
           <div class="team-members-list">
       `;
       group.members.forEach(m => {
-        const role = (m.role || '').toLowerCase();
-        let roleClass = 'role-mid';
-        let roleBadge = '';
+        const role = ((m.title || m.role) || '').toLowerCase();
 
+        let roleClass, badgeClass, badgeText;
         if (isManagement) {
           roleClass = 'role-manager';
-          if (role.includes('director') || role.includes('head')) roleBadge = '<span class="pos-badge badge-mgmt">Director</span>';
-          else if (role.includes('manager') || role.includes('pm')) roleBadge = '<span class="pos-badge badge-mgmt">Manager</span>';
-          else if (role.includes('coordinator')) roleBadge = '<span class="pos-badge badge-mgmt">Coordinator</span>';
-          else roleBadge = '<span class="pos-badge badge-mgmt">Lead</span>';
+          badgeClass = 'badge-mgmt';
+          if (role.includes('director') || role.includes('head')) badgeText = 'Director';
+          else if (role.includes('manager')) badgeText = 'Manager';
+          else if (role.includes('pmo')) badgeText = 'PMO';
+          else if (role === 'pm' || role.includes('pm ')) badgeText = 'PM';
+          else if (role.includes('coordinator')) badgeText = 'Coordinator';
+          else badgeText = 'Lead';
+        } else if (role.includes('manager') && !role.includes('senior')) {
+          roleClass = 'role-manager';
+          badgeClass = 'badge-mgmt';
+          badgeText = 'Manager';
+        } else if (role.includes('lead') || role.includes('principal')) {
+          roleClass = 'role-lead';
+          badgeClass = 'badge-lead';
+          badgeText = 'Lead';
+        } else if (role.includes('senior') || role.includes('sr.') || role.includes('sr ')) {
+          roleClass = 'role-senior';
+          badgeClass = 'badge-senior';
+          badgeText = 'Senior';
+        } else if (role.includes('junior') || role.includes('jr')) {
+          roleClass = 'role-junior';
+          badgeClass = 'badge-junior';
+          badgeText = 'Junior';
         } else {
-          if (role.includes('lead') || role.includes('principal')) {
-            roleClass = 'role-lead';
-            roleBadge = '<span class="pos-badge badge-lead">Lead</span>';
-          } else if (role.includes('senior') || role.includes('sr.') || role.includes('sr ')) {
-            roleClass = 'role-senior';
-            roleBadge = '<span class="pos-badge badge-senior">Senior</span>';
-          } else if (role.includes('junior') || role.includes('jr') || role.includes('intern') || role.includes('trainee')) {
-            roleClass = 'role-junior';
-            roleBadge = '<span class="pos-badge badge-junior">Junior</span>';
-          } else {
-            roleClass = 'role-mid';
-            roleBadge = '<span class="pos-badge badge-mid">Mid</span>';
-          }
+          roleClass = 'role-mid';
+          badgeClass = 'badge-mid';
+          badgeText = 'Mid';
         }
 
+        const cardClass = `team-member-card ${roleClass}`;
         const initials = (m.name || '?').split(/\s+/).slice(0, 2).map(s => s[0]).join('').toUpperCase();
 
+        const siteBadge = m.onsite_offshore === 'Onsite'
+          ? '<span class="site-badge onsite">📍 Onsite</span>'
+          : m.onsite_offshore === 'Offshore'
+          ? '<span class="site-badge offshore">🌐 Offshore</span>'
+          : '';
+
+        const allocBadge = m.allocation
+          ? `<span class="alloc-badge">${m.allocation}</span>` : '';
+
         html += `
-          <div class="team-member-card ${roleClass}">
+          <div class="${cardClass}">
             <div class="team-avatar">${initials}</div>
             <div class="team-member-info">
               <div class="team-member-name-row">
                 <span class="team-member-name" dir="auto">${m.name || '(no name)'}</span>
-                ${roleBadge}
+                <span class="pos-badge ${badgeClass}">${badgeText}</span>
               </div>
-              ${m.role ? `<div class="team-member-role">${m.role}</div>` : ''}
+              ${m.title || m.role ? `<div class="team-member-role">${m.title || m.role}</div>` : ''}
+              ${m.position ? `<div class="team-member-position" dir="auto">${m.position}</div>` : ''}
               <div class="team-member-meta">
-                ${m.country ? `<span>📍 ${m.country}</span>` : ''}
+                ${siteBadge}
+                ${allocBadge}
                 ${m.email ? `<span>📧 ${m.email}</span>` : ''}
-                ${m.manager ? `<span>👤 → ${m.manager}</span>` : ''}
-                ${m.status ? `<span class="team-status-pill">${m.status}</span>` : ''}
               </div>
             </div>
           </div>
