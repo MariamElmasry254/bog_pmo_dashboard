@@ -18,11 +18,14 @@
       <div class="kpi-value"><span id="kpiMandays">—</span><span class="kpi-unit">MD</span></div>
       <div class="kpi-foot">Roadmap baseline</div>
     </div>
-    <div class="kpi-card kpi-navy">
+    <div class="kpi-card kpi-navy clickable" id="kpiTeamMembersCard" data-action="open-team">
       <div class="kpi-bar"></div>
-      <div class="kpi-label">TEAMS</div>
-      <div class="kpi-value"><span id="kpiTeams">—</span><span class="kpi-unit">teams</span></div>
-      <div class="kpi-foot" id="kpiTeamsList">—</div>
+      <div class="kpi-label">TEAM MEMBERS</div>
+      <div class="kpi-value"><span id="kpiTeamMembers">—</span><span class="kpi-unit">members</span></div>
+      <div class="kpi-foot">
+        <span id="kpiTeamSubtext">Loading from Google Sheet…</span>
+        <span class="kpi-link">View team →</span>
+      </div>
     </div>
     <div class="kpi-card kpi-amber">
       <div class="kpi-bar"></div>
@@ -109,5 +112,22 @@
   <div id="ovTagsSummary"></div>
   <div id="ovTagsContent">
     <div class="loading">Loading tags…</div>
+  </div>
+
+  <!-- Team Members Modal -->
+  <div id="teamModal" class="risk-modal" style="display: none;">
+    <div class="risk-modal-overlay" id="teamModalOverlay"></div>
+    <div class="risk-modal-content team-modal-content">
+      <div class="risk-modal-head">
+        <h3>👥 Team Members <span id="teamCountBadge" class="muted-text" style="font-size: 13px; font-weight: 500;"></span></h3>
+        <div style="display: flex; gap: 12px; align-items: center;">
+          <a id="teamSheetLink" href="#" target="_blank" class="kpi-link" style="font-size: 12px;">📊 Open Sheet</a>
+          <button class="risk-modal-close" id="teamModalClose">×</button>
+        </div>
+      </div>
+      <div class="risk-modal-body" id="teamModalBody">
+        <div class="loading">Loading team members…</div>
+      </div>
+    </div>
   </div>
 </section>
