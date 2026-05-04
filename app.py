@@ -698,16 +698,35 @@ def api_overview_analysis(phase_group):
         if PROJECT_NAME:
             project_domain.append(('project_id.name', 'ilike', PROJECT_NAME))
 
-        parent_tasks = odoo.models.execute_kw(
-            ODOO_DB, odoo.uid, ODOO_PASSWORD,
-            'project.task', 'search_read',
-            [project_domain],
-            {'fields': ['id', 'name', 'planned_hours', 'effective_hours',
-                        'progress', 'parent_id', 'user_id', 'project_id',
-                        'date_deadline', 'stage_id', 'kanban_state',
-                        'phase_id', 'date_start', 'date_end', 'child_ids'],
-             'limit': 5000}
-        )
+        # Try to detect if multi-assignee field exists in this Odoo version
+        # We'll first attempt with user_ids; if it fails, we fallback to user_id only
+        TASK_FIELDS_BASE = ['id', 'name', 'planned_hours', 'effective_hours',
+                            'progress', 'parent_id', 'user_id', 'project_id',
+                            'date_deadline', 'stage_id', 'kanban_state',
+                            'phase_id', 'date_start', 'date_end', 'child_ids']
+        TASK_FIELDS_MULTI = TASK_FIELDS_BASE + ['user_ids']
+
+        # First, try with user_ids
+        use_multi_assignee = True
+        try:
+            parent_tasks = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.task', 'search_read',
+                [project_domain],
+                {'fields': TASK_FIELDS_MULTI, 'limit': 5000}
+            )
+        except Exception as e:
+            if 'user_ids' in str(e) or 'Invalid field' in str(e):
+                use_multi_assignee = False
+                logger.info("user_ids field not available, using user_id only")
+                parent_tasks = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'project.task', 'search_read',
+                    [project_domain],
+                    {'fields': TASK_FIELDS_BASE, 'limit': 5000}
+                )
+            else:
+                raise
 
         if not parent_tasks:
             return jsonify({'tasks': [], 'connected': True, 'phases_available': phase_names})
@@ -734,13 +753,10 @@ def api_overview_analysis(phase_group):
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'project.task', 'search_read',
             [all_project_domain],
-            {'fields': ['id', 'name', 'planned_hours', 'effective_hours',
-                        'progress', 'parent_id', 'user_id', 'project_id',
-                        'date_deadline', 'stage_id', 'kanban_state',
-                        'phase_id', 'date_start', 'date_end', 'child_ids'],
+            {'fields': TASK_FIELDS_MULTI if use_multi_assignee else TASK_FIELDS_BASE,
              'limit': 10000}
         )
-        logger.info(f"Total project tasks fetched: {len(all_project_tasks)} (project_ids: {project_ids})")
+        logger.info(f"Total project tasks fetched: {len(all_project_tasks)} (multi_assignee={use_multi_assignee})")
 
         # Build lookup: id -> task
         task_by_id = {t['id']: t for t in all_project_tasks}
@@ -820,15 +836,37 @@ def api_overview_analysis(phase_group):
             sorted_emps = sorted(ts_info['employees'].items(), key=lambda x: -x[1])
             allocation = [{'name': e[0], 'hours': round(e[1], 1)} for e in sorted_emps]
 
-            # Assignee from Odoo task (user_id)
+            # Collect ALL assignee names (user_ids = multi-user, user_id = single)
+            assignee_names = []
+
+            # 1. Multi-user field (user_ids) - returns list of IDs, need to resolve names
+            if use_multi_assignee and t.get('user_ids') and isinstance(t['user_ids'], list):
+                # user_ids returns list of integer IDs in v14
+                if t['user_ids']:
+                    try:
+                        users_data = odoo.models.execute_kw(
+                            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                            'res.users', 'read',
+                            [t['user_ids']], {'fields': ['name']}
+                        )
+                        for u in users_data:
+                            if u.get('name') and u['name'] not in assignee_names:
+                                assignee_names.append(u['name'])
+                    except Exception as ue:
+                        logger.warning(f"Could not resolve user_ids: {ue}")
+
+            # 2. Single user field (user_id) - returns [id, name] tuple
             assignee_name = None
             if t.get('user_id') and isinstance(t['user_id'], list) and len(t['user_id']) > 1:
                 assignee_name = t['user_id'][1]
-                # Add to all_employees_set for filter dropdown
-                all_employees_set.add(assignee_name)
-                # If assignee not in allocation (no time logged), still include
-                if assignee_name not in ts_info['employees']:
-                    allocation.append({'name': assignee_name, 'hours': 0})
+                if assignee_name and assignee_name not in assignee_names:
+                    assignee_names.append(assignee_name)
+
+            # Add all assignees to all_employees_set + allocation (with 0 hours if no time logged)
+            for aname in assignee_names:
+                all_employees_set.add(aname)
+                if aname not in ts_info['employees']:
+                    allocation.append({'name': aname, 'hours': 0})
 
             stage = ''
             stage_id = None
