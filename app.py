@@ -391,8 +391,8 @@ def api_overview():
     duration_months = PROJECT_INFO.get('duration_months')
     milestones_count = len(MILESTONES) if MILESTONES else 0
 
-    # Time progress
-    progress_pct = 0
+    # Time progress (timeline-based)
+    time_progress_pct = 0
     days_elapsed = 0
     days_remaining = 0
     try:
@@ -405,9 +405,42 @@ def api_overview():
             days_elapsed = elapsed
             days_remaining = max(0, (pe - today).days)
             if total > 0:
-                progress_pct = round(min(100, elapsed / total * 100), 1)
+                time_progress_pct = round(min(100, elapsed / total * 100), 1)
     except Exception:
         pass
+
+    # PROJECT PROGRESS = % Completion from Variance (Development phase)
+    # Read latest entry from plan_overrides.json
+    project_progress = 0
+    project_remaining = 0
+    try:
+        overrides = load_plan_overrides()
+        plan_overrides = overrides.get('plan_overrides', {}) or {}
+        # Try development phase first, then any phase if not found
+        phase_data = plan_overrides.get('development', {}) or {}
+        if not phase_data:
+            # Take any phase that has data
+            for phase_key, phase_val in plan_overrides.items():
+                if isinstance(phase_val, dict) and phase_val:
+                    phase_data = phase_val
+                    break
+
+        if phase_data:
+            # Get the latest month_key (sorted)
+            sorted_months = sorted(phase_data.keys(), reverse=True)
+            for month_key in sorted_months:
+                month_data = phase_data.get(month_key, {}) or {}
+                # Take % completion if present
+                if 'completion' in month_data and project_progress == 0:
+                    project_progress = float(month_data['completion'])
+                # Take remaining if present
+                if 'remaining' in month_data and project_remaining == 0:
+                    project_remaining = float(month_data['remaining'])
+                # Stop once we have both
+                if project_progress and project_remaining:
+                    break
+    except Exception as e:
+        logger.warning(f"Could not read variance overrides for overview: {e}")
 
     return jsonify({
         'project_name': PROJECT_NAME,
@@ -420,7 +453,11 @@ def api_overview():
         'teams_count': len(teams),
         'teams': sorted(teams),
         'milestones_count': milestones_count,
-        'progress_pct': progress_pct,
+        # Project Progress now from Variance (% Completion)
+        'progress_pct': round(project_progress, 1),
+        'remaining_mds': round(project_remaining, 1),
+        # Timeline metrics (kept for reference)
+        'time_progress_pct': time_progress_pct,
         'days_elapsed': days_elapsed,
         'days_remaining': days_remaining,
     })
