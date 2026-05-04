@@ -867,6 +867,7 @@ def api_overview_analysis(phase_group):
                 'date_start': t.get('date_start'),
                 'date_end': t.get('date_end'),
                 'allocation': allocation,
+                'inherited_allocation': [],  # filled below if task has no direct allocation
                 'first_log': ts_info['first_date'],
                 'last_log': ts_info['last_date'],
                 # Roll-up totals (filled below)
