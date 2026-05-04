@@ -288,14 +288,148 @@ async function loadOverviewKPIs() {
       `${d.roadmap_start} → ${d.roadmap_end}` + (d.duration_months ? ` (${d.duration_months} months)` : '');
     document.getElementById('kpiServices').textContent = d.total_services || 0;
     document.getElementById('kpiMandays').textContent = fmt.num(d.total_mandays || 0);
-    document.getElementById('kpiTeams').textContent = d.teams_count || 0;
-    document.getElementById('kpiTeamsList').textContent = (d.teams || []).join(' · ') || '—';
     document.getElementById('kpiProgress').textContent = d.progress_pct || 0;
     document.getElementById('kpiDays').textContent =
       `${d.days_elapsed || 0} days elapsed · ${d.days_remaining || 0} days remaining`;
   } catch (e) {
     console.error('Overview KPIs error:', e);
   }
+
+  // Team members count from Google Sheet
+  try {
+    const res = await fetch('/api/team/summary');
+    const d = await res.json();
+    if (d.success) {
+      document.getElementById('kpiTeamMembers').textContent = d.total || 0;
+      document.getElementById('kpiTeamSubtext').textContent = 'Live from Google Sheet';
+    } else {
+      document.getElementById('kpiTeamMembers').textContent = '—';
+      document.getElementById('kpiTeamSubtext').textContent = 'Sheet not accessible';
+      document.getElementById('kpiTeamSubtext').style.color = 'var(--amber)';
+    }
+  } catch (e) {
+    document.getElementById('kpiTeamSubtext').textContent = 'Error loading';
+  }
+
+  // Wire team card click
+  const card = document.getElementById('kpiTeamMembersCard');
+  if (card && !card.dataset.wired) {
+    card.dataset.wired = '1';
+    card.addEventListener('click', openTeamModal);
+    document.getElementById('teamModalClose')?.addEventListener('click', closeTeamModal);
+    document.getElementById('teamModalOverlay')?.addEventListener('click', closeTeamModal);
+  }
+}
+
+async function openTeamModal() {
+  document.getElementById('teamModal').style.display = 'flex';
+  const body = document.getElementById('teamModalBody');
+  body.innerHTML = '<div class="loading">Loading team members from Google Sheet…</div>';
+
+  try {
+    const res = await fetch('/api/team/members');
+    const d = await res.json();
+
+    document.getElementById('teamSheetLink').href = d.sheet_url || '#';
+
+    if (!d.success) {
+      body.innerHTML = `
+        <div class="banner banner-warn">
+          <strong>⚠️ Cannot read Google Sheet</strong>
+          <div style="margin-top: 8px; font-size: 13px;">${d.error || 'Unknown error'}</div>
+          <div style="margin-top: 12px; padding: 12px; background: white; border-radius: 6px;">
+            <strong>To fix:</strong>
+            <ol style="margin: 8px 0 0 20px; font-size: 13px; line-height: 1.7;">
+              <li>Open the Google Sheet</li>
+              <li>Click <strong>Share</strong> button (top right)</li>
+              <li>Under "General access", change to <strong>"Anyone with the link"</strong></li>
+              <li>Set role to <strong>"Viewer"</strong></li>
+              <li>Click <strong>Done</strong></li>
+              <li>Refresh this page</li>
+            </ol>
+          </div>
+        </div>
+      `;
+      return;
+    }
+
+    document.getElementById('teamCountBadge').textContent =
+      `— ${d.total} member${d.total !== 1 ? 's' : ''}`;
+
+    let html = '<div class="team-hierarchy">';
+
+    (d.groups || []).forEach(group => {
+      const isManagement = group.is_management;
+      const groupClass = isManagement ? 'team-group team-mgmt' : 'team-group';
+
+      html += `
+        <div class="${groupClass}">
+          <div class="team-group-head ${isManagement ? 'mgmt-head' : ''}">
+            <h4>${group.name || 'Unassigned'}</h4>
+            <span class="team-group-count">${group.count} member${group.count !== 1 ? 's' : ''}</span>
+          </div>
+          <div class="team-members-list">
+      `;
+      group.members.forEach(m => {
+        const role = (m.role || '').toLowerCase();
+        let roleClass = 'role-mid';
+        let roleBadge = '';
+
+        if (isManagement) {
+          roleClass = 'role-manager';
+          if (role.includes('director') || role.includes('head')) roleBadge = '<span class="pos-badge badge-mgmt">Director</span>';
+          else if (role.includes('manager') || role.includes('pm')) roleBadge = '<span class="pos-badge badge-mgmt">Manager</span>';
+          else if (role.includes('coordinator')) roleBadge = '<span class="pos-badge badge-mgmt">Coordinator</span>';
+          else roleBadge = '<span class="pos-badge badge-mgmt">Lead</span>';
+        } else {
+          if (role.includes('lead') || role.includes('principal')) {
+            roleClass = 'role-lead';
+            roleBadge = '<span class="pos-badge badge-lead">Lead</span>';
+          } else if (role.includes('senior') || role.includes('sr.') || role.includes('sr ')) {
+            roleClass = 'role-senior';
+            roleBadge = '<span class="pos-badge badge-senior">Senior</span>';
+          } else if (role.includes('junior') || role.includes('jr') || role.includes('intern') || role.includes('trainee')) {
+            roleClass = 'role-junior';
+            roleBadge = '<span class="pos-badge badge-junior">Junior</span>';
+          } else {
+            roleClass = 'role-mid';
+            roleBadge = '<span class="pos-badge badge-mid">Mid</span>';
+          }
+        }
+
+        const initials = (m.name || '?').split(/\s+/).slice(0, 2).map(s => s[0]).join('').toUpperCase();
+
+        html += `
+          <div class="team-member-card ${roleClass}">
+            <div class="team-avatar">${initials}</div>
+            <div class="team-member-info">
+              <div class="team-member-name-row">
+                <span class="team-member-name" dir="auto">${m.name || '(no name)'}</span>
+                ${roleBadge}
+              </div>
+              ${m.role ? `<div class="team-member-role">${m.role}</div>` : ''}
+              <div class="team-member-meta">
+                ${m.country ? `<span>📍 ${m.country}</span>` : ''}
+                ${m.email ? `<span>📧 ${m.email}</span>` : ''}
+                ${m.manager ? `<span>👤 → ${m.manager}</span>` : ''}
+                ${m.status ? `<span class="team-status-pill">${m.status}</span>` : ''}
+              </div>
+            </div>
+          </div>
+        `;
+      });
+      html += '</div></div>';
+    });
+
+    html += '</div>';
+    body.innerHTML = html;
+  } catch (e) {
+    body.innerHTML = `<div class="banner banner-warn"><strong>Error:</strong> ${e.message}</div>`;
+  }
+}
+
+function closeTeamModal() {
+  document.getElementById('teamModal').style.display = 'none';
 }
 
 async function loadTaskAnalysis(phaseGroup) {
