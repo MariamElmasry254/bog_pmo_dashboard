@@ -824,11 +824,18 @@ def api_overview_analysis(phase_group):
 
         # Pre-batch: collect ALL user_ids from all tasks into one set, then resolve in single query
         all_user_ids_to_resolve = set()
+        tasks_with_user_ids = 0
+        tasks_with_user_id_only = 0
         if use_multi_assignee:
             for t in tasks:
-                if t.get('user_ids') and isinstance(t['user_ids'], list):
+                if t.get('user_ids') and isinstance(t['user_ids'], list) and t['user_ids']:
+                    tasks_with_user_ids += 1
                     for uid in t['user_ids']:
                         all_user_ids_to_resolve.add(uid)
+                elif t.get('user_id'):
+                    tasks_with_user_id_only += 1
+
+        logger.info(f"Tasks with user_ids: {tasks_with_user_ids}, tasks with user_id only: {tasks_with_user_id_only}, total to resolve: {len(all_user_ids_to_resolve)}")
 
         user_id_to_name = {}
         if all_user_ids_to_resolve:
@@ -3157,6 +3164,65 @@ def api_travel_delete(rec_id):
 @app.route('/health')
 def health():
     return jsonify({'status': 'ok', 'time': datetime.now().isoformat()})
+
+@app.route('/debug/task-fields/<int:task_id>')
+def debug_task_fields(task_id):
+    """Returns ALL fields of a specific task to help debug assignment issues."""
+    if not odoo.uid:
+        if not odoo.connect():
+            return jsonify({'error': 'Odoo unreachable'}), 500
+    try:
+        # Try to get the task with ALL standard fields
+        task = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'read',
+            [[task_id]],
+            {}  # no fields filter = all fields
+        )
+        if not task:
+            return jsonify({'error': f'Task {task_id} not found'}), 404
+        return jsonify({
+            'task_id': task_id,
+            'task': task[0],
+            'available_fields': list(task[0].keys()),
+            'assignment_related': {
+                k: v for k, v in task[0].items()
+                if 'user' in k.lower() or 'assign' in k.lower() or 'owner' in k.lower()
+            }
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/debug/task-by-name')
+def debug_task_by_name():
+    """Find a task by name and return its fields. Use ?name=Env"""
+    name = request.args.get('name', '')
+    if not odoo.uid:
+        if not odoo.connect():
+            return jsonify({'error': 'Odoo unreachable'}), 500
+    try:
+        tasks = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [[('name', 'ilike', name)]],
+            {'fields': [], 'limit': 5}  # all fields
+        )
+        result = []
+        for t in tasks:
+            result.append({
+                'id': t.get('id'),
+                'name': t.get('name'),
+                'available_fields': list(t.keys()),
+                'assignment_related': {
+                    k: v for k, v in t.items()
+                    if 'user' in k.lower() or 'assign' in k.lower() or 'owner' in k.lower()
+                }
+            })
+        return jsonify({'count': len(result), 'tasks': result})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 
 @app.route('/debug/timesheets')
 def debug_timesheets():
