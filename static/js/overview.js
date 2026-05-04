@@ -936,16 +936,28 @@ function renderTaskCard(t, childCount, depth, isMatched) {
   const isChild = depth > 0;
 
   // For parent display, show rolled-up allocation; for leaf, show own
-  const displayAlloc = hasChildren
-    ? Object.entries(t.rollup_allocation || {}).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([n, h]) => ({ name: n, hours: h }))
-    : (t.allocation || []).slice(0, 3);
+  let displayAlloc;
+  let isInherited = false;
+  if (hasChildren) {
+    displayAlloc = Object.entries(t.rollup_allocation || {})
+      .sort((a, b) => b[1] - a[1]).slice(0, 3)
+      .map(([n, h]) => ({ name: n, hours: h }));
+  } else if ((t.allocation || []).length > 0) {
+    displayAlloc = (t.allocation || []).slice(0, 3);
+  } else if ((t.inherited_allocation || []).length > 0) {
+    // Task has no direct allocation - show inherited from parent
+    displayAlloc = t.inherited_allocation.slice(0, 3);
+    isInherited = true;
+  } else {
+    displayAlloc = [];
+  }
 
   const allocHtml = displayAlloc.map(a =>
-    `<span class="alloc-pill-mini" title="${a.hours}h">${a.name}</span>`
+    `<span class="alloc-pill-mini${isInherited ? ' alloc-inherited' : ''}" title="${a.hours}h${isInherited ? ' (inherited from parent)' : ''}">${a.name}</span>`
   ).join('');
   const totalAllocCount = hasChildren
     ? Object.keys(t.rollup_allocation || {}).length
-    : (t.allocation?.length || 0);
+    : (t.allocation?.length || (t.inherited_allocation?.length || 0));
   const moreCount = Math.max(0, totalAllocCount - 3);
 
   const expandIcon = hasChildren
