@@ -3115,6 +3115,12 @@ def api_variance_export():
                                 ws.cell(row=row, column=remaining_col).value = mo['remaining']
 
             wb.save(out_path)
+
+            # Auto-fill "Current Effort - Development" from Odoo timesheets
+            try:
+                fill_current_effort_from_odoo(out_path)
+            except Exception as e:
+                logger.warning(f"Could not auto-fill current effort from Odoo: {e}")
         except Exception as e:
             logger.warning(f"Could not apply overrides to export: {e}")
 
@@ -3128,6 +3134,246 @@ def api_variance_export():
         as_attachment=True,
         download_name=f'BOG_Variance_{date.today().isoformat()}.xlsx'
     )
+
+
+def fill_current_effort_from_odoo(xlsx_path):
+    """Read Odoo timesheets and fill the 'Current Effort - Development' sheet.
+    Sheet structure:
+      - Row 4: Month names (March, April, May, ...) at columns G, J, M, P, S, V, Y, AB, AE, AH, AK
+      - Row 5: Per-month sub-headers: Regular Time (MH), Ramdan Hours, Over Time (MH)
+      - Row 6+: People rows (col B=Name, col D=Position)
+    For each person, for each month, we fill:
+      - Regular Time (MH) = total hours minus Ramadan and Overtime
+      - Ramdan Hours = hours logged during Ramadan period (KSA: Feb 18-Mar 19; EGY: Feb 19-Mar 20)
+      - Over Time (MH) = hours logged on weekends (Fri+Sat for KSA/EGY)
+    """
+    if not odoo.uid:
+        if not odoo.connect():
+            logger.warning("Odoo not available for auto-fill")
+            return
+
+    from openpyxl import load_workbook
+    wb = load_workbook(xlsx_path)
+    sheet_name = 'Current Effort - Development'
+    if sheet_name not in wb.sheetnames:
+        logger.warning(f"Sheet '{sheet_name}' not found")
+        return
+    ws = wb[sheet_name]
+
+    # Map month name → starting column (Regular Time col index)
+    # Row 4 has month names spaced every 3 columns starting from G (col 7)
+    month_columns = {}  # 'March' -> col_index of "Regular Time (MH)"
+    for col in range(1, ws.max_column + 1):
+        v = ws.cell(row=4, column=col).value
+        if v and isinstance(v, str):
+            month_columns[v.strip()] = col
+
+    if not month_columns:
+        logger.warning("No month columns found in row 4")
+        return
+
+    logger.info(f"Found month columns: {list(month_columns.keys())}")
+
+    # Read people from rows 6+ (col B = Name, col D = Position)
+    people = []
+    for r in range(6, ws.max_row + 1):
+        name = ws.cell(row=r, column=2).value
+        if not name or not isinstance(name, str):
+            continue
+        people.append({
+            'row': r,
+            'name': name.strip(),
+            'position': (ws.cell(row=r, column=4).value or '').strip() if ws.cell(row=r, column=4).value else '',
+        })
+
+    if not people:
+        logger.warning("No people found in sheet")
+        return
+
+    logger.info(f"Found {len(people)} people in Current Effort sheet")
+
+    # Get all timesheets for this project for the development phase
+    project_id = None
+    if PROJECT_NAME:
+        try:
+            projects = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.project', 'search_read',
+                [[('name', 'ilike', PROJECT_NAME)]],
+                {'fields': ['id', 'name'], 'limit': 5}
+            )
+            if projects:
+                project_id = projects[0]['id']
+        except Exception as e:
+            logger.warning(f"Could not find project: {e}")
+
+    if not project_id:
+        logger.warning("Could not resolve project_id, skipping auto-fill")
+        return
+
+    # Fetch all timesheets for this project (within Development phase)
+    try:
+        # Get tasks under Development Phase
+        dev_phase_names = PHASE_MAPPING.get('development', ['Development Phase'])
+        phases = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.phase', 'search_read',
+            [[('name', 'in', dev_phase_names)]],
+            {'fields': ['id', 'name'], 'limit': 50}
+        )
+        phase_ids = [p['id'] for p in phases]
+
+        # Get parent tasks under these phases
+        parent_tasks = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [[('phase_id', 'in', phase_ids), ('project_id', '=', project_id)]],
+            {'fields': ['id', 'child_ids'], 'limit': 5000}
+        )
+        parent_task_ids = {t['id'] for t in parent_tasks}
+
+        # Get all sub-tasks too (recursively walk down)
+        all_relevant_task_ids = set(parent_task_ids)
+        all_tasks_in_proj = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [[('project_id', '=', project_id)]],
+            {'fields': ['id', 'parent_id'], 'limit': 10000}
+        )
+        # Walk parent chains
+        task_by_id = {t['id']: t for t in all_tasks_in_proj}
+        for t in all_tasks_in_proj:
+            cur = t
+            visited = set()
+            while cur and cur['id'] not in visited:
+                visited.add(cur['id'])
+                if cur['id'] in parent_task_ids:
+                    all_relevant_task_ids.add(t['id'])
+                    break
+                if not cur.get('parent_id'):
+                    break
+                pid = cur['parent_id'][0] if isinstance(cur['parent_id'], list) else cur['parent_id']
+                cur = task_by_id.get(pid)
+
+        logger.info(f"Found {len(all_relevant_task_ids)} relevant tasks for development phase")
+
+        # Now fetch timesheets for these tasks
+        timesheets = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'account.analytic.line', 'search_read',
+            [[('task_id', 'in', list(all_relevant_task_ids))]],
+            {'fields': ['employee_id', 'date', 'unit_amount'], 'limit': 50000}
+        )
+        logger.info(f"Fetched {len(timesheets)} timesheet entries")
+    except Exception as e:
+        logger.error(f"Could not fetch timesheets: {e}")
+        return
+
+    # Aggregate timesheets per person per month, splitting into Regular/Ramadan/Overtime
+    from collections import defaultdict
+    # person_data[name][month_name] = {'regular': h, 'ramadan': h, 'overtime': h}
+    person_data = defaultdict(lambda: defaultdict(lambda: {'regular': 0, 'ramadan': 0, 'overtime': 0}))
+
+    MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
+                   'July', 'August', 'September', 'October', 'November', 'December']
+
+    for ts in timesheets:
+        emp = ts.get('employee_id', [None, ''])
+        emp_name = emp[1] if isinstance(emp, list) and len(emp) > 1 else ''
+        if not emp_name:
+            continue
+        date_str = ts.get('date')
+        if not date_str:
+            continue
+        try:
+            d = datetime.strptime(date_str, '%Y-%m-%d').date()
+        except Exception:
+            continue
+        hours = float(ts.get('unit_amount') or 0)
+        if hours <= 0:
+            continue
+
+        month_name = MONTH_NAMES[d.month - 1]
+
+        # Determine country from employee name (KSA/EGY/TUN)
+        country = get_country_from_employee_name(emp_name)
+
+        # Check if Ramadan (period stored in RAMADAN_RANGES)
+        is_ramadan = False
+        ramadan_range = RAMADAN_RANGES.get(country)
+        if ramadan_range:
+            try:
+                ram_start = datetime.strptime(ramadan_range['start'], '%Y-%m-%d').date()
+                ram_end = datetime.strptime(ramadan_range['end'], '%Y-%m-%d').date()
+                if ram_start <= d <= ram_end:
+                    is_ramadan = True
+            except Exception:
+                pass
+
+        # Check if weekend → overtime
+        # Tunis: Sat+Sun (5,6); KSA/EGY: Fri+Sat (4,5)
+        weekend_days = TUNIS_WEEKEND if country == 'TUN' else WEEKEND_DAYS
+        is_weekend = d.weekday() in weekend_days
+
+        if is_weekend:
+            person_data[emp_name][month_name]['overtime'] += hours
+        elif is_ramadan:
+            person_data[emp_name][month_name]['ramadan'] += hours
+        else:
+            person_data[emp_name][month_name]['regular'] += hours
+
+    logger.info(f"Aggregated data for {len(person_data)} people")
+
+    # Now write into the Excel sheet
+    # For each person, find their row by name (fuzzy match - strip [code] prefix etc.)
+    def normalize_name(s):
+        # Remove [E123] prefix and lowercase
+        import re
+        return re.sub(r'\[[A-Z]\d+\]\s*', '', s).strip().lower()
+
+    sheet_name_to_row = {}
+    for p in people:
+        sheet_name_to_row[normalize_name(p['name'])] = p['row']
+
+    filled_count = 0
+    for emp_name, months_data in person_data.items():
+        norm = normalize_name(emp_name)
+        # Try exact match
+        target_row = sheet_name_to_row.get(norm)
+        if not target_row:
+            # Fuzzy match: any sheet name that contains the emp name (or vice versa)
+            for sheet_norm, row_idx in sheet_name_to_row.items():
+                if sheet_norm == norm:
+                    target_row = row_idx
+                    break
+                # Match first 2 words
+                emp_words = norm.split()[:2]
+                sheet_words = sheet_norm.split()[:2]
+                if emp_words and sheet_words and emp_words[0] == sheet_words[0]:
+                    if len(emp_words) > 1 and len(sheet_words) > 1 and emp_words[1] == sheet_words[1]:
+                        target_row = row_idx
+                        break
+        if not target_row:
+            logger.info(f"  Skipping {emp_name} - not in sheet")
+            continue
+
+        for month_name, hrs in months_data.items():
+            if month_name not in month_columns:
+                continue
+            base_col = month_columns[month_name]
+            # base_col = Regular Time, base_col+1 = Ramadan, base_col+2 = Overtime
+            if hrs['regular'] > 0:
+                ws.cell(row=target_row, column=base_col).value = round(hrs['regular'], 2)
+            if hrs['ramadan'] > 0:
+                ws.cell(row=target_row, column=base_col + 1).value = round(hrs['ramadan'], 2)
+            if hrs['overtime'] > 0:
+                ws.cell(row=target_row, column=base_col + 2).value = round(hrs['overtime'], 2)
+            filled_count += 1
+
+    logger.info(f"Filled {filled_count} person-month cells")
+
+    wb.save(xlsx_path)
+    logger.info(f"Saved updated workbook to {xlsx_path}")
 
 # ============================================================
 # TRAVEL & ONSITE — manual entries stored in JSON
