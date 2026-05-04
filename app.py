@@ -1056,17 +1056,51 @@ def fetch_team_members_from_sheet():
 
         # First row = headers
         headers = [h.strip() for h in rows[0]]
+
+        # Detect department column (first column, usually called "Department")
+        dept_col_idx = 0
+        for i, h in enumerate(headers):
+            if h.lower() in ('department', 'team', 'group'):
+                dept_col_idx = i
+                break
+
         members = []
+        last_dept = ''  # track last seen department for merged-cell forward-fill
         for r in rows[1:]:
-            if not r or all(not (c or '').strip() for c in r):
+            if not r:
                 continue
+
+            # Forward-fill department column (handles merged cells in sheet)
+            dept_value = (r[dept_col_idx] if dept_col_idx < len(r) else '').strip()
+            if dept_value:
+                last_dept = dept_value
+
+            # Build row dict using current values
             row_dict = {}
             for i, h in enumerate(headers):
-                if h:
-                    row_dict[h] = (r[i] if i < len(r) else '').strip()
-            # Skip if entirely empty
-            if not any(row_dict.values()):
-                continue
+                if not h:
+                    continue
+                val = (r[i] if i < len(r) else '').strip()
+                row_dict[h] = val
+
+            # Override department with forward-filled value
+            if dept_col_idx < len(headers):
+                row_dict[headers[dept_col_idx]] = last_dept
+
+            # Skip empty/separator rows: must have at least a member name
+            # Find the "Members" column (usually 2nd col)
+            member_value = ''
+            for h_key in row_dict:
+                if h_key.lower() in ('members', 'member', 'name', 'full name'):
+                    member_value = row_dict[h_key]
+                    break
+            # Fallback: use 2nd column if no Members header found
+            if not member_value and len(r) > 1:
+                member_value = (r[1] if 1 < len(r) else '').strip()
+
+            if not member_value:
+                continue  # skip separator rows
+
             members.append(row_dict)
 
         return {
@@ -1087,12 +1121,57 @@ def fetch_team_members_from_sheet():
 
 @app.route('/api/team/summary')
 def api_team_summary():
-    """Returns just the count for the overview KPI card"""
+    """Returns count of ACTIVE members (Active=Yes) for the overview KPI card.
+    Inactive members and unassigned slots are excluded from this count."""
     result = fetch_team_members_from_sheet()
+    if not result['success']:
+        return jsonify({'success': False, 'total': 0, 'error': result.get('error')})
+
+    members = result.get('members', [])
+    columns = result.get('columns', [])
+    cols_lower = {c.lower(): c for c in columns}
+
+    # Find columns
+    active_col = None
+    member_col = None
+    site_col = None
+    for c_lower, c_orig in cols_lower.items():
+        if 'active' in c_lower and not active_col:
+            active_col = c_orig
+        if c_lower in ('members', 'member', 'name', 'full name') and not member_col:
+            member_col = c_orig
+        if ('onsite' in c_lower or 'offshore' in c_lower or 'on-site' in c_lower) and not site_col:
+            site_col = c_orig
+
+    active_count = 0
+    onsite_count = 0
+    offshore_count = 0
+    for m in members:
+        # Skip unassigned
+        name = (m.get(member_col, '') if member_col else '').strip().lower()
+        if not name or 'not assigned' in name or 'unassigned' in name:
+            continue
+        # Check active flag
+        if active_col:
+            active_val = (m.get(active_col, '') or '').strip().lower()
+            if active_val in ('no', 'n', 'false', '0', 'inactive'):
+                continue
+        active_count += 1
+
+        # Read onsite/offshore from dedicated column in sheet
+        if site_col:
+            sv = (m.get(site_col, '') or '').strip().lower()
+            if sv in ('onsite', 'on-site', 'on site'):
+                onsite_count += 1
+            elif sv in ('offshore', 'off-shore', 'off shore', 'remote'):
+                offshore_count += 1
+
     return jsonify({
-        'success': result['success'],
-        'total': result.get('total', 0),
-        'error': result.get('error'),
+        'success': True,
+        'total': active_count,
+        'total_raw': len(members),
+        'onsite': onsite_count,
+        'offshore': offshore_count,
     })
 
 
@@ -1110,11 +1189,22 @@ def api_team_members():
     col_map = {}
     cols_lower = {c.lower(): c for c in columns}
     for keyword, key in [
-        ('name', 'name'), ('full name', 'name'),
-        ('role', 'role'), ('position', 'role'), ('title', 'role'), ('job', 'role'),
-        ('team', 'team'), ('squad', 'team'), ('group', 'team'),
+        ('member', 'name'), ('full name', 'name'), ('name', 'name'),
+        ('title', 'title'),  # job title (PM, Lead BA, etc.)
+        ('position', 'position'),  # full position string (KSA - Project Manager)
+        ('postion', 'position'),  # typo handling
+        ('role', 'role'),
+        ('department', 'department'), ('team', 'team'), ('squad', 'team'), ('group', 'team'),
         ('manager', 'manager'), ('reports to', 'manager'), ('reporting', 'manager'),
-        ('department', 'department'), ('dept', 'department'),
+        ('hour rate', 'hour_rate'), ('rate', 'hour_rate'),
+        ('overtime', 'overtime_rate'),
+        ('active', 'active'),
+        ('allocation', 'allocation'),
+        ('onsite/offshore', 'onsite_offshore'),  # explicit column from sheet
+        ('on-site', 'onsite_offshore'),
+        ('onsite', 'onsite_offshore'),
+        ('offshore', 'onsite_offshore'),
+        ('site', 'onsite_offshore'),
         ('email', 'email'), ('mail', 'email'),
         ('phone', 'phone'), ('mobile', 'phone'),
         ('country', 'country'), ('location', 'country'),
@@ -1129,9 +1219,37 @@ def api_team_members():
     # Normalize each member
     normalized = []
     for m in members:
+        # Get name
+        name = m.get(col_map.get('name', ''), '') or m.get(columns[0] if columns else '', '')
+        if not name or name.lower().startswith('not assigned'):
+            # Mark unassigned slots
+            name = name or '(Unassigned)'
+
+        # Get position string
+        position_str = m.get(col_map.get('position', ''), '')
+
+        # Read onsite/offshore directly from sheet column (case-insensitive)
+        onsite_offshore = ''
+        site_val = (m.get(col_map.get('onsite_offshore', ''), '') or '').strip().lower()
+        if site_val in ('onsite', 'on-site', 'on site'):
+            onsite_offshore = 'Onsite'
+        elif site_val in ('offshore', 'off-shore', 'off shore', 'remote'):
+            onsite_offshore = 'Offshore'
+
+        # Active flag - default Yes if column missing. Unassigned slots are NOT active.
+        active_val = (m.get(col_map.get('active', ''), '') or '').strip().lower()
+        is_unassigned = name == '(Unassigned)' or 'not assigned' in (name or '').lower()
+        is_active = (active_val not in ('no', 'n', 'false', '0', 'inactive')) and not is_unassigned
+
+        # Title is the simple title (PM, Lead BA), use as role if no role column
+        title = m.get(col_map.get('title', ''), '')
+        role = m.get(col_map.get('role', ''), '') or title
+
         normalized.append({
-            'name': m.get(col_map.get('name', ''), '') or m.get(columns[0] if columns else '', ''),
-            'role': m.get(col_map.get('role', ''), ''),
+            'name': name,
+            'role': role,
+            'title': title,
+            'position': position_str,
             'team': m.get(col_map.get('team', ''), ''),
             'manager': m.get(col_map.get('manager', ''), ''),
             'department': m.get(col_map.get('department', ''), ''),
@@ -1139,133 +1257,143 @@ def api_team_members():
             'phone': m.get(col_map.get('phone', ''), ''),
             'country': m.get(col_map.get('country', ''), ''),
             'status': m.get(col_map.get('status', ''), ''),
-            'raw': m,  # keep all original fields too
+            'hour_rate': m.get(col_map.get('hour_rate', ''), ''),
+            'allocation': m.get(col_map.get('allocation', ''), ''),
+            'active': is_active,
+            'onsite_offshore': onsite_offshore,
+            'is_unassigned': is_unassigned,
+            'raw': m,
         })
 
-    # Build hierarchy: Management group first, then Departments
-    # Within each group, sort by position rank (Lead/Manager → Senior → Mid → Junior)
+    # Build hierarchy: Use Department column from sheet directly
+    # Position rank from Title field (Manager > Lead > Senior > Junior > Unassigned)
 
-    def position_rank(role):
-        """Return rank: 0 = highest (Lead/Manager), higher = lower position"""
-        r = (role or '').lower()
-        # Manager/Director level
-        if any(k in r for k in ['director', 'head of', 'manager', 'pmo', 'pm ', ' pm', 'project manager',
-                                 'project coordinator', 'coordinator', 'chief']):
+    def position_rank(title, role):
+        """Return rank: 0 = highest, higher = lower"""
+        text = ((title or '') + ' ' + (role or '')).lower()
+        # Manager / Director / PM
+        if any(k in text for k in ['director', 'head of', 'chief', 'cto', 'cio', 'ceo']):
             return 0
-        # Lead level
-        if 'lead' in r or 'principal' in r:
+        if any(k in text for k in ['manager', 'pm', 'project coordinator', 'coordinator']):
             return 1
-        # Senior level
-        if 'senior' in r or 'sr.' in r or 'sr ' in r:
+        if 'pmo' in text:
             return 2
-        # Mid level (default for engineers without prefix)
-        if any(k in r for k in ['engineer', 'analyst', 'designer', 'developer', 'consultant', 'specialist']):
-            if 'junior' in r or 'jr' in r:
-                return 4
+        # Lead / Principal
+        if any(k in text for k in ['lead', 'principal']):
             return 3
-        # Junior level
-        if 'junior' in r or 'jr' in r or 'intern' in r or 'trainee' in r:
+        # Senior
+        if any(k in text for k in ['senior', 'sr.', 'sr ', 'lead ba', 'manager ba']):
             return 4
-        return 5
+        # Mid (default for engineers without prefix)
+        if any(k in text for k in ['engineer', 'analyst', 'designer', 'developer', 'consultant', 'specialist',
+                                    'sw', 'ba ', 'ux ', 'qc']):
+            if 'junior' in text or 'jr' in text:
+                return 6
+            return 5
+        # Junior
+        if any(k in text for k in ['junior', 'jr', 'intern', 'trainee']):
+            return 6
+        return 7
 
-    def is_management(role):
-        """Check if role is management-level (top tier)"""
-        r = (role or '').lower()
-        return any(k in r for k in [
-            'director', 'head of', 'manager', 'pmo', 'project coordinator',
-            'coordinator', 'chief', 'cto', 'cio', 'ceo'
-        ]) or r.strip() in ['pm', 'project manager']
-
-    def detect_department(m):
-        """Detect department from member fields. Order matters: most specific first."""
-        # 1. Check explicit department column
-        dept = (m.get('department') or '').strip()
-        if dept:
-            return dept
-        # 2. Infer from role - check most specific patterns first
-        role = (m.get('role') or '').lower()
-        # QC/QA first (because "QC Engineer" has 'engineer')
-        if any(k in role for k in ['qc', 'qa', 'quality', 'tester', 'testing']):
-            return 'QC'
-        # UI/UX before generic designer
-        if any(k in role for k in ['ui/ux', 'ux ', ' ux', 'ui ', ' ui', 'designer', 'design']):
-            return 'UI/UX'
-        # UAT
-        if any(k in role for k in ['uat', 'acceptance']):
-            return 'UAT'
-        # DevOps
-        if any(k in role for k in ['devops', 'infrastructure', 'sre', 'sysadmin', 'system admin']):
-            return 'DevOps'
-        # Analysis
-        if any(k in role for k in ['analyst', 'analysis', 'business analyst']) or role.strip() == 'ba':
-            return 'Analysis'
-        # Development (last - most generic)
-        if any(k in role for k in ['developer', 'engineer', 'backend', 'frontend', 'fullstack', 'software', 'programmer']):
-            return 'Development'
-        # 3. Use team field as last resort
-        team = (m.get('team') or '').strip()
-        if team:
-            return team
-        return 'Other'
-
-    # Step 1: Separate Management from rest
-    management = []
-    others = []
-    for m in normalized:
-        if is_management(m.get('role')):
-            management.append(m)
-        else:
-            others.append(m)
-
-    # Step 2: Group "others" by detected department
+    # Group by Department directly
+    # RULE: Hide inactive members from hierarchy
+    # EXCEPTION: Mariam (PMO) is always shown in Management even if inactive
     dept_groups = {}
-    for m in others:
-        dept = detect_department(m)
+    for m in normalized:
+        # Skip inactive members EXCEPT Mariam (PMO is always shown)
+        if not m.get('active'):
+            name_lower = (m.get('name') or '').lower()
+            title_lower = (m.get('title') or '').lower()
+            is_mariam_pmo = 'mariam' in name_lower and 'pmo' in title_lower
+            if not is_mariam_pmo:
+                continue  # skip this inactive member
+
+        # Skip unassigned slots
+        if m.get('is_unassigned'):
+            continue
+
+        dept = (m.get('department') or '').strip() or 'Other'
         if dept not in dept_groups:
             dept_groups[dept] = []
         dept_groups[dept].append(m)
 
-    # Step 3: Sort within each group by position rank, then alphabetically
+    # Sort within each department by position rank, then by name
     def sort_key(m):
-        return (position_rank(m.get('role')), (m.get('name') or '').lower())
+        return (
+            position_rank(m.get('title'), m.get('role')),
+            (m.get('name') or '').lower()
+        )
 
-    management.sort(key=sort_key)
     for d in dept_groups:
         dept_groups[d].sort(key=sort_key)
 
-    # Step 4: Build final ordered groups list
+    # Build final ordered groups list
     grouped_list = []
 
-    # Management always first (if any)
-    if management:
-        grouped_list.append({
-            'name': '👑 Management',
-            'members': management,
-            'count': len(management),
-            'is_management': True,
-        })
+    # Define preferred order for departments
+    DEPT_ORDER = [
+        'Management',
+        'Business Team', 'Bussines Team',  # support both spellings
+        'Development Team', 'Development',
+        'AI Team', 'AI',
+        'UX Team', 'UI/UX', 'UX',
+        'QC Team', 'QC',
+        'UAT Team', 'UAT',
+        'Infrastructure Team', 'InfraStructure Team', 'InfraStrcture Team', 'Infrastructure',
+        'DevOps',
+    ]
 
-    # Departments after, sorted by predefined order then by size
-    DEPT_ORDER = ['Development', 'Analysis', 'UI/UX', 'QC', 'UAT', 'DevOps']
-    sorted_depts = sorted(dept_groups.items(), key=lambda x: (
-        DEPT_ORDER.index(x[0]) if x[0] in DEPT_ORDER else 999,
-        -len(x[1])
-    ))
+    def dept_order_key(name):
+        # Find the first matching pattern in DEPT_ORDER
+        n = name.lower().strip()
+        for i, dn in enumerate(DEPT_ORDER):
+            if dn.lower() == n:
+                return i
+        # Partial match
+        for i, dn in enumerate(DEPT_ORDER):
+            if dn.lower() in n or n in dn.lower():
+                return i
+        return 999
+
+    sorted_depts = sorted(dept_groups.items(), key=lambda x: (dept_order_key(x[0]), x[0]))
 
     for dept_name, dept_members in sorted_depts:
+        # Add icon for Management
+        display_name = dept_name
+        is_mgmt = 'management' in dept_name.lower()
+        if is_mgmt and not display_name.startswith('👑'):
+            display_name = '👑 ' + display_name
+
+        # Counts (only members shown in this group - inactive already excluded above)
+        # Mariam (PMO) is the only inactive shown - count her separately
+        shown_count = len(dept_members)
+        onsite_count = sum(1 for m in dept_members if m.get('onsite_offshore') == 'Onsite')
+        offshore_count = sum(1 for m in dept_members if m.get('onsite_offshore') == 'Offshore')
+
         grouped_list.append({
-            'name': dept_name,
+            'name': display_name,
             'members': dept_members,
-            'count': len(dept_members),
-            'is_management': False,
+            'count': shown_count,
+            'active_count': shown_count,  # all shown members are "in scope"
+            'onsite_count': onsite_count,
+            'offshore_count': offshore_count,
+            'is_management': is_mgmt,
         })
+
+    # Compute totals from ALL normalized (active count = excludes inactive + unassigned)
+    total_active = sum(1 for m in normalized if m.get('active'))
+    total_onsite = sum(1 for m in normalized if m.get('onsite_offshore') == 'Onsite' and m.get('active'))
+    total_offshore = sum(1 for m in normalized if m.get('onsite_offshore') == 'Offshore' and m.get('active'))
 
     return jsonify({
         'success': True,
         'total': len(normalized),
+        'total_active': total_active,
+        'total_onsite': total_onsite,
+        'total_offshore': total_offshore,
         'columns': columns,
         'col_map': col_map,
-        'hierarchy_key': 'management_then_department',
+        'hierarchy_key': 'department',
         'groups': grouped_list,
         'all_members': normalized,
         'sheet_url': result['sheet_url'],
