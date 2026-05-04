@@ -289,8 +289,10 @@ async function loadOverviewKPIs() {
     document.getElementById('kpiServices').textContent = d.total_services || 0;
     document.getElementById('kpiMandays').textContent = fmt.num(d.total_mandays || 0);
     document.getElementById('kpiProgress').textContent = d.progress_pct || 0;
-    document.getElementById('kpiDays').textContent =
-      `${d.days_elapsed || 0} days elapsed · ${d.days_remaining || 0} days remaining`;
+    const remainingText = d.remaining_mds !== undefined
+      ? `${fmt.num(d.remaining_mds || 0)} MDs remaining · from Variance`
+      : `${d.days_elapsed || 0} days elapsed · ${d.days_remaining || 0} days remaining`;
+    document.getElementById('kpiDays').textContent = remainingText;
   } catch (e) {
     console.error('Overview KPIs error:', e);
   }
