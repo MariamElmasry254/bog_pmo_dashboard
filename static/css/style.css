@@ -1087,6 +1087,16 @@ th[data-sort-key]:hover {
   font-weight: 500;
   white-space: nowrap;
 }
+.alloc-pill-mini.alloc-inherited {
+  background: rgba(245, 158, 11, 0.1);
+  color: #92400E;
+  border: 1px dashed #FCD34D;
+  font-style: italic;
+}
+.alloc-pill-mini.alloc-inherited::before {
+  content: "↳ ";
+  font-size: 9px;
+}
 .tcc-more {
   font-size: 10px;
   color: var(--text-muted);
