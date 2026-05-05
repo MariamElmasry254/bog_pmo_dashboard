@@ -2158,6 +2158,108 @@ def api_budget():
 # ============================================================
 VARIANCE_FILE = os.path.join(BASE_DIR, 'data', 'variance.xlsx')  # Read-only Excel from repo
 TRAVEL_FILE = os.path.join(PERSIST_DIR, 'travel.json')
+BUDGET_OVERRIDES_FILE = os.path.join(PERSIST_DIR, 'budget_overrides.json')
+
+def load_budget_overrides():
+    """Load all budget overrides. Structure:
+    {
+      'development': {'approved.cost_sar': 12000000, 'final.profit_pct': 0.4},
+      'consultation': {...},
+      'support': {...}
+    }
+    """
+    if not os.path.exists(BUDGET_OVERRIDES_FILE):
+        return {}
+    try:
+        import json
+        with open(BUDGET_OVERRIDES_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"load_budget_overrides: {e}")
+        return {}
+
+def save_budget_overrides(data):
+    import json
+    os.makedirs(os.path.dirname(BUDGET_OVERRIDES_FILE), exist_ok=True)
+    with open(BUDGET_OVERRIDES_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+def apply_budget_overrides(budget_info, phase_key):
+    """Apply saved overrides on top of the parsed budget data."""
+    overrides = load_budget_overrides().get(phase_key, {}) or {}
+    if not overrides:
+        return budget_info
+    for path, value in overrides.items():
+        # Path format: "section.field" e.g. "approved.cost_sar"
+        parts = path.split('.')
+        if len(parts) != 2:
+            continue
+        section, field = parts
+        if section in budget_info and isinstance(budget_info[section], dict):
+            budget_info[section][field] = value
+        elif section == 'contract' and 'contract' in budget_info:
+            # Contract has nested {value, value2} objects
+            for k in budget_info['contract']:
+                if k == field:
+                    if isinstance(budget_info['contract'][k], dict):
+                        budget_info['contract'][k]['value'] = value
+                    else:
+                        budget_info['contract'][k] = value
+                    break
+    # Mark as having overrides for UI badge
+    budget_info['_has_overrides'] = bool(overrides)
+    budget_info['_override_keys'] = list(overrides.keys())
+    return budget_info
+
+
+@app.route('/api/variance/budget-override', methods=['POST'])
+def api_budget_override_save():
+    """Save a single budget field override.
+    Body: { phase: 'development', path: 'approved.cost_sar', value: 12000000 }
+    """
+    body = request.json or {}
+    phase = body.get('phase')
+    path = body.get('path')
+    value = body.get('value')
+
+    if not phase or not path:
+        return jsonify({'error': 'phase and path required'}), 400
+
+    data = load_budget_overrides()
+    if phase not in data:
+        data[phase] = {}
+
+    if value is None or value == '':
+        data[phase].pop(path, None)
+        if not data[phase]:
+            data.pop(phase, None)
+    else:
+        try:
+            data[phase][path] = float(value)
+        except Exception:
+            data[phase][path] = value  # keep as string for non-numeric fields
+
+    save_budget_overrides(data)
+    return jsonify({'ok': True, 'data': data})
+
+
+@app.route('/api/variance/budget-override/<phase>')
+def api_budget_overrides_get(phase):
+    """Get all overrides for a phase."""
+    data = load_budget_overrides()
+    return jsonify({'phase': phase, 'overrides': data.get(phase, {})})
+
+
+@app.route('/api/variance/budget-override/<phase>/<path:path>', methods=['DELETE'])
+def api_budget_override_delete(phase, path):
+    """Delete a specific override."""
+    data = load_budget_overrides()
+    if phase in data and path in data[phase]:
+        data[phase].pop(path)
+        if not data[phase]:
+            data.pop(phase, None)
+        save_budget_overrides(data)
+    return jsonify({'ok': True})
 
 # Sub-tab definitions: which sheets feed which tab
 VARIANCE_TABS = {
@@ -3022,6 +3124,8 @@ def api_variance():
                     parser = sect['parser']
                     if parser == 'budget':
                         data = parse_budget_sheet(df)
+                        # Apply persistent overrides (auto-saved values)
+                        data = apply_budget_overrides(data, tab_key)
                     elif parser == 'profitability':
                         data = parse_profitability_sheet(df)
                     elif parser == 'effort':
