@@ -64,7 +64,7 @@ function renderVarianceSubTab(key) {
     if (sect.error) {
       html += `<div class="banner banner-warn"><strong>Parse error:</strong> ${sect.error}</div>`;
     } else if (sect.data) {
-      if (sect.key === 'budget') html += renderBudget(sect.data);
+      if (sect.key === 'budget') html += renderBudget(sect.data, key);
       else if (sect.key === 'profitability') html += renderProfitability(sect.data, key);
       else if (sect.key === 'effort') html += renderEffort(sect.data, key);
       else if (sect.key === 'estimated') html += renderEstimated(sect.data);
@@ -73,13 +73,36 @@ function renderVarianceSubTab(key) {
   });
 
   cont.innerHTML = html;
+
+  // Wire up auto-save for any budget inputs
+  wireBudgetInputs(cont);
 }
 
-function renderBudget(data) {
+function renderBudget(data, phaseKey) {
   let html = '';
   // KPI cards from approved/final
   const a = data.approved || {};
   const f = data.final || {};
+
+  // Helper to make an editable budget cell
+  // type: 'money' | 'pct' | 'num'
+  function editableCell(value, path, type) {
+    const v = value === null || value === undefined ? '' : value;
+    const step = type === 'pct' ? '0.0001' : '0.01';
+    const cls = type === 'pct' ? 'budget-input budget-input-pct' : 'budget-input';
+    return `<input type="number" step="${step}" class="${cls}" data-phase="${phaseKey}" data-path="${path}" value="${v}">`;
+  }
+
+  // Helper for non-numeric (text) editable cells
+  function editableText(value, path) {
+    const v = value === null || value === undefined ? '' : value;
+    return `<input type="text" class="budget-input budget-input-text" data-phase="${phaseKey}" data-path="${path}" value="${String(v).replace(/"/g, '&quot;')}">`;
+  }
+
+  // Compute display values for KPI cards (use saved overrides)
+  const profitPctApproved = (a.profit_pct || 0) * 100;
+  const profitPctFinal = (f.profit_pct || 0) * 100;
+
   html += `
     <div class="kpi-strip kpi-strip-small">
       <div class="kpi-card kpi-blue compact">
@@ -92,34 +115,84 @@ function renderBudget(data) {
       </div>
       <div class="kpi-card kpi-green compact">
         <div class="kpi-label">APPROVED PROFIT</div>
-        <div class="kpi-value">${fmt.decimal((a.profit_pct || 0) * 100)}<span class="kpi-unit">%</span></div>
+        <div class="kpi-value">${fmt.decimal(profitPctApproved)}<span class="kpi-unit">%</span></div>
         <div class="kpi-foot">${fmt.money(a.profit_sar)} SAR</div>
       </div>
       <div class="kpi-card kpi-amber compact">
         <div class="kpi-label">FINAL PROFIT</div>
-        <div class="kpi-value">${fmt.decimal((f.profit_pct || 0) * 100)}<span class="kpi-unit">%</span></div>
+        <div class="kpi-value">${fmt.decimal(profitPctFinal)}<span class="kpi-unit">%</span></div>
         <div class="kpi-foot">${fmt.money(f.profit_sar)} SAR</div>
       </div>
     </div>
   `;
 
-  // Approved vs Final side-by-side
+  // Editable hint
+  const overrideBadge = data._has_overrides
+    ? '<span class="badge badge-blue" style="margin-left:8px;">Has saved overrides</span>'
+    : '';
+
+  // Approved vs Final side-by-side - WITH EDITABLE INPUTS
   html += `
+    <div class="card" style="margin-bottom: 12px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <h3 class="card-title" style="margin: 0;">Budget — Editable ${overrideBadge}</h3>
+        <span style="font-size: 11px; color: var(--text-muted);">All fields auto-save on edit · Stored in Railway Volume</span>
+      </div>
+    </div>
     <div class="grid-2">
       <div class="card budget-card">
         <h3 class="card-title">Approved Project Budget</h3>
-        <div class="budget-row"><span class="label">Total Cost (USD)</span><span class="value">$${fmt.money(a.cost_usd)}</span></div>
-        <div class="budget-row"><span class="label">Total Cost (SAR)</span><span class="value">${fmt.money(a.cost_sar)}</span></div>
-        <div class="budget-row"><span class="label">Total Revenue (SAR)</span><span class="value">${fmt.money(a.revenue_sar)}</span></div>
-        <div class="budget-row highlight"><span class="label">Profit</span><span class="value">${fmt.money(a.profit_sar)} · ${fmt.decimal((a.profit_pct || 0) * 100)}%</span></div>
+        <div class="budget-row">
+          <span class="label">Total Mandays</span>
+          <span class="value">${editableCell(a.total_mandays, 'approved.total_mandays', 'num')}</span>
+        </div>
+        <div class="budget-row">
+          <span class="label">Total Cost (USD)</span>
+          <span class="value">$${editableCell(a.cost_usd, 'approved.cost_usd', 'money')}</span>
+        </div>
+        <div class="budget-row">
+          <span class="label">Total Cost (SAR)</span>
+          <span class="value">${editableCell(a.cost_sar, 'approved.cost_sar', 'money')}</span>
+        </div>
+        <div class="budget-row">
+          <span class="label">Total Revenue (SAR)</span>
+          <span class="value">${editableCell(a.revenue_sar, 'approved.revenue_sar', 'money')}</span>
+        </div>
+        <div class="budget-row highlight">
+          <span class="label">Profit (SAR)</span>
+          <span class="value">${editableCell(a.profit_sar, 'approved.profit_sar', 'money')}</span>
+        </div>
+        <div class="budget-row highlight">
+          <span class="label">Profit %</span>
+          <span class="value">${editableCell(a.profit_pct, 'approved.profit_pct', 'pct')} <span style="font-size:10px;color:var(--text-muted);">(decimal: 0.4 = 40%)</span></span>
+        </div>
       </div>
       <div class="card budget-card budget-final">
         <h3 class="card-title">Final Budget <span class="badge badge-amber">After Changes</span></h3>
-        <div class="budget-row"><span class="label">Total Cost (SAR)</span><span class="value">${fmt.money(f.cost_sar)}</span></div>
-        <div class="budget-row"><span class="label">Total Revenue (SAR)</span><span class="value">${fmt.money(f.revenue_sar)}</span></div>
-        <div class="budget-row"><span class="label">Δ Cost</span><span class="value">${fmt.money(f.total_change_cost || 0)}</span></div>
-        <div class="budget-row"><span class="label">Δ Revenue</span><span class="value" style="color: ${(f.total_change_revenue || 0) < 0 ? 'var(--red)' : 'var(--green)'}">${(f.total_change_revenue || 0) < 0 ? '(' + fmt.money(Math.abs(f.total_change_revenue || 0)) + ')' : fmt.money(f.total_change_revenue || 0)}</span></div>
-        <div class="budget-row highlight"><span class="label">Profit</span><span class="value">${fmt.money(f.profit_sar)} · ${fmt.decimal((f.profit_pct || 0) * 100)}%</span></div>
+        <div class="budget-row">
+          <span class="label">Total Cost (SAR)</span>
+          <span class="value">${editableCell(f.cost_sar, 'final.cost_sar', 'money')}</span>
+        </div>
+        <div class="budget-row">
+          <span class="label">Total Revenue (SAR)</span>
+          <span class="value">${editableCell(f.revenue_sar, 'final.revenue_sar', 'money')}</span>
+        </div>
+        <div class="budget-row">
+          <span class="label">Δ Cost</span>
+          <span class="value">${editableCell(f.total_change_cost, 'final.total_change_cost', 'money')}</span>
+        </div>
+        <div class="budget-row">
+          <span class="label">Δ Revenue</span>
+          <span class="value">${editableCell(f.total_change_revenue, 'final.total_change_revenue', 'money')}</span>
+        </div>
+        <div class="budget-row highlight">
+          <span class="label">Profit (SAR)</span>
+          <span class="value">${editableCell(f.profit_sar, 'final.profit_sar', 'money')}</span>
+        </div>
+        <div class="budget-row highlight">
+          <span class="label">Profit %</span>
+          <span class="value">${editableCell(f.profit_pct, 'final.profit_pct', 'pct')} <span style="font-size:10px;color:var(--text-muted);">(decimal: 0.4 = 40%)</span></span>
+        </div>
       </div>
     </div>
   `;
@@ -143,6 +216,38 @@ function renderBudget(data) {
     html += '</tbody></table></div>';
   }
   return html;
+}
+
+// Wire up auto-save for budget inputs
+function wireBudgetInputs(container) {
+  if (!container) return;
+  container.querySelectorAll('.budget-input').forEach(inp => {
+    inp.addEventListener('blur', async () => {
+      const phase = inp.dataset.phase;
+      const path = inp.dataset.path;
+      const isText = inp.classList.contains('budget-input-text');
+      let value = isText ? inp.value : (parseFloat(inp.value) || 0);
+      // Empty value → null (delete override)
+      if (inp.value === '' || inp.value === null) value = null;
+
+      try {
+        const res = await fetch('/api/variance/budget-override', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phase, path, value })
+        });
+        if (res.ok) {
+          inp.style.borderColor = 'var(--green)';
+          setTimeout(() => { inp.style.borderColor = ''; }, 1200);
+        } else {
+          inp.style.borderColor = 'var(--red)';
+        }
+      } catch (e) {
+        inp.style.borderColor = 'var(--red)';
+        console.error('Budget save failed:', e);
+      }
+    });
+  });
 }
 
 function renderProfitability(data, phaseKey) {
