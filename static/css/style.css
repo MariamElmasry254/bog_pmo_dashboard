@@ -1548,7 +1548,53 @@ th[data-sort-key]:hover {
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
 }
 
-/* ============ CLICKABLE KPI CARD ============ */
+/* Budget editable inputs */
+.budget-input {
+  width: 140px;
+  padding: 4px 8px;
+  font-family: var(--mono);
+  font-size: 12px;
+  text-align: right;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: white;
+  font-weight: 600;
+  transition: border-color 0.15s;
+}
+.budget-input:focus {
+  outline: none;
+  border-color: var(--blue);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+.budget-input-pct {
+  width: 80px;
+}
+.budget-input-text {
+  text-align: left;
+  width: 200px;
+  font-family: var(--font-body, inherit);
+}
+.budget-row .value .budget-input {
+  margin-right: 0;
+}
+
+/* Make budget rows align with inputs */
+.budget-card .budget-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.budget-card .budget-row:last-child {
+  border-bottom: none;
+}
+.budget-card .budget-row.highlight {
+  background: var(--bg-subtle);
+  padding: 8px;
+  margin: 4px -8px 0 -8px;
+  border-radius: 4px;
+}
 .kpi-card.clickable {
   cursor: pointer;
   transition: all 0.15s;
