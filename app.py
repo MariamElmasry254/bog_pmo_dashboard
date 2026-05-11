@@ -14,6 +14,13 @@ from datetime import datetime, timedelta, date
 import logging
 from roadmap_data import ROADMAP, MILESTONES, PROJECT_INFO
 from db import DB, migrate_from_json
+from positions_catalog import (
+    seed_positions_if_empty,
+    get_all_positions, get_position_by_name,
+    get_all_tunis_rates, get_tunis_rate_by_name,
+    upsert_position, upsert_tunis_rate,
+    delete_position, delete_tunis_rate,
+)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s', stream=sys.stdout)
 logger = logging.getLogger(__name__)
@@ -55,6 +62,14 @@ try:
         logger.info(f"Migrated from JSON: {migrated}")
 except Exception as _e:
     logger.warning(f"Migration step had issues (continuing): {_e}")
+
+# Seed positions catalog on first boot (idempotent - only inserts if empty)
+try:
+    seeded = seed_positions_if_empty(db)
+    if seeded > 0:
+        logger.info(f"Seeded positions catalog: {seeded} rows (positions + Tunis rates)")
+except Exception as _e:
+    logger.warning(f"Position seeding had issues (continuing): {_e}")
 
 app = Flask(
     __name__,
@@ -2878,6 +2893,125 @@ def get_odoo_position_for_employee(employee_name):
         return None
 
 
+# SAR → USD conversion rate
+SAR_TO_USD = 3.75
+OVERTIME_MULTIPLIER = 1.5
+
+
+def get_odoo_rate_for_employee(employee_name):
+    """Fetch hourly rate from Odoo hr.employee (timesheet_cost in SAR).
+    Converts to USD using SAR_TO_USD.
+    Returns: { 'hour_rate': float, 'overtime_rate': float, 'source': 'odoo' } or None.
+    """
+    if not odoo.uid:
+        if not odoo.connect():
+            return None
+    try:
+        # Try a few field names commonly used for timesheet cost
+        emps = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'hr.employee', 'search_read',
+            [[('name', '=', employee_name)]],
+            {'fields': ['name', 'timesheet_cost', 'hourly_cost'], 'limit': 1}
+        )
+        if not emps:
+            return None
+        emp = emps[0]
+        # timesheet_cost is in local currency (SAR for this Odoo)
+        sar_rate = emp.get('timesheet_cost') or emp.get('hourly_cost')
+        if not sar_rate or sar_rate <= 0:
+            return None
+        usd_rate = round(sar_rate / SAR_TO_USD, 2)
+        return {
+            'hour_rate': usd_rate,
+            'overtime_rate': round(usd_rate * OVERTIME_MULTIPLIER, 2),
+            'source': 'odoo',
+            'sar_rate': sar_rate,
+        }
+    except Exception as e:
+        logger.warning(f"Odoo rate lookup for {employee_name}: {e}")
+        return None
+
+
+def get_employee_rate(employee_name, position_name=None, is_onsite=False):
+    """Universal rate lookup with priority:
+    1. Tunis employee (by name) → use tunis_rates from DB
+    2. Try Odoo timesheet_cost → convert SAR→USD
+    3. Fallback: position_name lookup in DB positions catalog
+    Returns: { hour_rate, overtime_rate, md_rate?, source, position? } or None
+    """
+    if not employee_name:
+        return None
+
+    # 1. Tunis check (prefix [T...])
+    country = get_country_from_employee_name(employee_name)
+    if country == 'TUN':
+        tunis = get_tunis_rate_by_name(db, employee_name)
+        if tunis and tunis.get('hour_rate'):
+            return {
+                'hour_rate': tunis['hour_rate'],
+                'overtime_rate': round(tunis['hour_rate'] * OVERTIME_MULTIPLIER, 2),
+                'source': 'tunis_rates_db',
+                'position': f'TUN - {tunis["name"]}',
+            }
+        # If no Tunis rate found, fall through to other lookups
+
+    # 2. Try Odoo first (preferred - real-time data)
+    odoo_rate = get_odoo_rate_for_employee(employee_name)
+    if odoo_rate:
+        # For onsite (Egyptian traveling), Odoo rate is the BASE
+        # The onsite premium is applied via DB position lookup below
+        if not is_onsite:
+            return odoo_rate
+        # If onsite, fall through to use DB onsite position rate
+
+    # 3. Fallback to DB positions catalog
+    if position_name:
+        # Apply onsite suffix if needed
+        full_pos = position_name
+        if is_onsite and country == 'EGY' and not position_name.endswith('- onsite'):
+            full_pos = position_name + ' - onsite'
+
+        pos_info = get_position_by_name(db, full_pos)
+        if pos_info:
+            hr = pos_info.get('hour_rate')
+            if hr:
+                return {
+                    'hour_rate': hr,
+                    'overtime_rate': round(hr * OVERTIME_MULTIPLIER, 2),
+                    'md_rate': pos_info.get('md_rate'),
+                    'source': 'positions_db' + ('_onsite' if is_onsite else ''),
+                    'position': full_pos,
+                }
+
+    # If Odoo had a rate but we wanted onsite + no DB match, return Odoo as fallback
+    if odoo_rate:
+        return odoo_rate
+
+    return None
+
+
+@app.route('/api/employee-rate')
+def api_employee_rate():
+    """Test endpoint: get rate for an employee.
+    Query: ?name=...&position=...&onsite=true
+    """
+    name = request.args.get('name', '')
+    position = request.args.get('position')
+    onsite = request.args.get('onsite', '').lower() in ('true', '1', 'yes')
+
+    if not name:
+        return jsonify({'error': 'name required'}), 400
+
+    rate = get_employee_rate(name, position, onsite)
+    return jsonify({
+        'employee_name': name,
+        'requested_position': position,
+        'is_onsite': onsite,
+        'rate': rate,
+    })
+
+
 # ============================================================
 # PLAN OVERRIDES (stored in JSON)
 # ============================================================
@@ -2939,21 +3073,78 @@ def save_plan_overrides(data):
 
 @app.route('/api/positions')
 def api_positions():
-    """Get list of positions from Excel + simple lookup"""
-    positions = get_positions_from_excel()
+    """Get full positions catalog from DB (replaces Excel-based)."""
+    positions = get_all_positions(db)
+    tunis = get_all_tunis_rates(db)
     return jsonify({
         'positions': positions,
         'count': len(positions),
+        'tunis_rates': tunis,
+        'tunis_count': len(tunis),
     })
+
+
+@app.route('/api/positions', methods=['POST'])
+def api_positions_save():
+    """Add or update a position. Body: { position, hour_rate, md_rate, country, is_onsite }"""
+    body = request.json or {}
+    position = body.get('position', '').strip()
+    if not position:
+        return jsonify({'error': 'position name required'}), 400
+
+    def to_float(v):
+        if v is None or v == '':
+            return None
+        try:
+            return float(v)
+        except (ValueError, TypeError):
+            return None
+
+    result = upsert_position(
+        db,
+        position_name=position,
+        hour_rate=to_float(body.get('hour_rate')),
+        md_rate=to_float(body.get('md_rate')),
+        country=body.get('country'),
+        is_onsite=body.get('is_onsite'),
+    )
+    return jsonify({'ok': True, 'position': result})
+
+
+@app.route('/api/positions/<path:position_name>', methods=['DELETE'])
+def api_positions_delete(position_name):
+    delete_position(db, position_name)
+    return jsonify({'ok': True})
+
+
+@app.route('/api/tunis-rates', methods=['POST'])
+def api_tunis_rates_save():
+    """Add or update a Tunis person rate."""
+    body = request.json or {}
+    name = body.get('name', '').strip()
+    hour_rate = body.get('hour_rate')
+    if not name:
+        return jsonify({'error': 'name required'}), 400
+    try:
+        hour_rate = float(hour_rate) if hour_rate else None
+    except Exception:
+        hour_rate = None
+    upsert_tunis_rate(db, name, hour_rate)
+    return jsonify({'ok': True, 'name': name, 'hour_rate': hour_rate})
+
+
+@app.route('/api/tunis-rates/<path:name>', methods=['DELETE'])
+def api_tunis_rates_delete(name):
+    delete_tunis_rate(db, name)
+    return jsonify({'ok': True})
 
 
 @app.route('/api/effort/<phase_key>')
 def api_effort(phase_key):
-    """Computed effort for a phase + month from Odoo"""
+    """Computed effort for a phase + month from Odoo (single month)"""
     year = int(request.args.get('year') or date.today().year)
     month = int(request.args.get('month') or date.today().month)
 
-    # Build position lookup: try Odoo first, fallback to manual map
     employees_in_data = set()
     raw = odoo.get_timesheets(
         date_from=date(year, month, 1).isoformat(),
@@ -2965,19 +3156,278 @@ def api_effort(phase_key):
             if emp and emp[1]:
                 employees_in_data.add(emp[1])
 
-    # Try to fetch positions from Odoo for each
     position_lookup = {}
     for emp_name in employees_in_data:
         pos = get_odoo_position_for_employee(emp_name)
         if pos:
             position_lookup[emp_name] = pos
 
-    # Manual override file (for missing positions)
     overrides = load_plan_overrides().get('position_overrides', {})
     position_lookup.update(overrides)
 
     result = compute_effort_from_odoo(phase_key, year, month, position_lookup)
     return jsonify(result)
+
+
+@app.route('/api/effort/<phase_key>/all-months')
+def api_effort_all_months(phase_key):
+    """Excel-style Current Effort table:
+       - Rows: each employee (one row per person)
+       - Cols: # / Name / Position / Hour Rate / Overtime Rate / [month1: Reg/Ram/OT] / [month2: Reg/Ram/OT] ...
+       - Months start from FIRST month with any log in the project (across the phase)
+       - Each cell is total hours classified as Regular / Ramadan / Overtime per country rules.
+    """
+    if not odoo.uid:
+        if not odoo.connect():
+            return jsonify({'error': 'Odoo unreachable', 'employees': [], 'months': []}), 503
+
+    # Step 1: Determine the relevant tasks (under the phase)
+    phase_names = PHASE_MAPPING.get(phase_key, [])
+    if not phase_names:
+        return jsonify({'error': f'Unknown phase: {phase_key}'}), 400
+
+    try:
+        # Find project
+        projects = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.project', 'search_read',
+            [[('name', 'ilike', PROJECT_NAME)]],
+            {'fields': ['id', 'name'], 'limit': 5}
+        )
+        if not projects:
+            return jsonify({'employees': [], 'months': []})
+        project_id = projects[0]['id']
+
+        # Find phases
+        phases = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.phase', 'search_read',
+            [[('name', 'in', phase_names)]],
+            {'fields': ['id', 'name']}
+        )
+        phase_ids = [p['id'] for p in phases]
+
+        # Get parent tasks
+        parent_tasks = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [[('phase_id', 'in', phase_ids), ('project_id', '=', project_id)]],
+            {'fields': ['id', 'child_ids'], 'limit': 5000}
+        )
+        parent_ids = {t['id'] for t in parent_tasks}
+
+        # All project tasks → walk parents to find descendants of phase tasks
+        all_proj_tasks = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [[('project_id', '=', project_id)]],
+            {'fields': ['id', 'parent_id'], 'limit': 10000}
+        )
+        task_map = {t['id']: t for t in all_proj_tasks}
+        relevant_ids = set(parent_ids)
+        for t in all_proj_tasks:
+            cur = t
+            visited = set()
+            while cur and cur['id'] not in visited:
+                visited.add(cur['id'])
+                if cur['id'] in parent_ids:
+                    relevant_ids.add(t['id'])
+                    break
+                if not cur.get('parent_id'):
+                    break
+                pid = cur['parent_id'][0] if isinstance(cur['parent_id'], list) else cur['parent_id']
+                cur = task_map.get(pid)
+
+        # Fetch all timesheets for these tasks (no date filter - want full history)
+        timesheets = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'account.analytic.line', 'search_read',
+            [[('task_id', 'in', list(relevant_ids))]],
+            {'fields': ['employee_id', 'date', 'unit_amount'], 'limit': 100000}
+        )
+    except Exception as e:
+        logger.error(f"all-months effort fetch failed: {e}")
+        return jsonify({'error': str(e), 'employees': [], 'months': []}), 500
+
+    if not timesheets:
+        return jsonify({'employees': [], 'months': [], 'project_start_month': None})
+
+    # Step 2: Determine the first month with any log
+    earliest = None
+    latest = None
+    for ts in timesheets:
+        d = ts.get('date')
+        if not d:
+            continue
+        try:
+            dt = datetime.strptime(d, '%Y-%m-%d').date()
+            if earliest is None or dt < earliest:
+                earliest = dt
+            if latest is None or dt > latest:
+                latest = dt
+        except Exception:
+            continue
+
+    if not earliest:
+        return jsonify({'employees': [], 'months': []})
+
+    # Build list of months from first log to current month (or last log, whichever later)
+    today_d = date.today()
+    end_month = max(latest, today_d) if latest else today_d
+
+    months = []
+    cur = date(earliest.year, earliest.month, 1)
+    end_first = date(end_month.year, end_month.month, 1)
+    while cur <= end_first:
+        months.append({
+            'year': cur.year,
+            'month': cur.month,
+            'label': cur.strftime('%B %Y'),     # "April 2026"
+            'short': cur.strftime('%b'),         # "Apr"
+            'key': cur.strftime('%Y-%m'),
+        })
+        # Next month
+        if cur.month == 12:
+            cur = date(cur.year + 1, 1, 1)
+        else:
+            cur = date(cur.year, cur.month + 1, 1)
+
+    # Step 3: Aggregate per employee per month
+    # person_data[emp_name][month_key] = {regular, ramadan, overtime}
+    from collections import defaultdict
+    person_data = defaultdict(lambda: defaultdict(lambda: {'regular': 0, 'ramadan': 0, 'overtime': 0}))
+
+    # Travel records for onsite detection
+    travel_records = load_travel()
+
+    for ts in timesheets:
+        emp = ts.get('employee_id', [None, ''])
+        emp_name = emp[1] if isinstance(emp, list) and len(emp) > 1 else ''
+        if not emp_name:
+            continue
+        d_str = ts.get('date')
+        if not d_str:
+            continue
+        try:
+            d = datetime.strptime(d_str, '%Y-%m-%d').date()
+        except Exception:
+            continue
+        h = float(ts.get('unit_amount') or 0)
+        if h <= 0:
+            continue
+        month_key = d.strftime('%Y-%m')
+
+        country = get_country_from_employee_name(emp_name)
+
+        # Check Ramadan
+        is_ramadan = False
+        ramadan = RAMADAN_RANGES.get(country)
+        if ramadan:
+            try:
+                r_start = datetime.strptime(ramadan['start'], '%Y-%m-%d').date()
+                r_end = datetime.strptime(ramadan['end'], '%Y-%m-%d').date()
+                if r_start <= d <= r_end:
+                    is_ramadan = True
+            except Exception:
+                pass
+
+        # Weekend check → overtime
+        weekend = TUNIS_WEEKEND if country == 'TUN' else WEEKEND_DAYS
+        is_weekend = d.weekday() in weekend
+
+        if is_weekend:
+            person_data[emp_name][month_key]['overtime'] += h
+        elif is_ramadan:
+            person_data[emp_name][month_key]['ramadan'] += h
+        else:
+            person_data[emp_name][month_key]['regular'] += h
+
+    # Step 4: For each employee, lookup position + rate (with onsite check)
+    employees_out = []
+    for emp_name, months_data in sorted(person_data.items()):
+        country = get_country_from_employee_name(emp_name)
+
+        # Is this person traveling onsite (in any travel record overlapping with the data months)?
+        is_onsite = False
+        for tr in travel_records:
+            if not tr.get('name'):
+                continue
+            tn = tr['name'].strip().lower()
+            en = emp_name.lower()
+            import re
+            en_clean = re.sub(r'\[[A-Z]\d+\]\s*', '', en).strip()
+            if tn == en_clean or tn in en_clean or en_clean in tn:
+                # name match
+                is_onsite = True
+                break
+
+        # Lookup position from Odoo
+        odoo_pos = get_odoo_position_for_employee(emp_name)
+
+        # Build full position string
+        if country == 'TUN':
+            full_position = f"TUN - {emp_name}"
+        elif odoo_pos:
+            full_position = f"{country} - {odoo_pos}"
+            if is_onsite and country == 'EGY':
+                full_position = full_position + ' - onsite'
+        else:
+            full_position = None
+
+        # Get rate
+        rate_info = get_employee_rate(emp_name, full_position, is_onsite)
+        hour_rate = rate_info.get('hour_rate') if rate_info else None
+        overtime_rate = rate_info.get('overtime_rate') if rate_info else None
+
+        # Build month cells
+        month_cells = {}
+        for m in months:
+            cell = months_data.get(m['key'], {'regular': 0, 'ramadan': 0, 'overtime': 0})
+            month_cells[m['key']] = {
+                'regular': round(cell['regular'], 2),
+                'ramadan': round(cell['ramadan'], 2),
+                'overtime': round(cell['overtime'], 2),
+                'total': round(cell['regular'] + cell['ramadan'] + cell['overtime'], 2),
+            }
+
+        # Totals
+        total_hours = sum(c['total'] for c in month_cells.values())
+        total_cost = 0
+        for c in month_cells.values():
+            if hour_rate:
+                total_cost += (c['regular'] + c['ramadan']) * hour_rate
+            if overtime_rate:
+                total_cost += c['overtime'] * overtime_rate
+
+        # Extract employee code from name
+        import re
+        emp_code_match = re.match(r'^\[([A-Z]\d+)\]', emp_name)
+        emp_code = emp_code_match.group(1) if emp_code_match else ''
+        emp_display = re.sub(r'^\[[A-Z]\d+\]\s*', '', emp_name).strip()
+
+        employees_out.append({
+            'name': emp_display,
+            'full_name': emp_name,
+            'code': emp_code,
+            'country': country,
+            'position': full_position or '—',
+            'hour_rate': hour_rate,
+            'overtime_rate': overtime_rate,
+            'rate_source': rate_info.get('source') if rate_info else None,
+            'is_onsite': is_onsite,
+            'months': month_cells,
+            'total_hours': round(total_hours, 2),
+            'total_cost_usd': round(total_cost, 2),
+            'current_mds': round(total_hours / WORK_HOURS_PER_DAY, 2),
+        })
+
+    return jsonify({
+        'phase': phase_key,
+        'months': months,
+        'employees': employees_out,
+        'project_start_month': months[0]['key'] if months else None,
+        'total_employees': len(employees_out),
+    })
 
 
 @app.route('/api/plan-overrides', methods=['GET'])
