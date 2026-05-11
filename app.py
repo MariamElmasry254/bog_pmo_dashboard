@@ -13,6 +13,7 @@ import io
 from datetime import datetime, timedelta, date
 import logging
 from roadmap_data import ROADMAP, MILESTONES, PROJECT_INFO
+from db import DB, migrate_from_json
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s', stream=sys.stdout)
 logger = logging.getLogger(__name__)
@@ -34,6 +35,26 @@ PERSIST_DIR = os.environ.get('DATA_PATH', os.path.join(BASE_DIR, 'data'))
 os.makedirs(PERSIST_DIR, exist_ok=True)
 logger.info(f"Persistent storage at: {PERSIST_DIR}")
 DATA_FILE = os.path.join(BASE_DIR, 'data', 'services.xlsx')
+
+# =================================================================
+# DATABASE - PostgreSQL (Railway plugin) or SQLite (fallback)
+# Set DATABASE_URL env var in Railway to use PostgreSQL.
+# Falls back to SQLite at PERSIST_DIR/pmo.db otherwise.
+# =================================================================
+DATABASE_URL = os.environ.get('DATABASE_URL')
+if DATABASE_URL:
+    db = DB(DATABASE_URL)
+else:
+    DB_PATH = os.path.join(PERSIST_DIR, 'pmo.db')
+    db = DB(DB_PATH)
+
+# One-time migration from JSON files (safe to run on every boot - it's idempotent)
+try:
+    migrated = migrate_from_json(db, PERSIST_DIR)
+    if migrated:
+        logger.info(f"Migrated from JSON: {migrated}")
+except Exception as _e:
+    logger.warning(f"Migration step had issues (continuing): {_e}")
 
 app = Flask(
     __name__,
@@ -1511,23 +1532,17 @@ def api_team_members():
     })
 
 
-@app.route('/api/risks')
-
 def load_risks():
-    if not os.path.exists(RISKS_FILE):
-        return []
-    try:
-        import json
-        with open(RISKS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception:
-        return []
+    """Load risks from DB (replaces JSON file)."""
+    return db.list_risks()
+
 
 def save_risks(data):
-    import json
-    os.makedirs(os.path.dirname(RISKS_FILE), exist_ok=True)
-    with open(RISKS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    """Backward-compat: bulk save a list of risks. Used by restore endpoint."""
+    if isinstance(data, list):
+        for r in data:
+            if isinstance(r, dict) and r.get('id'):
+                db.upsert_risk(r['id'], r)
 
 
 @app.route('/api/risks')
@@ -1539,7 +1554,7 @@ def api_risks_list():
         risks = [r for r in risks if r.get('phase_group') == phase_group]
     risks.sort(key=lambda x: (
         {'Critical': 0, 'High': 1, 'Medium': 2, 'Low': 3}.get(x.get('severity'), 4),
-        -int(x.get('updated_at', '').replace('-', '').replace(':', '').replace('T', '').replace('.', '')[:14] or 0)
+        -int(str(x.get('updated_at', '')).replace('-', '').replace(':', '').replace('T', '').replace('.', '')[:14] or 0)
     ))
     return jsonify({'risks': risks, 'count': len(risks)})
 
@@ -1548,7 +1563,6 @@ def api_risks_list():
 def api_risks_save():
     """Create or update a risk/issue. Body should include id (or new uuid), and fields."""
     body = request.json or {}
-    risks = load_risks()
     rid = body.get('id')
     now_iso = datetime.now().isoformat()
 
@@ -1561,7 +1575,7 @@ def api_risks_save():
             'created_at': now_iso,
             'updated_at': now_iso,
             'phase_group': body.get('phase_group', 'development'),
-            'type': body.get('type', 'Risk'),  # Risk or Issue
+            'type': body.get('type', 'Risk'),
             'title': body.get('title', ''),
             'description': body.get('description', ''),
             'mitigation': body.get('mitigation', ''),
@@ -1571,46 +1585,59 @@ def api_risks_save():
             'date_identified': body.get('date_identified', date.today().isoformat()),
             'target_date': body.get('target_date', ''),
         }
-        risks.append(new_risk)
-        save_risks(risks)
+        db.upsert_risk(rid, new_risk)
         return jsonify({'ok': True, 'risk': new_risk})
 
-    # Update existing
-    for r in risks:
-        if r.get('id') == rid:
-            for k in ['phase_group', 'type', 'title', 'description', 'mitigation',
-                      'severity', 'status', 'owner', 'date_identified', 'target_date']:
-                if k in body:
-                    r[k] = body[k]
-            r['updated_at'] = now_iso
-            save_risks(risks)
-            return jsonify({'ok': True, 'risk': r})
-
-    return jsonify({'error': 'Risk not found'}), 404
+    # Update existing - read current, merge body, upsert
+    risks = load_risks()
+    existing = next((r for r in risks if r.get('id') == rid), None)
+    if not existing:
+        return jsonify({'error': 'Risk not found'}), 404
+    for k in ['phase_group', 'type', 'title', 'description', 'mitigation',
+              'severity', 'status', 'owner', 'date_identified', 'target_date']:
+        if k in body:
+            existing[k] = body[k]
+    existing['updated_at'] = now_iso
+    db.upsert_risk(rid, existing)
+    return jsonify({'ok': True, 'risk': existing})
 
 
 @app.route('/api/risks/<rid>', methods=['DELETE'])
 def api_risks_delete(rid):
-    risks = load_risks()
-    risks = [r for r in risks if r.get('id') != rid]
-    save_risks(risks)
+    db.delete_risk(rid)
     return jsonify({'ok': True})
 
 def load_services_overrides():
-    if not os.path.exists(SERVICES_OVERRIDES_FILE):
-        return {}
-    try:
-        import json
-        with open(SERVICES_OVERRIDES_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception:
-        return {}
+    """Load services overrides from DB.
+    Returns: {service_key: {dept: {field: value}}}
+    """
+    # Stored as namespace='services', phase=<service_key>, key='<dept>.<field>'
+    raw = db.get_namespace_overrides('services')
+    out = {}
+    for service_key, items in raw.items():
+        if not service_key:
+            continue
+        out[service_key] = {}
+        for combined, val in items.items():
+            if '.' in combined:
+                dept, field = combined.rsplit('.', 1)
+                if dept not in out[service_key]:
+                    out[service_key][dept] = {}
+                out[service_key][dept][field] = val
+    return out
+
 
 def save_services_overrides(data):
-    import json
-    os.makedirs(os.path.dirname(SERVICES_OVERRIDES_FILE), exist_ok=True)
-    with open(SERVICES_OVERRIDES_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    """Bulk save (used by restore endpoint).
+    Format: {service_key: {dept: {field: value}}}
+    """
+    for service_key, dept_data in data.items():
+        if not isinstance(dept_data, dict):
+            continue
+        for dept, fields in dept_data.items():
+            if isinstance(fields, dict):
+                for field, value in fields.items():
+                    db.set_override('services', service_key, f"{dept}.{field}", value)
 
 
 def get_odoo_parent_task_metadata(service_name):
@@ -1791,7 +1818,8 @@ def api_services():
         # For each department with non-zero baseline, build a row
         for dept_label in DEPT_LABELS.values():
             base_v = baseline_by_dept.get(dept_label)
-            dept_override = sov.get('departments', {}).get(dept_label, {})
+            # New DB format: sov is already {dept: {field: val}}
+            dept_override = sov.get(dept_label, {}) if isinstance(sov, dict) else {}
 
             # Read overrides
             planned = dept_override.get('planned')
@@ -1868,33 +1896,31 @@ def api_services_override():
     if field not in valid_fields:
         return jsonify({'error': f'field must be one of {valid_fields}'}), 400
 
-    data = load_services_overrides()
-    if service_name not in data:
-        data[service_name] = {'departments': {}}
-    if 'departments' not in data[service_name]:
-        data[service_name]['departments'] = {}
-    if dept not in data[service_name]['departments']:
-        data[service_name]['departments'][dept] = {}
-
-    if value is None or value == '':
-        data[service_name]['departments'][dept].pop(field, None)
-    else:
-        # Cast to right type
+    # Cast value to correct type
+    if value is not None and value != '':
         if field in ('planned', 'remaining'):
             try:
-                data[service_name]['departments'][dept][field] = float(value)
+                value = float(value)
             except (ValueError, TypeError):
-                data[service_name]['departments'][dept][field] = None
+                value = None
         else:
-            data[service_name]['departments'][dept][field] = str(value)
+            value = str(value)
+    else:
+        value = None
 
-    save_services_overrides(data)
+    # Save to DB: namespace='services', phase=<service_name>, key='<dept>.<field>'
+    db.set_override('services', service_name, f"{dept}.{field}", value)
     return jsonify({'ok': True})
 
 
 @app.route('/api/services/overrides', methods=['GET'])
 def api_services_overrides_get():
-    return jsonify(load_services_overrides())
+    # Return in old format with 'departments' wrapper for backward compat
+    raw = load_services_overrides()
+    out = {}
+    for service_key, dept_data in raw.items():
+        out[service_key] = {'departments': dept_data}
+    return jsonify(out)
 
 @app.route('/api/phases')
 def api_phases():
@@ -2161,32 +2187,20 @@ TRAVEL_FILE = os.path.join(PERSIST_DIR, 'travel.json')
 BUDGET_OVERRIDES_FILE = os.path.join(PERSIST_DIR, 'budget_overrides.json')
 
 def load_budget_overrides():
-    """Load all budget overrides. Structure:
-    {
-      'development': {'approved.cost_sar': 12000000, 'final.profit_pct': 0.4},
-      'consultation': {...},
-      'support': {...}
-    }
+    """Load all budget overrides from DB.
+    Returns: {phase: {field_path: value}}
     """
-    if not os.path.exists(BUDGET_OVERRIDES_FILE):
-        return {}
-    try:
-        import json
-        with open(BUDGET_OVERRIDES_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception as e:
-        logger.error(f"load_budget_overrides: {e}")
-        return {}
+    return db.get_namespace_overrides('budget')
 
-def save_budget_overrides(data):
-    import json
-    os.makedirs(os.path.dirname(BUDGET_OVERRIDES_FILE), exist_ok=True)
-    with open(BUDGET_OVERRIDES_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+
+def save_budget_override(phase, path, value):
+    """Save (or delete if value is None) a single budget override."""
+    db.set_override('budget', phase, path, value)
+
 
 def apply_budget_overrides(budget_info, phase_key):
     """Apply saved overrides on top of the parsed budget data."""
-    overrides = load_budget_overrides().get(phase_key, {}) or {}
+    overrides = db.get_namespace_overrides('budget', phase_key)
     if not overrides:
         return budget_info
     for path, value in overrides.items():
@@ -2198,7 +2212,6 @@ def apply_budget_overrides(budget_info, phase_key):
         if section in budget_info and isinstance(budget_info[section], dict):
             budget_info[section][field] = value
         elif section == 'contract' and 'contract' in budget_info:
-            # Contract has nested {value, value2} objects
             for k in budget_info['contract']:
                 if k == field:
                     if isinstance(budget_info['contract'][k], dict):
@@ -2206,7 +2219,6 @@ def apply_budget_overrides(budget_info, phase_key):
                     else:
                         budget_info['contract'][k] = value
                     break
-    # Mark as having overrides for UI badge
     budget_info['_has_overrides'] = bool(overrides)
     budget_info['_override_keys'] = list(overrides.keys())
     return budget_info
@@ -2225,40 +2237,28 @@ def api_budget_override_save():
     if not phase or not path:
         return jsonify({'error': 'phase and path required'}), 400
 
-    data = load_budget_overrides()
-    if phase not in data:
-        data[phase] = {}
-
-    if value is None or value == '':
-        data[phase].pop(path, None)
-        if not data[phase]:
-            data.pop(phase, None)
-    else:
+    # Try to convert to float for numeric values
+    if value is not None and value != '':
         try:
-            data[phase][path] = float(value)
-        except Exception:
-            data[phase][path] = value  # keep as string for non-numeric fields
+            value = float(value)
+        except (ValueError, TypeError):
+            pass  # keep as string
 
-    save_budget_overrides(data)
-    return jsonify({'ok': True, 'data': data})
+    save_budget_override(phase, path, value)
+    return jsonify({'ok': True, 'phase': phase, 'path': path, 'value': value})
 
 
 @app.route('/api/variance/budget-override/<phase>')
 def api_budget_overrides_get(phase):
     """Get all overrides for a phase."""
-    data = load_budget_overrides()
-    return jsonify({'phase': phase, 'overrides': data.get(phase, {})})
+    overrides = db.get_namespace_overrides('budget', phase)
+    return jsonify({'phase': phase, 'overrides': overrides})
 
 
 @app.route('/api/variance/budget-override/<phase>/<path:path>', methods=['DELETE'])
 def api_budget_override_delete(phase, path):
     """Delete a specific override."""
-    data = load_budget_overrides()
-    if phase in data and path in data[phase]:
-        data[phase].pop(path)
-        if not data[phase]:
-            data.pop(phase, None)
-        save_budget_overrides(data)
+    db.set_override('budget', phase, path, None)
     return jsonify({'ok': True})
 
 # Sub-tab definitions: which sheets feed which tab
@@ -2881,23 +2881,60 @@ def get_odoo_position_for_employee(employee_name):
 # ============================================================
 # PLAN OVERRIDES (stored in JSON)
 # ============================================================
-PLAN_FILE = os.path.join(PERSIST_DIR, 'plan_overrides.json')
+PLAN_FILE = os.path.join(PERSIST_DIR, 'plan_overrides.json')  # legacy path (kept for backup endpoint)
+
 
 def load_plan_overrides():
-    if not os.path.exists(PLAN_FILE):
-        return {}
-    try:
-        import json
-        with open(PLAN_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception:
-        return {}
+    """Load plan overrides from DB.
+    Returns structure compatible with old JSON format:
+    {
+      'plan_overrides': {phase: {month_key: {field: value}}},
+      'position_overrides': {emp_name: position_name}
+    }
+    """
+    # Plan overrides: namespace='plan', phase=<phase>, key='<month_key>.<field>'
+    plan_data = db.get_namespace_overrides('plan')
+    plan_overrides = {}
+    for phase, items in plan_data.items():
+        if not phase:
+            continue
+        plan_overrides[phase] = {}
+        for combined_key, val in items.items():
+            # combined_key = '<month_key>.<field>'
+            if '.' in combined_key:
+                month_key, field = combined_key.rsplit('.', 1)
+                if month_key not in plan_overrides[phase]:
+                    plan_overrides[phase][month_key] = {}
+                plan_overrides[phase][month_key][field] = val
+
+    # Position overrides: namespace='position', phase='', key=<emp_name>
+    position_overrides = db.get_namespace_overrides('position', '')
+
+    return {
+        'plan_overrides': plan_overrides,
+        'position_overrides': position_overrides,
+    }
+
 
 def save_plan_overrides(data):
-    import json
-    os.makedirs(os.path.dirname(PLAN_FILE), exist_ok=True)
-    with open(PLAN_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    """Save plan_overrides back to DB. Diff against existing to avoid bulk re-writes.
+    This is kept for backward compat with restore endpoint.
+    """
+    # Plan
+    plan = data.get('plan_overrides', {}) or {}
+    for phase, months in plan.items():
+        if not isinstance(months, dict):
+            continue
+        for month_key, fields in months.items():
+            if not isinstance(fields, dict):
+                continue
+            for field, value in fields.items():
+                db.set_override('plan', phase, f"{month_key}.{field}", value)
+
+    # Position
+    pos = data.get('position_overrides', {}) or {}
+    for emp_name, pos_val in pos.items():
+        db.set_override('position', '', emp_name, pos_val)
 
 
 @app.route('/api/positions')
@@ -2951,7 +2988,6 @@ def api_plan_overrides_get():
 @app.route('/api/plan-overrides', methods=['POST'])
 def api_plan_overrides_save():
     body = request.json or {}
-    data = load_plan_overrides()
     phase = body.get('phase')
     month_key = body.get('month_key')
     field = body.get('field')  # 'completion' or 'remaining'
@@ -2964,18 +3000,20 @@ def api_plan_overrides_save():
 
     if not phase or not month_key or not field:
         return jsonify({'error': 'phase, month_key, and field required'}), 400
-    if 'plan_overrides' not in data:
-        data['plan_overrides'] = {}
-    if phase not in data['plan_overrides']:
-        data['plan_overrides'][phase] = {}
-    if month_key not in data['plan_overrides'][phase]:
-        data['plan_overrides'][phase][month_key] = {}
-    if value is None or value == '':
-        data['plan_overrides'][phase][month_key].pop(field, None)
+
+    # Convert to float
+    if value is not None and value != '':
+        try:
+            value = float(value)
+        except (ValueError, TypeError):
+            return jsonify({'error': 'value must be numeric'}), 400
     else:
-        data['plan_overrides'][phase][month_key][field] = float(value)
-    save_plan_overrides(data)
-    return jsonify({'ok': True, 'data': data})
+        value = None
+
+    # Write to DB directly
+    db.set_override('plan', phase, f"{month_key}.{field}", value)
+
+    return jsonify({'ok': True})
 
 
 @app.route('/api/position-overrides', methods=['POST'])
@@ -2986,14 +3024,7 @@ def api_position_overrides_save():
     position = body.get('position')
     if not name:
         return jsonify({'error': 'name required'}), 400
-    data = load_plan_overrides()
-    if 'position_overrides' not in data:
-        data['position_overrides'] = {}
-    if not position:
-        data['position_overrides'].pop(name, None)
-    else:
-        data['position_overrides'][name] = position
-    save_plan_overrides(data)
+    db.set_override('position', '', name, position if position else None)
     return jsonify({'ok': True})
 
 
@@ -3037,6 +3068,7 @@ def api_storage_info():
         'persist_dir_writable': os.access(PERSIST_DIR, os.W_OK),
         'data_path_env': os.environ.get('DATA_PATH'),
         'files': [],
+        'db_stats': db.get_stats(),
     }
     if info['persist_dir_exists']:
         for f in os.listdir(PERSIST_DIR):
@@ -3047,28 +3079,17 @@ def api_storage_info():
                     'size_bytes': os.path.getsize(full),
                     'modified': datetime.fromtimestamp(os.path.getmtime(full)).isoformat(),
                 })
-    info['plan_overrides_count'] = sum(
-        len(v) if isinstance(v, dict) else 0
-        for v in load_plan_overrides().get('plan_overrides', {}).values()
-    )
-    info['travel_records_count'] = len(load_travel())
     return jsonify(info)
-def api_position_overrides_save():
-    """Manual position override for an employee (when Odoo doesn't have it)"""
-    body = request.json or {}
-    name = body.get('name')
-    position = body.get('position')
-    if not name:
-        return jsonify({'error': 'name required'}), 400
-    data = load_plan_overrides()
-    if 'position_overrides' not in data:
-        data['position_overrides'] = {}
-    if not position:
-        data['position_overrides'].pop(name, None)
-    else:
-        data['position_overrides'][name] = position
-    save_plan_overrides(data)
-    return jsonify({'ok': True})
+
+
+@app.route('/api/db/audit')
+def api_db_audit():
+    """Get recent changes for debugging"""
+    limit = int(request.args.get('limit', 50))
+    return jsonify({
+        'recent_changes': db.get_recent_audit(limit=limit),
+    })
+
 
 
 @app.route('/api/project-employees')
@@ -3480,24 +3501,18 @@ def fill_current_effort_from_odoo(xlsx_path):
     logger.info(f"Saved updated workbook to {xlsx_path}")
 
 # ============================================================
-# TRAVEL & ONSITE — manual entries stored in JSON
+# TRAVEL & ONSITE — stored in DB
 # ============================================================
 def load_travel():
-    if not os.path.exists(TRAVEL_FILE):
-        return []
-    try:
-        import json
-        with open(TRAVEL_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception as e:
-        logger.error(f"load_travel: {e}")
-        return []
+    return db.list_travel()
+
 
 def save_travel(records):
-    import json
-    os.makedirs(os.path.dirname(TRAVEL_FILE), exist_ok=True)
-    with open(TRAVEL_FILE, 'w', encoding='utf-8') as f:
-        json.dump(records, f, indent=2, ensure_ascii=False)
+    """Bulk save (used by restore endpoint)."""
+    if isinstance(records, list):
+        for r in records:
+            if isinstance(r, dict) and r.get('id') is not None:
+                db.upsert_travel(str(r['id']), r)
 
 @app.route('/api/travel', methods=['GET'])
 def api_travel_list():
@@ -3527,7 +3542,7 @@ def api_travel_list():
 def api_travel_add():
     body = request.json or {}
     records = load_travel()
-    new_id = max([r.get('id', 0) for r in records], default=0) + 1
+    new_id = max([int(r.get('id', 0)) for r in records if str(r.get('id', '')).isdigit()], default=0) + 1
     record = {
         'id': new_id,
         'name': body.get('name', '').strip(),
@@ -3539,8 +3554,7 @@ def api_travel_add():
     }
     if not record['name'] or not record['start_date']:
         return jsonify({'error': 'name and start_date required'}), 400
-    records.append(record)
-    save_travel(records)
+    db.upsert_travel(str(new_id), record)
     return jsonify({'ok': True, 'record': record})
 
 @app.route('/api/travel/<int:rec_id>', methods=['PUT'])
@@ -3548,19 +3562,17 @@ def api_travel_update(rec_id):
     body = request.json or {}
     records = load_travel()
     for r in records:
-        if r.get('id') == rec_id:
+        if int(r.get('id', 0)) == rec_id:
             for k in ['name', 'position', 'start_date', 'end_date', 'notes']:
                 if k in body:
                     r[k] = body[k] or None if k == 'end_date' else body[k]
-            save_travel(records)
+            db.upsert_travel(str(rec_id), r)
             return jsonify({'ok': True, 'record': r})
     return jsonify({'error': 'not found'}), 404
 
 @app.route('/api/travel/<int:rec_id>', methods=['DELETE'])
 def api_travel_delete(rec_id):
-    records = load_travel()
-    new_recs = [r for r in records if r.get('id') != rec_id]
-    save_travel(new_recs)
+    db.delete_travel(str(rec_id))
     return jsonify({'ok': True})
 
 
