@@ -1615,6 +1615,57 @@ th[data-sort-key]:hover {
   align-items: center;
 }
 
+/* Excel-style Current Effort table */
+.eff-table-scroll {
+  max-height: 70vh;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.eff-table {
+  font-size: 12px;
+  border-collapse: collapse;
+}
+.eff-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--navy);
+  color: white;
+  border-bottom: 2px solid #0F1B36;
+  padding: 6px 8px;
+  text-align: center;
+  font-weight: 600;
+  font-size: 11px;
+  z-index: 2;
+}
+.eff-row-month th {
+  background: var(--navy);
+  border-bottom: 1px solid rgba(255,255,255,0.2) !important;
+}
+.eff-row-subhead th {
+  top: 38px !important;
+  background: #2A3F66 !important;
+  font-size: 9px !important;
+  padding: 4px 6px !important;
+}
+.eff-month-head {
+  background: linear-gradient(180deg, #1B2A4E, #2A3F66) !important;
+  font-size: 11px !important;
+}
+.eff-table tbody td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  font-size: 11px;
+}
+.eff-table tbody tr:hover td {
+  background: #F9FAFB;
+}
+.eff-table tbody td.num {
+  text-align: right;
+  font-family: var(--mono);
+}
+
 /* ============ TEAM MODAL - COMPLETE REDESIGN ============ */
 /* Override the default risk-modal-body flex-column layout for team modal */
 .team-modal-content {
