@@ -420,64 +420,36 @@ function applyPlanOverrides(phaseKey) {
 }
 
 function renderEffort(data, phaseKey) {
-  // Container with placeholder; we fetch live data after render
   const containerId = `effort-live-${phaseKey}`;
-  const monthSelectId = `effort-month-${phaseKey}`;
-  const yearSelectId = `effort-year-${phaseKey}`;
-
-  // Default: April 2026
-  const today = new Date();
-  let defaultYear = 2026;
-  let defaultMonth = 4;
-
-  // Build month options (April → today's month)
-  const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
   let html = `
     <div class="card">
-      <div style="display: flex; gap: 12px; align-items: flex-end; margin-bottom: 16px; flex-wrap: wrap;">
-        <div class="filter-group">
-          <label class="filter-label">YEAR</label>
-          <select id="${yearSelectId}" class="search-input" style="width: 100px;">
-            <option value="2026">2026</option>
-            <option value="2025">2025</option>
-          </select>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+        <div>
+          <h3 style="margin: 0; font-size: 14px;">Current Effort — Excel Style</h3>
+          <span class="muted-text" style="font-size: 11px;">Live from Odoo · Starting from first month with logs · Regular / Ramadan / Overtime split per country rules</span>
         </div>
-        <div class="filter-group">
-          <label class="filter-label">MONTH</label>
-          <select id="${monthSelectId}" class="search-input" style="width: 160px;">
-            ${months.map((m, i) => `<option value="${i+1}" ${i+1 === defaultMonth ? 'selected' : ''}>${m}</option>`).join('')}
-          </select>
-        </div>
-        <button class="btn-primary" id="effort-reload-${phaseKey}">Refresh from Odoo</button>
-        <span class="muted-text" style="margin-left: auto;">
-          📡 Live from Odoo timesheets · Computed using country-aware Ramadan + weekend rules
-        </span>
+        <button class="btn-primary" id="effort-reload-${phaseKey}">↻ Refresh from Odoo</button>
       </div>
       <div id="${containerId}"><div class="loading">Loading from Odoo…</div></div>
     </div>
   `;
 
-  // After insertion, attach event listeners and load data
   setTimeout(() => {
-    const reload = () => loadEffortLive(phaseKey, containerId, yearSelectId, monthSelectId);
+    const reload = () => loadEffortLive(phaseKey, containerId);
     document.getElementById(`effort-reload-${phaseKey}`).addEventListener('click', reload);
-    document.getElementById(yearSelectId).addEventListener('change', reload);
-    document.getElementById(monthSelectId).addEventListener('change', reload);
     reload();
   }, 50);
 
   return html;
 }
 
-async function loadEffortLive(phaseKey, containerId, yearSelectId, monthSelectId) {
-  const year = document.getElementById(yearSelectId).value;
-  const month = document.getElementById(monthSelectId).value;
+async function loadEffortLive(phaseKey, containerId) {
   const cont = document.getElementById(containerId);
-  cont.innerHTML = '<div class="loading">Loading from Odoo…</div>';
+  cont.innerHTML = '<div class="loading">Loading from Odoo (this may take a moment)…</div>';
 
   try {
-    const res = await fetch(`/api/effort/${phaseKey}?year=${year}&month=${month}`);
+    const res = await fetch(`/api/effort/${phaseKey}/all-months`);
     const d = await res.json();
 
     if (d.error) {
@@ -485,125 +457,125 @@ async function loadEffortLive(phaseKey, containerId, yearSelectId, monthSelectId
       return;
     }
 
-    if (!d.team || !d.team.length) {
-      cont.innerHTML = `<div class="loading">No timesheet entries found for ${d.month_label || 'this month'}</div>`;
+    if (!d.employees || !d.employees.length) {
+      cont.innerHTML = `<div class="loading">No timesheet entries found for this phase</div>`;
       return;
     }
 
-    // Build positions dropdown options for inline override
-    const positions = AppState.positions || [];
-    const posOptions = positions.map(p => `<option value="${p.name}">${p.name}</option>`).join('');
+    const months = d.months || [];
 
-    let totalReg = 0, totalRam = 0, totalOT = 0, totalMD = 0;
+    // Build column headers: # | Name | Position | Hour Rate | Overtime | [month1: 3 cols] | [month2: 3 cols] ...
+    let monthHeaders1 = '';  // top row - month names spanning 3 cols
+    let monthHeaders2 = '';  // bottom row - Reg/Ram/OT labels
+    months.forEach(m => {
+      monthHeaders1 += `<th colspan="3" class="num eff-month-head" style="border-left: 2px solid var(--border-strong);">${m.label}</th>`;
+      monthHeaders2 += `
+        <th class="num" style="border-left: 2px solid var(--border-strong); font-size: 9px;">Regular<br>(MH)</th>
+        <th class="num" style="font-size: 9px;">Ramadan<br>Hours</th>
+        <th class="num" style="font-size: 9px;">Overtime<br>(MH)</th>
+      `;
+    });
+
     let html = `
-      <div class="banner banner-info" style="margin-bottom: 12px;">
-        <strong>${d.month_label}</strong> · ${d.team.length} team members ·
-        Country detected from Odoo employee code (E=EGY, R=KSA, T=TUN) ·
-        Onsite days from Travel records
+      <div class="banner banner-info" style="margin-bottom: 12px; font-size: 12px;">
+        <strong>${d.total_employees} team members</strong> · 
+        Showing <strong>${months.length} month${months.length !== 1 ? 's' : ''}</strong>
+        (from <strong>${months[0]?.label || '—'}</strong> to <strong>${months[months.length-1]?.label || '—'}</strong>) ·
+        Rates from Odoo (SAR÷3.75) with DB fallback · Overtime = Hour Rate × 1.5
       </div>
-      <div class="table-scroll">
-        <table class="data-table">
+      <div class="table-scroll eff-table-scroll">
+        <table class="data-table eff-table">
           <thead>
-            <tr>
-              <th>Name</th>
-              <th>Country</th>
-              <th>Resolved Position</th>
-              <th class="num">Onsite Days</th>
-              <th class="num">Regular MH</th>
-              <th class="num">Ramadan MH</th>
-              <th class="num">Overtime MH</th>
-              <th class="num">Total Hours</th>
-              <th class="num">MDs</th>
-              <th class="num">Eff. Rate ($)</th>
+            <tr class="eff-row-month">
+              <th rowspan="2" style="position: sticky; left: 0; background: var(--navy); color: white; z-index: 3;">#</th>
+              <th rowspan="2" style="position: sticky; left: 40px; background: var(--navy); color: white; z-index: 3;">Name</th>
+              <th rowspan="2" style="position: sticky; background: var(--navy); color: white; z-index: 3;">Position</th>
+              <th rowspan="2" class="num">Hour Rate ($)</th>
+              <th rowspan="2" class="num">Overtime Rate</th>
+              ${monthHeaders1}
+              <th rowspan="2" class="num" style="border-left: 2px solid var(--border-strong);">Total<br>Cost ($)</th>
+              <th rowspan="2" class="num">Current<br>MDs done</th>
+            </tr>
+            <tr class="eff-row-subhead">
+              ${monthHeaders2}
             </tr>
           </thead>
           <tbody>
     `;
-    d.team.forEach(m => {
-      totalReg += m.regular_mh || 0;
-      totalRam += m.ramadan_mh || 0;
-      totalOT += m.overtime_mh || 0;
-      totalMD += m.mds || 0;
 
-      // Position display: show resolved position with badges
-      let posBadges = '';
-      if (!m.has_base_rate && m.country !== 'TUN') {
-        posBadges += ' <span class="badge badge-amber" style="font-size: 9px;">no base rate</span>';
+    let grandTotalCost = 0;
+    let grandTotalHours = 0;
+    let grandTotalMDs = 0;
+
+    d.employees.forEach((emp, idx) => {
+      grandTotalCost += emp.total_cost_usd || 0;
+      grandTotalHours += emp.total_hours || 0;
+      grandTotalMDs += emp.current_mds || 0;
+
+      // Country color
+      const countryColor = emp.country === 'KSA' ? '#10B981'
+                         : emp.country === 'TUN' ? '#F59E0B'
+                         : '#3B82F6';
+
+      // Onsite badge
+      const onsiteBadge = emp.is_onsite
+        ? '<span class="badge badge-amber" style="font-size: 9px; margin-left: 4px;">ONSITE</span>'
+        : '';
+
+      // Rate source badge
+      let sourceBadge = '';
+      if (emp.rate_source === 'odoo') {
+        sourceBadge = '<span class="badge" style="font-size: 9px; background: #d1fae5; color: #065f46;">Odoo</span>';
+      } else if (emp.rate_source && emp.rate_source.includes('onsite')) {
+        sourceBadge = '<span class="badge" style="font-size: 9px; background: #fef3c7; color: #92400e;">Onsite DB</span>';
+      } else if (emp.rate_source) {
+        sourceBadge = '<span class="badge" style="font-size: 9px; background: #e0e7ff; color: #3730a3;">DB</span>';
       }
-      if (m.onsite_days > 0 && !m.has_onsite_rate && m.country !== 'TUN') {
-        posBadges += ' <span class="badge badge-amber" style="font-size: 9px;">no onsite rate</span>';
-      }
-      // Allow manually overriding the position by selecting from positions list
-      const selectedRole = m.odoo_role || '';
-      const allPositionNames = positions.map(p => p.name).filter(n => !n.endsWith(' - onsite'));
-      const overrideOptions = allPositionNames.map(p => {
-        // Strip country prefix to show just the role
-        const cleanRole = p.replace(/^(EGY|KSA|TUN)\s*-\s*/, '').replace(/\s*-\s*onsite\s*$/, '');
-        return `<option value="${cleanRole}" ${cleanRole === selectedRole ? 'selected' : ''}>${cleanRole}</option>`;
-      }).filter((v, i, a) => a.indexOf(v) === i);
 
-      const posDisplay = `
-        <div style="display: flex; flex-direction: column; gap: 4px;">
-          <span style="font-size: 11px;" dir="auto">
-            ${m.position || '<i class="muted-text">— no position —</i>'}${posBadges}
-          </span>
-          <select class="position-override" data-emp="${encodeURIComponent(m.name)}" style="font-size: 10px; padding: 2px 4px; max-width: 220px; ${m.has_base_rate ? 'border-color: var(--green); background: var(--green-light);' : ''}">
-            <option value="">— change role —</option>
-            ${overrideOptions.join('')}
-          </select>
-        </div>`;
-
-      const onsiteCell = m.onsite_days > 0
-        ? `<b style="color: var(--amber);">${m.onsite_days}</b><span class="muted-text" style="font-size: 10px;"> d</span>`
-        : `<span class="muted-text">—</span>`;
-      const rateCell = m.effective_hour_rate
-        ? `$${fmt.decimal(m.effective_hour_rate)}${m.onsite_hours > 0 && m.has_onsite_rate ? '<span class="muted-text" style="font-size: 9px;"> blend</span>' : ''}`
-        : `<span class="muted-text">—</span>`;
-      const countryColor = m.country === 'KSA' ? '#10B981' : m.country === 'TUN' ? '#F59E0B' : '#3B82F6';
+      // Build month cells
+      let monthCells = '';
+      months.forEach(m => {
+        const cell = emp.months[m.key] || { regular: 0, ramadan: 0, overtime: 0 };
+        monthCells += `
+          <td class="num" style="border-left: 2px solid var(--border-strong);">${cell.regular > 0 ? fmt.decimal(cell.regular) : '<span class="muted-text">—</span>'}</td>
+          <td class="num" style="color: ${cell.ramadan > 0 ? 'var(--amber)' : 'var(--text-muted)'};">${cell.ramadan > 0 ? fmt.decimal(cell.ramadan) : '—'}</td>
+          <td class="num" style="color: ${cell.overtime > 0 ? 'var(--red)' : 'var(--text-muted)'};">${cell.overtime > 0 ? fmt.decimal(cell.overtime) : '—'}</td>
+        `;
+      });
 
       html += `
         <tr>
-          <td><b>${m.name}</b><br><span class="muted-text" style="font-size: 10px;">${m.odoo_role || ''}</span></td>
-          <td><span class="team-pill" style="font-size: 10px; background: ${countryColor}20; color: ${countryColor}; border-color: ${countryColor};">${m.country}</span></td>
-          <td>${posDisplay}</td>
-          <td class="num">${onsiteCell}</td>
-          <td class="num">${fmt.decimal(m.regular_mh)}</td>
-          <td class="num" style="color: ${m.ramadan_mh > 0 ? 'var(--amber)' : 'var(--text-muted)'};">${m.ramadan_mh > 0 ? fmt.decimal(m.ramadan_mh) : '—'}</td>
-          <td class="num" style="color: ${m.overtime_mh > 0 ? 'var(--red)' : 'var(--text-muted)'};">${m.overtime_mh > 0 ? fmt.decimal(m.overtime_mh) : '—'}</td>
-          <td class="num"><b>${fmt.decimal(m.total_hours)}</b></td>
-          <td class="num"><b style="color: var(--blue);">${fmt.decimal(m.mds)}</b></td>
-          <td class="num">${rateCell}</td>
+          <td style="position: sticky; left: 0; background: white; z-index: 2; font-weight: 600;">${idx + 1}</td>
+          <td style="position: sticky; left: 40px; background: white; z-index: 2;">
+            <b>${emp.name}</b>${onsiteBadge}<br>
+            <span class="muted-text" style="font-size: 10px;">${emp.code} · <span style="color: ${countryColor};">${emp.country}</span></span>
+          </td>
+          <td style="position: sticky; background: white; z-index: 2; font-size: 11px;">${emp.position}${sourceBadge ? ' ' + sourceBadge : ''}</td>
+          <td class="num"><b>${emp.hour_rate ? '$' + fmt.decimal(emp.hour_rate) : '<span style="color: var(--red);">—</span>'}</b></td>
+          <td class="num">${emp.overtime_rate ? '$' + fmt.decimal(emp.overtime_rate) : '—'}</td>
+          ${monthCells}
+          <td class="num" style="border-left: 2px solid var(--border-strong);"><b style="color: var(--blue);">$${fmt.num(Math.round(emp.total_cost_usd))}</b></td>
+          <td class="num"><b>${fmt.decimal(emp.current_mds)}</b></td>
         </tr>
       `;
     });
+
+    // Totals row
     html += `
-        <tr style="background: var(--bg-subtle); font-weight: 700;">
-          <td colspan="3"><b>TOTAL</b></td>
-          <td class="num">—</td>
-          <td class="num">${fmt.decimal(totalReg)}</td>
-          <td class="num">${fmt.decimal(totalRam)}</td>
-          <td class="num">${fmt.decimal(totalOT)}</td>
-          <td class="num">${fmt.decimal(totalReg + totalRam + totalOT)}</td>
-          <td class="num"><b style="color: var(--blue);">${fmt.decimal(totalMD)}</b></td>
-          <td class="num">—</td>
-        </tr>
+      <tr style="background: var(--bg-subtle); font-weight: 700;">
+        <td colspan="2" style="position: sticky; left: 0; background: var(--bg-subtle); z-index: 2;">TOTAL</td>
+        <td colspan="3" style="position: sticky; background: var(--bg-subtle); z-index: 2;">${d.total_employees} employees</td>
+    `;
+    months.forEach(() => {
+      html += `<td colspan="3" class="num" style="border-left: 2px solid var(--border-strong);">—</td>`;
+    });
+    html += `
+        <td class="num" style="border-left: 2px solid var(--border-strong);"><b style="color: var(--blue);">$${fmt.num(Math.round(grandTotalCost))}</b></td>
+        <td class="num"><b style="color: var(--blue);">${fmt.decimal(grandTotalMDs)}</b></td>
+      </tr>
       </tbody></table></div>
     `;
     cont.innerHTML = html;
-
-    // Wire position overrides
-    cont.querySelectorAll('.position-override').forEach(sel => {
-      sel.addEventListener('change', async () => {
-        const name = decodeURIComponent(sel.dataset.emp);
-        const position = sel.value;
-        await fetch('/api/position-overrides', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, position })
-        });
-        loadEffortLive(phaseKey, containerId, yearSelectId, monthSelectId);
-      });
-    });
   } catch (err) {
     cont.innerHTML = `<div class="banner banner-warn"><strong>Error:</strong> ${err.message}</div>`;
   }
