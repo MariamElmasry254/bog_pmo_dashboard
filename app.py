@@ -2540,8 +2540,8 @@ def get_country_from_employee_name(name):
     if not name:
         return 'EGY'
     import re
-    # Match [X###] or [X##] at the start
-    m = re.match(r'^\s*\[([A-Z])(\d+)\]', str(name).strip())
+    # Match [X###] or [X## ] at the start (allow optional trailing space inside brackets)
+    m = re.match(r'^\s*\[([A-Z])(\d+)\s*\]', str(name).strip())
     if m:
         letter = m.group(1).upper()
         if letter == 'E':
@@ -2851,7 +2851,7 @@ def find_tunis_rate(emp_name, tunis_rates):
         return None
     # Strip [code] prefix
     import re
-    clean = re.sub(r'^\s*\[[A-Z]\d+\]\s*', '', str(emp_name)).strip().lower()
+    clean = re.sub(r'^\s*\[[A-Z]\d+\s*\]\s*', '', str(emp_name)).strip().lower()
     # Direct match
     if clean in tunis_rates:
         return tunis_rates[clean]
@@ -2880,7 +2880,7 @@ def get_odoo_position_for_employee(employee_name):
             return None
 
     import re
-    clean_name = re.sub(r'^\s*\[[A-Z]\d+\]\s*', '', employee_name).strip()
+    clean_name = re.sub(r'^\s*\[[A-Z]\d+\s*\]\s*', '', employee_name).strip()
     candidates = [clean_name, employee_name]
 
     try:
@@ -2936,7 +2936,7 @@ def get_odoo_rate_for_employee(employee_name):
     # IMPORTANT: Odoo stores names WITHOUT the [E123] prefix that appears in timesheets!
     # E.g. timesheet shows "[E102] AbdelRahman Doghish" but hr.employee.name = "AbdelRahman Doghish"
     import re
-    clean_name = re.sub(r'^\s*\[[A-Z]\d+\]\s*', '', employee_name).strip()
+    clean_name = re.sub(r'^\s*\[[A-Z]\d+\s*\]\s*', '', employee_name).strip()
     # Try both - exact match on cleaned, then ilike on cleaned, then ilike on raw
     candidates = [clean_name, employee_name]
 
@@ -3081,7 +3081,7 @@ def batch_fetch_employees_from_odoo(employee_names):
     for n in employee_names:
         if not n:
             continue
-        clean = re.sub(r'^\s*\[[A-Z]\d+\]\s*', '', n).strip()
+        clean = re.sub(r'^\s*\[[A-Z]\d+\s*\]\s*', '', n).strip()
         if clean:
             cleaned_to_originals.setdefault(clean, []).append(n)
 
@@ -3590,9 +3590,9 @@ def api_effort_all_months(phase_key):
                 total_cost += c['overtime'] * overtime_rate
 
         import re
-        emp_code_match = re.match(r'^\[([A-Z]\d+)\]', emp_name)
+        emp_code_match = re.match(r'^\[([A-Z]\d+)\s*\]', emp_name)
         emp_code = emp_code_match.group(1) if emp_code_match else ''
-        emp_display = re.sub(r'^\[[A-Z]\d+\]\s*', '', emp_name).strip()
+        emp_display = re.sub(r'^\[[A-Z]\d+\s*\]\s*', '', emp_name).strip()
 
         employees_out.append({
             'name': emp_display,
