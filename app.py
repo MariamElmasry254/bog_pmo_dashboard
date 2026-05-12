@@ -3364,25 +3364,36 @@ def api_effort_all_months(phase_key):
         )
         phase_ids = [p['id'] for p in phases]
 
-        # Get parent tasks
-        parent_tasks = odoo.models.execute_kw(
+        # Get ALL tasks in this project that have phase_id in our phases
+        # (not just parent tasks — some phases have tasks at any level)
+        phase_tasks = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'project.task', 'search_read',
             [[('phase_id', 'in', phase_ids), ('project_id', '=', project_id)]],
             {'fields': ['id', 'child_ids'], 'limit': 5000}
         )
-        parent_ids = {t['id'] for t in parent_tasks}
+        parent_ids = {t['id'] for t in phase_tasks}
 
         # All project tasks → walk parents to find descendants of phase tasks
         all_proj_tasks = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'project.task', 'search_read',
             [[('project_id', '=', project_id)]],
-            {'fields': ['id', 'parent_id'], 'limit': 10000}
+            {'fields': ['id', 'parent_id', 'phase_id'], 'limit': 10000}
         )
         task_map = {t['id']: t for t in all_proj_tasks}
         relevant_ids = set(parent_ids)
+
+        # Also include any task whose phase_id is in our phases directly
         for t in all_proj_tasks:
+            ph = t.get('phase_id')
+            if ph and isinstance(ph, list) and ph[0] in phase_ids:
+                relevant_ids.add(t['id'])
+
+        # Walk parent chains to include sub-tasks of phase tasks
+        for t in all_proj_tasks:
+            if t['id'] in relevant_ids:
+                continue
             cur = t
             visited = set()
             while cur and cur['id'] not in visited:
@@ -3578,8 +3589,6 @@ def api_effort_all_months(phase_key):
         return round(base + ot, 2)
 
     _all_positions = get_all_positions(db)
-
-    # Load promotions once
     all_promotions = load_promotions()
 
     # For each employee: segment hours by (position, is_onsite) per day
@@ -3593,10 +3602,10 @@ def api_effort_all_months(phase_key):
         emp_display = _re_effort.sub(r'^\[[A-Z]\d+\s*\]\s*', '', emp_name).strip()
 
         odoo_info = odoo_data.get(emp_name, {})
-        odoo_pos = odoo_info.get('position')  # current position in Odoo
+        odoo_pos = odoo_info.get('position')
         sar_rate = odoo_info.get('sar_rate', 0)
 
-        # ── Travel periods for this employee ──
+        # ── Travel periods ──
         emp_travel_periods = []
         for tr in travel_records:
             if not tr.get('name') or not tr.get('start_date'):
@@ -3606,7 +3615,7 @@ def api_effort_all_months(phase_key):
             if tn == en_clean or tn in en_clean or en_clean in tn:
                 emp_travel_periods.append({'start': tr['start_date'], 'end': tr.get('end_date')})
 
-        # ── Promotion records for this employee ──
+        # ── Promotion records ──
         emp_promos = []
         for pr in all_promotions:
             pn = (pr.get('name') or '').strip().lower()
@@ -3621,39 +3630,28 @@ def api_effort_all_months(phase_key):
                 if period['end'] is None or date_str <= period['end']: return True
             return False
 
-        def _position_on_date(date_str):
-            """Return (base_position, onsite_position) active on date_str."""
-            # Start with current Odoo position
+        def _base_position_on_date(date_str):
+            """Return base position (without country prefix) active on date_str."""
             pos = odoo_pos or ''
-            # Walk promotions backwards to find what position was active
             if emp_promos:
-                # Before first promotion → use old_position from first promo
                 if date_str < emp_promos[0]['promotion_date']:
                     pos = emp_promos[0].get('old_position') or odoo_pos or ''
                 else:
-                    # Find last promotion that happened before or on date_str
                     for promo in reversed(emp_promos):
                         if date_str >= promo['promotion_date']:
                             pos = promo.get('new_position') or odoo_pos or ''
                             break
+            return pos
 
-            if country == 'TUN':
-                return f"TUN - {odoo_info.get('odoo_name', emp_name)}", None
-            base = f"{country} - {pos}" if pos else None
-            onsite = _resolve_onsite_position(pos, country) if pos else None
-            return base, onsite
-
-        def _get_rate_for_position(base_pos, is_onsite):
-            """Get hour_rate and overtime_rate for a given position."""
+        def _get_rate_for_pos(base_pos_with_country, is_onsite):
             hour_rate = None; rate_source = None
             if country == 'TUN':
                 tunis = get_tunis_rate_by_name(db, emp_name)
                 if tunis:
                     hour_rate = tunis['hour_rate']; rate_source = 'tunis_rates_db'
             elif is_onsite:
-                onsite_pos = _resolve_onsite_position(
-                    base_pos.replace(f'{country} - ', '') if base_pos else '', country
-                )
+                raw_pos = (base_pos_with_country or '').replace(f'{country} - ', '')
+                onsite_pos = _resolve_onsite_position(raw_pos, country)
                 if onsite_pos:
                     pi = get_position_by_name(db, onsite_pos)
                     if pi and pi.get('hour_rate'):
@@ -3661,24 +3659,23 @@ def api_effort_all_months(phase_key):
                 if hour_rate is None and sar_rate and sar_rate > 0:
                     hour_rate = round(sar_rate / SAR_TO_USD, 2); rate_source = 'odoo_fallback'
             else:
-                if sar_rate and sar_rate > 0 and not emp_promos:
-                    # Only use Odoo rate if no promotions (Odoo = current rate only)
-                    hour_rate = round(sar_rate / SAR_TO_USD, 2); rate_source = 'odoo'
-                if hour_rate is None and base_pos:
-                    pi = get_position_by_name(db, base_pos)
+                # If promotions exist, must use DB (Odoo rate = current only)
+                if emp_promos and base_pos_with_country:
+                    pi = get_position_by_name(db, base_pos_with_country)
                     if pi and pi.get('hour_rate'):
                         hour_rate = pi['hour_rate']; rate_source = 'positions_db'
-                # Fallback to Odoo if still None
                 if hour_rate is None and sar_rate and sar_rate > 0:
                     hour_rate = round(sar_rate / SAR_TO_USD, 2); rate_source = 'odoo'
+                if hour_rate is None and base_pos_with_country:
+                    pi = get_position_by_name(db, base_pos_with_country)
+                    if pi and pi.get('hour_rate'):
+                        hour_rate = pi['hour_rate']; rate_source = 'positions_db'
             overtime_rate = round(hour_rate * OVERTIME_MULTIPLIER, 2) if hour_rate else None
             return hour_rate, overtime_rate, rate_source
 
         # ── Per-month segmentation ──
-        # segment_data: { (base_pos, is_onsite): {month_key: {reg, ram, ot}} }
-        from collections import defaultdict as _dd
-        segment_data = _dd(lambda: _dd(lambda: {'regular': 0.0, 'ramadan': 0.0, 'overtime': 0.0}))
-
+        from collections import defaultdict as _dd2
+        segment_data = _dd2(lambda: _dd2(lambda: {'regular': 0.0, 'ramadan': 0.0, 'overtime': 0.0}))
         weekend = TUNIS_WEEKEND if country == 'TUN' else WEEKEND_DAYS
 
         for m in months:
@@ -3688,26 +3685,25 @@ def api_effort_all_months(phase_key):
             if total_cell == 0:
                 continue
 
-            # Count working days per segment in this month
-            seg_counts = _dd(int)  # (base_pos, is_onsite) → working day count
+            seg_counts = _dd2(int)
             days_in_month = _cal.monthrange(m['year'], m['month'])[1]
             for day in range(1, days_in_month + 1):
                 try: d_obj = _date_cls2(m['year'], m['month'], day)
                 except: continue
                 if d_obj.weekday() in weekend: continue
                 d_str = f"{m['year']:04d}-{m['month']:02d}-{day:02d}"
-                base_p, _ = _position_on_date(d_str)
+                raw_pos = _base_position_on_date(d_str)
+                base_p = f"{country} - {raw_pos}" if raw_pos else None
                 is_on = _date_is_onsite(d_str)
                 seg_counts[(base_p, is_on)] += 1
 
             total_working = sum(seg_counts.values())
             if total_working == 0:
-                # fallback: assign all to current position, not onsite
-                base_p, _ = _position_on_date(mkey + '-15')
+                raw_pos = _base_position_on_date(mkey + '-15')
+                base_p = f"{country} - {raw_pos}" if raw_pos else None
                 seg_counts[(base_p, False)] = 1
                 total_working = 1
 
-            # Distribute hours proportionally
             for (base_p, is_on), cnt in seg_counts.items():
                 ratio = cnt / total_working
                 segment_data[(base_p, is_on)][mkey]['regular']  += cell['regular']  * ratio
@@ -3716,13 +3712,12 @@ def api_effort_all_months(phase_key):
 
         # ── Build one row per segment ──
         if not segment_data:
-            # No hours logged at all
             base_p = f"{country} - {odoo_pos}" if odoo_pos else '—'
-            hr, ot_r, src = _get_rate_for_position(base_p, False)
+            hr, ot_r, src = _get_rate_for_pos(base_p, False)
             employees_out.append({
                 'name': emp_display, 'full_name': emp_name, 'code': emp_code, 'country': country,
-                'position': base_p, 'hour_rate': hr, 'overtime_rate': ot_r,
-                'rate_source': src, 'sar_rate': sar_rate, 'is_onsite': False,
+                'position': base_p, 'hour_rate': hr, 'overtime_rate': ot_r, 'rate_source': src,
+                'sar_rate': sar_rate, 'is_onsite': False,
                 'months': {m['key']: {'regular':0,'ramadan':0,'overtime':0,'total':0} for m in months},
                 'total_hours': 0, 'total_cost_usd': 0, 'current_mds': 0,
             })
@@ -3738,28 +3733,27 @@ def api_effort_all_months(phase_key):
                     'overtime': round(c['overtime'], 2),
                     'total':    round(c['regular'] + c['ramadan'] + c['overtime'], 2),
                 }
-
             seg_reg = sum(v['regular']  for v in full_months.values())
             seg_ram = sum(v['ramadan']  for v in full_months.values())
             seg_ot  = sum(v['overtime'] for v in full_months.values())
             if seg_reg + seg_ram + seg_ot < 0.01:
-                continue  # skip empty segments
+                continue
 
-            hr, ot_r, src = _get_rate_for_position(base_p, is_on)
+            hr, ot_r, src = _get_rate_for_pos(base_p, is_on)
 
-            # Label
-            label = emp_display
+            # Display position
             if is_on:
-                label += ' — Onsite'
+                raw_pos = (base_p or '').replace(f'{country} - ', '')
+                display_pos = _resolve_onsite_position(raw_pos, country) or ((base_p or '') + ' - onsite')
+            else:
+                display_pos = base_p or '—'
 
             employees_out.append({
-                'name': label,
+                'name': emp_display + (' — Onsite' if is_on else ''),
                 'full_name': emp_name,
                 'code': emp_code,
                 'country': country,
-                'position': (_resolve_onsite_position(
-                    (base_p or '').replace(f'{country} - ', ''), country
-                ) if is_on else base_p) or '—',
+                'position': display_pos,
                 'hour_rate': hr,
                 'overtime_rate': ot_r,
                 'rate_source': src,
@@ -3771,7 +3765,7 @@ def api_effort_all_months(phase_key):
                 'current_mds': _calc_mds(seg_reg, seg_ram, seg_ot),
             })
 
-    # Sort: by display name, then onsite last
+    # Sort: name alpha, onsite after regular
     employees_out.sort(key=lambda x: (
         x['name'].lower().replace(' — onsite', ''),
         1 if x.get('is_onsite') else 0
@@ -4389,19 +4383,18 @@ def api_employee_odoo_position():
     if not name:
         return jsonify({'error': 'name required'}), 400
     current_pos = get_odoo_position_for_employee(name)
-
-    # Suggest old position: strip level prefix to get one level lower
     suggested_old = None
     if current_pos:
+        import re as _rp
         p = current_pos.lower()
         if 'lead' in p:
-            suggested_old = current_pos.replace('Lead ', 'Sr ').replace('lead ', 'Sr ')
-        elif 'senior' in p or ' sr ' in p or p.startswith('sr '):
-            import re as _r
-            suggested_old = _r.sub(r'(?i)(senior\s+|sr\.?\s+)', '', current_pos).strip()
+            suggested_old = _rp.sub(r'(?i)lead\s+', 'Sr ', current_pos).strip()
+        elif 'senior' in p:
+            suggested_old = _rp.sub(r'(?i)senior\s+', '', current_pos).strip()
+        elif _rp.search(r'(?i)\bsr\.?\s+', current_pos):
+            suggested_old = _rp.sub(r'(?i)\bsr\.?\s+', '', current_pos).strip()
         else:
-            suggested_old = current_pos  # already junior
-
+            suggested_old = current_pos
     return jsonify({
         'name': name,
         'current_position': current_pos,
