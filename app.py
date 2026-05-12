@@ -3504,6 +3504,33 @@ def api_effort_all_months(phase_key):
     odoo_data = batch_fetch_employees_from_odoo(all_emp_names)
     logger.info(f"Resolved {len(odoo_data)} of {len(all_emp_names)} employees from Odoo")
 
+    # ── helper: normalize position name for fuzzy matching ──
+    def _norm_pos(s):
+        s = s.lower()
+        s = re.sub(r'\bsenior\b', 'sr', s)
+        s = re.sub(r'\bsr\.\b', 'sr', s)
+        s = re.sub(r'\bjunior\b', 'jr', s)
+        s = re.sub(r'[^a-z0-9\s]', '', s)
+        return re.sub(r'\s+', ' ', s).strip()
+
+    def _find_position_fuzzy(target_name, all_positions):
+        """Find position in catalog using fuzzy/normalized match."""
+        if not target_name:
+            return None
+        # Exact match first
+        for p in all_positions:
+            if p.get('position') == target_name:
+                return p
+        # Normalized match
+        tn = _norm_pos(target_name)
+        for p in all_positions:
+            if _norm_pos(p.get('position', '')) == tn:
+                return p
+        return None
+
+    # Pre-load all positions once for fuzzy matching
+    _all_positions = get_all_positions(db)
+
     # For each employee, lookup position + rate (with onsite check)
     # If employee has travel records overlapping logged months -> split into 2 rows
     employees_out = []
@@ -3551,17 +3578,20 @@ def api_effort_all_months(phase_key):
                 if tunis:
                     hour_rate = tunis['hour_rate']; rate_source = 'tunis_rates_db'
             elif is_onsite_row:
+                # Onsite: MUST come from positions catalog (fuzzy match)
                 if position:
-                    pos_info = get_position_by_name(db, position)
+                    pos_info = _find_position_fuzzy(position, _all_positions)
                     if pos_info and pos_info.get('hour_rate'):
                         hour_rate = pos_info['hour_rate']; rate_source = 'positions_db_onsite'
+                # Fallback to Odoo if no catalog match
                 if hour_rate is None and _sar and _sar > 0:
-                    hour_rate = round(_sar / SAR_TO_USD, 2); rate_source = 'odoo'
+                    hour_rate = round(_sar / SAR_TO_USD, 2); rate_source = 'odoo_fallback'
             else:
+                # Regular: Odoo first, then DB
                 if _sar and _sar > 0:
                     hour_rate = round(_sar / SAR_TO_USD, 2); rate_source = 'odoo'
                 if hour_rate is None and position:
-                    pos_info = get_position_by_name(db, position)
+                    pos_info = _find_position_fuzzy(position, _all_positions)
                     if pos_info and pos_info.get('hour_rate'):
                         hour_rate = pos_info['hour_rate']; rate_source = 'positions_db'
             if hour_rate:
@@ -3642,7 +3672,7 @@ def api_effort_all_months(phase_key):
                     'total': round(total_cell * on_ratio, 2),
                 }
 
-            # Row 1: Regular rate (EGY/KSA offshore)
+            # Row 1: Regular rate
             hr_reg, ot_reg, src_reg = _get_rate(base_position, False)
             total_h_reg = sum(c['total'] for c in regular_months.values())
             cost_reg = sum(
@@ -3665,11 +3695,14 @@ def api_effort_all_months(phase_key):
                     (c['regular'] + c['ramadan']) * (hr_on or 0) + c['overtime'] * (ot_on or 0)
                     for c in onsite_months.values()
                 )
-                pos_on = onsite_position or ((base_position + ' - onsite') if base_position else '—')
+                # Display the matched catalog position name for onsite row
+                matched_onsite = _find_position_fuzzy(onsite_position, _all_positions)
+                pos_on_display = matched_onsite['position'] if matched_onsite else (onsite_position or '—')
                 employees_out.append({
                     'name': emp_display + ' — Onsite', 'full_name': emp_name, 'code': emp_code,
-                    'country': country, 'position': pos_on, 'hour_rate': hr_on, 'overtime_rate': ot_on,
-                    'rate_source': src_on, 'sar_rate': sar_rate, 'is_onsite': True,
+                    'country': country, 'position': pos_on_display,
+                    'hour_rate': hr_on, 'overtime_rate': ot_on, 'rate_source': src_on,
+                    'sar_rate': sar_rate, 'is_onsite': True,
                     'months': onsite_months, 'total_hours': round(total_h_on, 2),
                     'total_cost_usd': round(cost_on, 2), 'current_mds': round(total_h_on / WORK_HOURS_PER_DAY, 2),
                 })
