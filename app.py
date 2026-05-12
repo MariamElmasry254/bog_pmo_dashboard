@@ -3505,111 +3505,174 @@ def api_effort_all_months(phase_key):
     logger.info(f"Resolved {len(odoo_data)} of {len(all_emp_names)} employees from Odoo")
 
     # For each employee, lookup position + rate (with onsite check)
+    # If employee has travel records overlapping logged months -> split into 2 rows
     employees_out = []
+    import re as _re_effort
+    import calendar as _cal
+    from datetime import date as _date_cls2
+
     for emp_name, months_data in sorted(person_data.items()):
         country = get_country_from_employee_name(emp_name)
 
-        # Is this person traveling onsite?
-        is_onsite = False
+        # Find travel periods for this employee
+        emp_travel_periods = []
         for tr in travel_records:
-            if not tr.get('name'):
+            if not tr.get('name') or not tr.get('start_date'):
                 continue
             tn = tr['name'].strip().lower()
-            en = emp_name.lower()
-            import re
-            en_clean = re.sub(r'\[[A-Z]\d+\]\s*', '', en).strip()
+            en_clean = _re_effort.sub(r'\[[A-Z]\d+\s*\]\s*', '', emp_name).strip().lower()
             if tn == en_clean or tn in en_clean or en_clean in tn:
-                is_onsite = True
-                break
+                emp_travel_periods.append({'start': tr['start_date'], 'end': tr.get('end_date')})
 
         # Get from batch result
         odoo_info = odoo_data.get(emp_name, {})
         odoo_pos = odoo_info.get('position')
         sar_rate = odoo_info.get('sar_rate', 0)
 
-        # Build position string
+        # Build position strings (base + onsite variant)
         if country == 'TUN':
-            full_position = f"TUN - {odoo_info.get('odoo_name', emp_name)}"
+            base_position = f"TUN - {odoo_info.get('odoo_name', emp_name)}"
+            onsite_position = None
         elif odoo_pos:
-            full_position = f"{country} - {odoo_pos}"
-            if is_onsite and country == 'EGY':
-                full_position = full_position + ' - onsite'
+            base_position = f"{country} - {odoo_pos}"
+            onsite_position = f"{country} - {odoo_pos} - onsite" if country == 'EGY' else None
         else:
-            full_position = None
+            base_position = None
+            onsite_position = None
 
-        # Determine rate
-        hour_rate = None
-        overtime_rate = None
-        rate_source = None
-
-        # Tunis: by name in DB
-        if country == 'TUN':
-            tunis = get_tunis_rate_by_name(db, emp_name)
-            if tunis:
-                hour_rate = tunis['hour_rate']
-                rate_source = 'tunis_rates_db'
-
-        # EGY/KSA: try Odoo first (regular), then DB
-        if hour_rate is None and sar_rate and sar_rate > 0 and not is_onsite:
-            hour_rate = round(sar_rate / SAR_TO_USD, 2)
-            rate_source = 'odoo'
-
-        # Onsite: must come from DB (Odoo doesn't have onsite rates)
-        if hour_rate is None and full_position:
-            pos_info = get_position_by_name(db, full_position)
-            if pos_info and pos_info.get('hour_rate'):
-                hour_rate = pos_info['hour_rate']
-                rate_source = 'positions_db' + ('_onsite' if is_onsite else '')
-
-        # Final fallback: if onsite but only Odoo rate exists, use that
-        if hour_rate is None and sar_rate and sar_rate > 0:
-            hour_rate = round(sar_rate / SAR_TO_USD, 2)
-            rate_source = 'odoo'
-
-        if hour_rate:
-            overtime_rate = round(hour_rate * OVERTIME_MULTIPLIER, 2)
-
-        # Build month cells
-        month_cells = {}
-        for m in months:
-            cell = months_data.get(m['key'], {'regular': 0, 'ramadan': 0, 'overtime': 0})
-            month_cells[m['key']] = {
-                'regular': round(cell['regular'], 2),
-                'ramadan': round(cell['ramadan'], 2),
-                'overtime': round(cell['overtime'], 2),
-                'total': round(cell['regular'] + cell['ramadan'] + cell['overtime'], 2),
-            }
-
-        # Totals
-        total_hours = sum(c['total'] for c in month_cells.values())
-        total_cost = 0
-        for c in month_cells.values():
-            if hour_rate:
-                total_cost += (c['regular'] + c['ramadan']) * hour_rate
-            if overtime_rate:
-                total_cost += c['overtime'] * overtime_rate
-
-        import re
-        emp_code_match = re.match(r'^\[([A-Z]\d+)\s*\]', emp_name)
+        emp_code_match = _re_effort.match(r'^\[([A-Z]\d+)\s*\]', emp_name)
         emp_code = emp_code_match.group(1) if emp_code_match else ''
-        emp_display = re.sub(r'^\[[A-Z]\d+\s*\]\s*', '', emp_name).strip()
+        emp_display = _re_effort.sub(r'^\[[A-Z]\d+\s*\]\s*', '', emp_name).strip()
 
-        employees_out.append({
-            'name': emp_display,
-            'full_name': emp_name,
-            'code': emp_code,
-            'country': country,
-            'position': full_position or '—',
-            'hour_rate': hour_rate,
-            'overtime_rate': overtime_rate,
-            'rate_source': rate_source,
-            'sar_rate': sar_rate,
-            'is_onsite': is_onsite,
-            'months': month_cells,
-            'total_hours': round(total_hours, 2),
-            'total_cost_usd': round(total_cost, 2),
-            'current_mds': round(total_hours / WORK_HOURS_PER_DAY, 2),
-        })
+        def _get_rate(position, is_onsite_row, _emp=emp_name, _country=country, _sar=sar_rate):
+            hour_rate = None; overtime_rate = None; rate_source = None
+            if _country == 'TUN':
+                tunis = get_tunis_rate_by_name(db, _emp)
+                if tunis:
+                    hour_rate = tunis['hour_rate']; rate_source = 'tunis_rates_db'
+            elif is_onsite_row:
+                if position:
+                    pos_info = get_position_by_name(db, position)
+                    if pos_info and pos_info.get('hour_rate'):
+                        hour_rate = pos_info['hour_rate']; rate_source = 'positions_db_onsite'
+                if hour_rate is None and _sar and _sar > 0:
+                    hour_rate = round(_sar / SAR_TO_USD, 2); rate_source = 'odoo'
+            else:
+                if _sar and _sar > 0:
+                    hour_rate = round(_sar / SAR_TO_USD, 2); rate_source = 'odoo'
+                if hour_rate is None and position:
+                    pos_info = get_position_by_name(db, position)
+                    if pos_info and pos_info.get('hour_rate'):
+                        hour_rate = pos_info['hour_rate']; rate_source = 'positions_db'
+            if hour_rate:
+                overtime_rate = round(hour_rate * OVERTIME_MULTIPLIER, 2)
+            return hour_rate, overtime_rate, rate_source
+
+        def _date_is_onsite(date_str, _periods=emp_travel_periods):
+            for period in _periods:
+                if date_str < period['start']: continue
+                if period['end'] is None or date_str <= period['end']: return True
+            return False
+
+        def _onsite_ratio(year_m, month_m, _country=country, _periods=emp_travel_periods):
+            weekend = TUNIS_WEEKEND if _country == 'TUN' else WEEKEND_DAYS
+            onsite_count = 0; reg_count = 0
+            for day in range(1, _cal.monthrange(year_m, month_m)[1] + 1):
+                try: d_obj = _date_cls2(year_m, month_m, day)
+                except: continue
+                if d_obj.weekday() in weekend: continue
+                d_str = f"{year_m:04d}-{month_m:02d}-{day:02d}"
+                if _date_is_onsite(d_str, _periods): onsite_count += 1
+                else: reg_count += 1
+            total = onsite_count + reg_count
+            return (onsite_count / total) if total > 0 else 0.0
+
+        has_onsite = bool(emp_travel_periods) and any(
+            _onsite_ratio(m['year'], m['month']) > 0 for m in months
+        )
+
+        if not emp_travel_periods or country == 'TUN' or not has_onsite:
+            # ── Single row (no travel split) ──
+            hour_rate, overtime_rate, rate_source = _get_rate(base_position, False)
+            month_cells = {}
+            for m in months:
+                cell = months_data.get(m['key'], {'regular': 0, 'ramadan': 0, 'overtime': 0})
+                month_cells[m['key']] = {
+                    'regular': round(cell['regular'], 2),
+                    'ramadan': round(cell['ramadan'], 2),
+                    'overtime': round(cell['overtime'], 2),
+                    'total': round(cell['regular'] + cell['ramadan'] + cell['overtime'], 2),
+                }
+            total_hours = sum(c['total'] for c in month_cells.values())
+            total_cost = sum(
+                (c['regular'] + c['ramadan']) * (hour_rate or 0) + c['overtime'] * (overtime_rate or 0)
+                for c in month_cells.values()
+            )
+            employees_out.append({
+                'name': emp_display, 'full_name': emp_name, 'code': emp_code, 'country': country,
+                'position': base_position or '—', 'hour_rate': hour_rate, 'overtime_rate': overtime_rate,
+                'rate_source': rate_source, 'sar_rate': sar_rate, 'is_onsite': False,
+                'months': month_cells, 'total_hours': round(total_hours, 2),
+                'total_cost_usd': round(total_cost, 2), 'current_mds': round(total_hours / WORK_HOURS_PER_DAY, 2),
+            })
+
+        else:
+            # ── Split into 2 rows: regular + onsite ──
+            regular_months = {}; onsite_months = {}
+            for m in months:
+                mkey = m['key']
+                cell = months_data.get(mkey, {'regular': 0, 'ramadan': 0, 'overtime': 0})
+                total_cell = cell['regular'] + cell['ramadan'] + cell['overtime']
+                if total_cell == 0:
+                    regular_months[mkey] = {'regular': 0, 'ramadan': 0, 'overtime': 0, 'total': 0}
+                    onsite_months[mkey] = {'regular': 0, 'ramadan': 0, 'overtime': 0, 'total': 0}
+                    continue
+                on_ratio = _onsite_ratio(m['year'], m['month'])
+                reg_ratio = 1.0 - on_ratio
+                regular_months[mkey] = {
+                    'regular': round(cell['regular'] * reg_ratio, 2),
+                    'ramadan': round(cell['ramadan'] * reg_ratio, 2),
+                    'overtime': round(cell['overtime'] * reg_ratio, 2),
+                    'total': round(total_cell * reg_ratio, 2),
+                }
+                onsite_months[mkey] = {
+                    'regular': round(cell['regular'] * on_ratio, 2),
+                    'ramadan': round(cell['ramadan'] * on_ratio, 2),
+                    'overtime': round(cell['overtime'] * on_ratio, 2),
+                    'total': round(total_cell * on_ratio, 2),
+                }
+
+            # Row 1: Regular rate (EGY/KSA offshore)
+            hr_reg, ot_reg, src_reg = _get_rate(base_position, False)
+            total_h_reg = sum(c['total'] for c in regular_months.values())
+            cost_reg = sum(
+                (c['regular'] + c['ramadan']) * (hr_reg or 0) + c['overtime'] * (ot_reg or 0)
+                for c in regular_months.values()
+            )
+            employees_out.append({
+                'name': emp_display, 'full_name': emp_name, 'code': emp_code, 'country': country,
+                'position': base_position or '—', 'hour_rate': hr_reg, 'overtime_rate': ot_reg,
+                'rate_source': src_reg, 'sar_rate': sar_rate, 'is_onsite': False,
+                'months': regular_months, 'total_hours': round(total_h_reg, 2),
+                'total_cost_usd': round(cost_reg, 2), 'current_mds': round(total_h_reg / WORK_HOURS_PER_DAY, 2),
+            })
+
+            # Row 2: Onsite rate
+            total_h_on = sum(c['total'] for c in onsite_months.values())
+            if total_h_on > 0:
+                hr_on, ot_on, src_on = _get_rate(onsite_position, True)
+                cost_on = sum(
+                    (c['regular'] + c['ramadan']) * (hr_on or 0) + c['overtime'] * (ot_on or 0)
+                    for c in onsite_months.values()
+                )
+                pos_on = onsite_position or ((base_position + ' - onsite') if base_position else '—')
+                employees_out.append({
+                    'name': emp_display + ' — Onsite', 'full_name': emp_name, 'code': emp_code,
+                    'country': country, 'position': pos_on, 'hour_rate': hr_on, 'overtime_rate': ot_on,
+                    'rate_source': src_on, 'sar_rate': sar_rate, 'is_onsite': True,
+                    'months': onsite_months, 'total_hours': round(total_h_on, 2),
+                    'total_cost_usd': round(cost_on, 2), 'current_mds': round(total_h_on / WORK_HOURS_PER_DAY, 2),
+                })
 
     return jsonify({
         'phase': phase_key,
@@ -3740,12 +3803,14 @@ def api_project_employees():
         return jsonify({'employees': [], 'connected': False})
 
     seen = {}
+    import re as _re_emp
     for e in raw:
         emp = e.get('employee_id')
         if emp and emp[1]:
-            name = emp[1]
-            if name not in seen:
-                seen[name] = {'name': name}
+            full_name = emp[1]
+            display_name = _re_emp.sub(r'^\s*\[[A-Z]\d+\s*\]\s*', '', full_name).strip()
+            if full_name not in seen:
+                seen[full_name] = {'name': display_name, 'full_name': full_name}
 
     # Try to fetch positions
     overrides = load_plan_overrides().get('position_overrides', {})
