@@ -2563,6 +2563,30 @@ DEFAULT_WEEKEND = [4, 5]  # Friday, Saturday
 RAMADAN_HOURS = 6
 NORMAL_HOURS = 8
 
+# ── Public Holidays (overtime if logged on these days) ──
+# Update annually or via env/DB in the future
+PUBLIC_HOLIDAYS = {
+    'EGY': {
+        "2026-01-07", "2026-01-29", "2026-03-19", "2026-03-20", "2026-03-21",
+        "2026-03-22", "2026-03-23", "2026-04-13", "2026-04-25", "2026-05-01",
+        "2026-06-30", "2026-07-23", "2026-10-06",
+    },
+    'KSA': {
+        "2026-02-22", "2026-03-19", "2026-03-20", "2026-03-21", "2026-03-22",
+        "2026-03-23", "2026-03-24", "2026-05-26", "2026-05-27", "2026-05-28",
+        "2026-05-29", "2026-09-23",
+    },
+    'TUN': {
+        "2026-01-01", "2026-03-20", "2026-03-21", "2026-03-22", "2026-05-01",
+        "2026-05-27", "2026-05-28", "2026-06-16", "2026-07-25", "2026-08-13",
+        "2026-08-25", "2026-10-15", "2026-12-17",
+    },
+}
+
+def is_public_holiday(date_str, country):
+    """Returns True if the date is a public holiday for the given country."""
+    return date_str in PUBLIC_HOLIDAYS.get(country, set())
+
 def get_country_from_employee_name(name):
     """Detect country from Odoo employee code prefix.
     Format: '[E109] Basem Mohamed' → EGY
@@ -2713,6 +2737,7 @@ def compute_effort_from_odoo(phase_key, year, month, position_lookup=None):
             is_weekend = wd in weekend_days
             in_ramadan = is_in_ramadan(day_str, country)
             is_onsite = is_onsite_on_date(emp_name, day_str)
+            is_holiday = is_public_holiday(day_str, country)
 
             total_days += 1
             if is_onsite:
@@ -2721,7 +2746,7 @@ def compute_effort_from_odoo(phase_key, year, month, position_lookup=None):
             else:
                 non_onsite_hours += total_h
 
-            if is_weekend:
+            if is_weekend or is_holiday:
                 overtime_mh += total_h
             else:
                 expected = RAMADAN_HOURS if in_ramadan else NORMAL_HOURS
@@ -3546,8 +3571,9 @@ def api_effort_all_months(phase_key):
         # Weekend check → overtime
         weekend = TUNIS_WEEKEND if country == 'TUN' else WEEKEND_DAYS
         is_weekend = d.weekday() in weekend
+        is_holiday = is_public_holiday(d_str, country)
 
-        if is_weekend:
+        if is_weekend or is_holiday:
             person_data[emp_name][month_key]['overtime'] += h
         elif is_ramadan:
             person_data[emp_name][month_key]['ramadan'] += h
@@ -3734,6 +3760,7 @@ def api_effort_all_months(phase_key):
                 except: continue
                 if d_obj.weekday() in weekend: continue
                 d_str = f"{m['year']:04d}-{m['month']:02d}-{day:02d}"
+                if is_public_holiday(d_str, country): continue  # holidays → overtime, skip from working day count
                 raw_pos = _base_position_on_date(d_str)
                 base_p = f"{country} - {raw_pos}" if raw_pos else None
                 is_on = _date_is_onsite(d_str)
@@ -4275,8 +4302,9 @@ def fill_current_effort_from_odoo(xlsx_path):
         # Tunis: Sat+Sun (5,6); KSA/EGY: Fri+Sat (4,5)
         weekend_days = TUNIS_WEEKEND if country == 'TUN' else WEEKEND_DAYS
         is_weekend = d.weekday() in weekend_days
+        is_holiday = is_public_holiday(date_str, country)
 
-        if is_weekend:
+        if is_weekend or is_holiday:
             person_data[emp_name][month_name]['overtime'] += hours
         elif is_ramadan:
             person_data[emp_name][month_name]['ramadan'] += hours
