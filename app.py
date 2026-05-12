@@ -3504,39 +3504,36 @@ def api_effort_all_months(phase_key):
     odoo_data = batch_fetch_employees_from_odoo(all_emp_names)
     logger.info(f"Resolved {len(odoo_data)} of {len(all_emp_names)} employees from Odoo")
 
-    # ── helper: normalize position name for fuzzy matching ──
+    # ── imports needed for onsite split logic ──
+    import re as _re_effort
+    import calendar as _cal
+    from datetime import date as _date_cls2
+
+    # ── fuzzy position matcher (handles Senior vs Sr, Sr. vs Sr, etc.) ──
     def _norm_pos(s):
         s = s.lower()
-        s = re.sub(r'\bsenior\b', 'sr', s)
-        s = re.sub(r'\bsr\.\b', 'sr', s)
-        s = re.sub(r'\bjunior\b', 'jr', s)
-        s = re.sub(r'[^a-z0-9\s]', '', s)
-        return re.sub(r'\s+', ' ', s).strip()
+        s = _re_effort.sub(r'\bsenior\b', 'sr', s)
+        s = _re_effort.sub(r'\bsr\.\b', 'sr', s)
+        s = _re_effort.sub(r'\bjunior\b', 'jr', s)
+        s = _re_effort.sub(r'[^a-z0-9\s]', '', s)
+        return _re_effort.sub(r'\s+', ' ', s).strip()
 
-    def _find_position_fuzzy(target_name, all_positions):
-        """Find position in catalog using fuzzy/normalized match."""
-        if not target_name:
+    def _find_pos_fuzzy(target, all_pos):
+        if not target:
             return None
-        # Exact match first
-        for p in all_positions:
-            if p.get('position') == target_name:
+        for p in all_pos:
+            if p.get('position') == target:
                 return p
-        # Normalized match
-        tn = _norm_pos(target_name)
-        for p in all_positions:
+        tn = _norm_pos(target)
+        for p in all_pos:
             if _norm_pos(p.get('position', '')) == tn:
                 return p
         return None
 
-    # Pre-load all positions once for fuzzy matching
     _all_positions = get_all_positions(db)
 
-    # For each employee, lookup position + rate (with onsite check)
-    # If employee has travel records overlapping logged months -> split into 2 rows
+    # For each employee: single row OR split into regular + onsite rows
     employees_out = []
-    import re as _re_effort
-    import calendar as _cal
-    from datetime import date as _date_cls2
 
     for emp_name, months_data in sorted(person_data.items()):
         country = get_country_from_employee_name(emp_name)
@@ -3556,7 +3553,7 @@ def api_effort_all_months(phase_key):
         odoo_pos = odoo_info.get('position')
         sar_rate = odoo_info.get('sar_rate', 0)
 
-        # Build position strings (base + onsite variant)
+        # Build position strings
         if country == 'TUN':
             base_position = f"TUN - {odoo_info.get('odoo_name', emp_name)}"
             onsite_position = None
@@ -3578,20 +3575,18 @@ def api_effort_all_months(phase_key):
                 if tunis:
                     hour_rate = tunis['hour_rate']; rate_source = 'tunis_rates_db'
             elif is_onsite_row:
-                # Onsite: MUST come from positions catalog (fuzzy match)
-                if position:
-                    pos_info = _find_position_fuzzy(position, _all_positions)
-                    if pos_info and pos_info.get('hour_rate'):
-                        hour_rate = pos_info['hour_rate']; rate_source = 'positions_db_onsite'
-                # Fallback to Odoo if no catalog match
-                if hour_rate is None and _sar and _sar > 0:
+                # Onsite: catalog first (fuzzy), fallback Odoo
+                pos_info = _find_pos_fuzzy(position, _all_positions)
+                if pos_info and pos_info.get('hour_rate'):
+                    hour_rate = pos_info['hour_rate']; rate_source = 'positions_db_onsite'
+                elif _sar and _sar > 0:
                     hour_rate = round(_sar / SAR_TO_USD, 2); rate_source = 'odoo_fallback'
             else:
-                # Regular: Odoo first, then DB
+                # Regular: Odoo first, then catalog
                 if _sar and _sar > 0:
                     hour_rate = round(_sar / SAR_TO_USD, 2); rate_source = 'odoo'
-                if hour_rate is None and position:
-                    pos_info = _find_position_fuzzy(position, _all_positions)
+                if hour_rate is None:
+                    pos_info = _find_pos_fuzzy(position, _all_positions)
                     if pos_info and pos_info.get('hour_rate'):
                         hour_rate = pos_info['hour_rate']; rate_source = 'positions_db'
             if hour_rate:
@@ -3606,30 +3601,29 @@ def api_effort_all_months(phase_key):
 
         def _onsite_ratio(year_m, month_m, _country=country, _periods=emp_travel_periods):
             weekend = TUNIS_WEEKEND if _country == 'TUN' else WEEKEND_DAYS
-            onsite_count = 0; reg_count = 0
+            onsite_c = 0; reg_c = 0
             for day in range(1, _cal.monthrange(year_m, month_m)[1] + 1):
                 try: d_obj = _date_cls2(year_m, month_m, day)
                 except: continue
                 if d_obj.weekday() in weekend: continue
                 d_str = f"{year_m:04d}-{month_m:02d}-{day:02d}"
-                if _date_is_onsite(d_str, _periods): onsite_count += 1
-                else: reg_count += 1
-            total = onsite_count + reg_count
-            return (onsite_count / total) if total > 0 else 0.0
+                if _date_is_onsite(d_str, _periods): onsite_c += 1
+                else: reg_c += 1
+            total = onsite_c + reg_c
+            return (onsite_c / total) if total > 0 else 0.0
 
         has_onsite = bool(emp_travel_periods) and any(
             _onsite_ratio(m['year'], m['month']) > 0 for m in months
         )
 
         if not emp_travel_periods or country == 'TUN' or not has_onsite:
-            # ── Single row (no travel split) ──
+            # ── Single row ──
             hour_rate, overtime_rate, rate_source = _get_rate(base_position, False)
             month_cells = {}
             for m in months:
                 cell = months_data.get(m['key'], {'regular': 0, 'ramadan': 0, 'overtime': 0})
                 month_cells[m['key']] = {
-                    'regular': round(cell['regular'], 2),
-                    'ramadan': round(cell['ramadan'], 2),
+                    'regular': round(cell['regular'], 2), 'ramadan': round(cell['ramadan'], 2),
                     'overtime': round(cell['overtime'], 2),
                     'total': round(cell['regular'] + cell['ramadan'] + cell['overtime'], 2),
                 }
@@ -3647,7 +3641,7 @@ def api_effort_all_months(phase_key):
             })
 
         else:
-            # ── Split into 2 rows: regular + onsite ──
+            # ── Split: regular row + onsite row ──
             regular_months = {}; onsite_months = {}
             for m in months:
                 mkey = m['key']
@@ -3657,47 +3651,36 @@ def api_effort_all_months(phase_key):
                     regular_months[mkey] = {'regular': 0, 'ramadan': 0, 'overtime': 0, 'total': 0}
                     onsite_months[mkey] = {'regular': 0, 'ramadan': 0, 'overtime': 0, 'total': 0}
                     continue
-                on_ratio = _onsite_ratio(m['year'], m['month'])
-                reg_ratio = 1.0 - on_ratio
+                on_r = _onsite_ratio(m['year'], m['month'])
+                reg_r = 1.0 - on_r
                 regular_months[mkey] = {
-                    'regular': round(cell['regular'] * reg_ratio, 2),
-                    'ramadan': round(cell['ramadan'] * reg_ratio, 2),
-                    'overtime': round(cell['overtime'] * reg_ratio, 2),
-                    'total': round(total_cell * reg_ratio, 2),
+                    'regular': round(cell['regular'] * reg_r, 2), 'ramadan': round(cell['ramadan'] * reg_r, 2),
+                    'overtime': round(cell['overtime'] * reg_r, 2), 'total': round(total_cell * reg_r, 2),
                 }
                 onsite_months[mkey] = {
-                    'regular': round(cell['regular'] * on_ratio, 2),
-                    'ramadan': round(cell['ramadan'] * on_ratio, 2),
-                    'overtime': round(cell['overtime'] * on_ratio, 2),
-                    'total': round(total_cell * on_ratio, 2),
+                    'regular': round(cell['regular'] * on_r, 2), 'ramadan': round(cell['ramadan'] * on_r, 2),
+                    'overtime': round(cell['overtime'] * on_r, 2), 'total': round(total_cell * on_r, 2),
                 }
 
-            # Row 1: Regular rate
-            hr_reg, ot_reg, src_reg = _get_rate(base_position, False)
-            total_h_reg = sum(c['total'] for c in regular_months.values())
-            cost_reg = sum(
-                (c['regular'] + c['ramadan']) * (hr_reg or 0) + c['overtime'] * (ot_reg or 0)
-                for c in regular_months.values()
-            )
+            # Row 1: Regular
+            hr_r, ot_r, src_r = _get_rate(base_position, False)
+            total_h_r = sum(c['total'] for c in regular_months.values())
+            cost_r = sum((c['regular']+c['ramadan'])*(hr_r or 0)+c['overtime']*(ot_r or 0) for c in regular_months.values())
             employees_out.append({
                 'name': emp_display, 'full_name': emp_name, 'code': emp_code, 'country': country,
-                'position': base_position or '—', 'hour_rate': hr_reg, 'overtime_rate': ot_reg,
-                'rate_source': src_reg, 'sar_rate': sar_rate, 'is_onsite': False,
-                'months': regular_months, 'total_hours': round(total_h_reg, 2),
-                'total_cost_usd': round(cost_reg, 2), 'current_mds': round(total_h_reg / WORK_HOURS_PER_DAY, 2),
+                'position': base_position or '—', 'hour_rate': hr_r, 'overtime_rate': ot_r,
+                'rate_source': src_r, 'sar_rate': sar_rate, 'is_onsite': False,
+                'months': regular_months, 'total_hours': round(total_h_r, 2),
+                'total_cost_usd': round(cost_r, 2), 'current_mds': round(total_h_r / WORK_HOURS_PER_DAY, 2),
             })
 
-            # Row 2: Onsite rate
+            # Row 2: Onsite
             total_h_on = sum(c['total'] for c in onsite_months.values())
             if total_h_on > 0:
                 hr_on, ot_on, src_on = _get_rate(onsite_position, True)
-                cost_on = sum(
-                    (c['regular'] + c['ramadan']) * (hr_on or 0) + c['overtime'] * (ot_on or 0)
-                    for c in onsite_months.values()
-                )
-                # Display the matched catalog position name for onsite row
-                matched_onsite = _find_position_fuzzy(onsite_position, _all_positions)
-                pos_on_display = matched_onsite['position'] if matched_onsite else (onsite_position or '—')
+                cost_on = sum((c['regular']+c['ramadan'])*(hr_on or 0)+c['overtime']*(ot_on or 0) for c in onsite_months.values())
+                matched = _find_pos_fuzzy(onsite_position, _all_positions)
+                pos_on_display = matched['position'] if matched else (onsite_position or '—')
                 employees_out.append({
                     'name': emp_display + ' — Onsite', 'full_name': emp_name, 'code': emp_code,
                     'country': country, 'position': pos_on_display,
