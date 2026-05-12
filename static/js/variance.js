@@ -36,8 +36,6 @@ function switchSubTab(key) {
   });
   if (key === 'travel') {
     renderTravelSubTab();
-  } else if (key === 'promotions') {
-    renderPromotionsSubTab();
   } else {
     renderVarianceSubTab(key);
   }
@@ -575,6 +573,30 @@ async function loadEffortLive(phaseKey, containerId) {
         <td class="num" style="border-left: 2px solid var(--border-strong);"><b style="color: var(--blue);">$${fmt.num(Math.round(grandTotalCost))}</b></td>
         <td class="num"><b style="color: var(--blue);">${fmt.decimal(grandTotalMDs)}</b></td>
       </tr>
+    `;
+
+    // ── Summary rows: Total Cost SAR + Average Cost per MD ──
+    const totalCostSAR = grandTotalCost * 3.75;
+    const avgCostPerMD = grandTotalMDs > 0 ? totalCostSAR / grandTotalMDs : 0;
+    const summaryColspan = 5 + (months.length * 3) + 2; // # + name + pos + rate + OT rate + months*3 + totalcost + mds
+    html += `
+      <tr style="background: #EFF6FF; border-top: 2px solid var(--blue-light, #BFDBFE);">
+        <td colspan="${summaryColspan}" style="position: sticky; left: 0; background: #EFF6FF; padding: 10px 16px;">
+          <div style="display: flex; gap: 40px; align-items: center; flex-wrap: wrap;">
+            <div style="display: flex; align-items: baseline; gap: 8px;">
+              <span style="font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">Total Cost in SAR</span>
+              <span style="font-size: 18px; font-weight: 700; color: var(--navy);">SAR ${fmt.num(Math.round(totalCostSAR))}</span>
+            </div>
+            <div style="display: flex; align-items: baseline; gap: 8px;">
+              <span style="font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">Average Cost per MD</span>
+              <span style="font-size: 18px; font-weight: 700; color: var(--navy);">SAR ${fmt.num(Math.round(avgCostPerMD))}</span>
+            </div>
+            <div style="display: flex; align-items: baseline; gap: 8px; color: var(--text-muted); font-size: 11px;">
+              <span>($1 = SAR 3.75 · Total MDs: <b style="color:var(--navy)">${fmt.decimal(grandTotalMDs)}</b>)</span>
+            </div>
+          </div>
+        </td>
+      </tr>
       </tbody></table></div>
     `;
     cont.innerHTML = html;
@@ -795,176 +817,4 @@ async function submitTravel() {
     const e = await res.json();
     alert('Error: ' + (e.error || 'failed'));
   }
-}
-
-// ====== PROMOTIONS TAB ======
-async function renderPromotionsSubTab() {
-  const cont = document.getElementById('varianceContent');
-  let employees = [];
-  try {
-    const r = await fetch('/api/project-employees');
-    const d = await r.json();
-    employees = d.employees || [];
-  } catch(e) {}
-  AppState.promoEmployees = employees;
-
-  cont.innerHTML = `
-    <div class="banner banner-info">
-      <strong>Promotion Records:</strong>
-      Add a record when a team member gets promoted mid-project.
-      Current Effort will automatically split their hours — before & after promotion —
-      each row with the correct rate. Position After is auto-filled from Odoo.
-    </div>
-    <div class="card">
-      <h3 class="card-title" id="promoFormTitle">Add Promotion Record</h3>
-      <div class="travel-form">
-        <div class="form-row">
-          <label>Employee Name
-            <input list="promoEmpList" id="prName" placeholder="Type or pick…" class="search-input" autocomplete="off">
-            <datalist id="promoEmpList">${employees.map(e=>`<option value="${e.name}">`).join('')}</datalist>
-          </label>
-          <label>Promotion Date
-            <input type="date" id="prDate" class="search-input">
-          </label>
-        </div>
-        <div class="form-row">
-          <label>Position BEFORE promotion
-            <input type="text" id="prOldPos" placeholder="Auto-suggested from Odoo…" class="search-input" style="width:100%">
-            <span id="prOldHint" class="muted-text" style="font-size:10px;margin-top:2px;display:block;"></span>
-          </label>
-          <label>Position AFTER promotion (current in Odoo)
-            <input type="text" id="prNewPos" placeholder="Auto-filled from Odoo…" class="search-input" style="width:100%">
-            <span id="prNewStatus" class="muted-text" style="font-size:10px;margin-top:2px;display:block;"></span>
-          </label>
-        </div>
-        <div class="form-row">
-          <label class="full-width">Notes
-            <input type="text" id="prNotes" placeholder="Optional…" class="search-input">
-          </label>
-        </div>
-        <div class="form-actions" style="gap:8px;">
-          <button id="prCancel" class="btn-ghost" style="display:none;">Cancel</button>
-          <button id="prSubmit" class="btn-primary">+ Add Promotion</button>
-        </div>
-        <input type="hidden" id="prEditingId" value="">
-      </div>
-    </div>
-    <div class="card">
-      <h3 class="card-title">Promotion History</h3>
-      <div class="table-scroll">
-        <table class="data-table" id="promoTable">
-          <thead><tr>
-            <th>Employee</th><th>Promotion Date</th>
-            <th>Position Before</th><th>Position After</th><th>Notes</th><th></th>
-          </tr></thead>
-          <tbody><tr><td colspan="6" class="loading">Loading…</td></tr></tbody>
-        </table>
-      </div>
-    </div>`;
-
-  document.getElementById('prName').addEventListener('change', async (e) => {
-    const name = e.target.value.trim();
-    if (!name) return;
-    document.getElementById('prNewStatus').textContent = 'Fetching from Odoo…';
-    try {
-      const r = await fetch(`/api/promotions/employee-odoo-position?name=${encodeURIComponent(name)}`);
-      const d = await r.json();
-      if (d.current_position) {
-        document.getElementById('prNewPos').value = d.current_position;
-        document.getElementById('prNewStatus').textContent = `✓ From Odoo: "${d.current_position}"`;
-        document.getElementById('prNewStatus').style.color = 'var(--green)';
-      } else {
-        document.getElementById('prNewStatus').textContent = 'Not found in Odoo — enter manually';
-        document.getElementById('prNewStatus').style.color = 'var(--amber)';
-      }
-      if (d.suggested_old_position) {
-        document.getElementById('prOldPos').value = d.suggested_old_position;
-        document.getElementById('prOldHint').textContent = 'Auto-suggested — edit if wrong';
-        document.getElementById('prOldHint').style.color = 'var(--amber)';
-      }
-    } catch(err) {
-      document.getElementById('prNewStatus').textContent = 'Could not fetch from Odoo';
-    }
-  });
-
-  document.getElementById('prSubmit').addEventListener('click', submitPromotion);
-  document.getElementById('prCancel').addEventListener('click', cancelPromoEdit);
-  await loadPromotionRecords();
-}
-
-async function loadPromotionRecords() {
-  const res = await fetch('/api/promotions');
-  const d = await res.json();
-  const tbody = document.querySelector('#promoTable tbody');
-  if (!d.records || !d.records.length) {
-    tbody.innerHTML = '<tr><td colspan="6" class="loading">No promotion records yet</td></tr>';
-    return;
-  }
-  AppState.promoRecords = d.records;
-  tbody.innerHTML = '';
-  d.records.forEach(r => {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td><b>${r.name}</b></td>
-      <td><span style="font-family:var(--mono);font-size:12px;">${r.promotion_date}</span></td>
-      <td><span class="muted-text" style="font-size:11px;">${r.old_position||'—'}</span></td>
-      <td><span style="font-size:11px;color:var(--green);font-weight:600;">${r.new_position||'—'}</span></td>
-      <td><span class="muted-text" style="font-size:11px;">${r.notes||''}</span></td>
-      <td>
-        <button class="see-details-btn" data-pe="${r.id}">Edit</button>
-        <button class="btn-ghost" style="padding:4px 10px;font-size:11px;" data-pd="${r.id}">Delete</button>
-      </td>`;
-    tbody.appendChild(tr);
-  });
-  tbody.querySelectorAll('[data-pe]').forEach(b => b.addEventListener('click', () => startPromoEdit(b.dataset.pe)));
-  tbody.querySelectorAll('[data-pd]').forEach(b => b.addEventListener('click', async () => {
-    if (!confirm('Delete?')) return;
-    await fetch(`/api/promotions/${b.dataset.pd}`, {method:'DELETE'});
-    loadPromotionRecords();
-  }));
-}
-
-function startPromoEdit(id) {
-  const r = (AppState.promoRecords||[]).find(x => String(x.id) === String(id));
-  if (!r) return;
-  document.getElementById('prName').value = r.name||'';
-  document.getElementById('prDate').value = r.promotion_date||'';
-  document.getElementById('prOldPos').value = r.old_position||'';
-  document.getElementById('prNewPos').value = r.new_position||'';
-  document.getElementById('prNotes').value = r.notes||'';
-  document.getElementById('prEditingId').value = r.id;
-  document.getElementById('prSubmit').textContent = '✓ Save Changes';
-  document.getElementById('prSubmit').className = 'btn-export';
-  document.getElementById('prCancel').style.display = '';
-  document.getElementById('promoFormTitle').textContent = `Edit — ${r.name}`;
-  document.querySelector('.travel-form').scrollIntoView({behavior:'smooth',block:'center'});
-}
-
-function cancelPromoEdit() {
-  document.getElementById('prEditingId').value = '';
-  ['prName','prDate','prOldPos','prNewPos','prNotes'].forEach(id => document.getElementById(id).value = '');
-  ['prNewStatus','prOldHint'].forEach(id => document.getElementById(id).textContent = '');
-  document.getElementById('prSubmit').textContent = '+ Add Promotion';
-  document.getElementById('prSubmit').className = 'btn-primary';
-  document.getElementById('prCancel').style.display = 'none';
-  document.getElementById('promoFormTitle').textContent = 'Add Promotion Record';
-}
-
-async function submitPromotion() {
-  const eid = document.getElementById('prEditingId').value;
-  const body = {
-    name: document.getElementById('prName').value.trim(),
-    promotion_date: document.getElementById('prDate').value,
-    old_position: document.getElementById('prOldPos').value.trim(),
-    new_position: document.getElementById('prNewPos').value.trim(),
-    notes: document.getElementById('prNotes').value.trim(),
-  };
-  if (!body.name || !body.promotion_date) { alert('Name and date required'); return; }
-  const res = await fetch(eid ? `/api/promotions/${eid}` : '/api/promotions', {
-    method: eid ? 'PUT' : 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify(body),
-  });
-  if (res.ok) { cancelPromoEdit(); loadPromotionRecords(); }
-  else { const e = await res.json(); alert('Error: '+(e.error||'failed')); }
 }
