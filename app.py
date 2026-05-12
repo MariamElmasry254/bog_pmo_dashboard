@@ -3509,10 +3509,6 @@ def api_effort_all_months(phase_key):
     import calendar as _cal
     from datetime import date as _date_cls2
 
-    # Load travel + promotion records once
-    travel_records = load_travel()
-    promotion_records = load_promotions()
-
     # ── keyword-based onsite position resolver ──
     _EGY_ONSITE_MAP = {
         ('lead',   'business analyst'):  'EGY - Lead Business Analyst - onsite',
@@ -3567,42 +3563,40 @@ def api_effort_all_months(phase_key):
             return _EGY_ONSITE_MAP.get((level, role))
         return None
 
-    def _get_position_on_date(emp_name, current_odoo_pos, date_str, promo_records):
-        """Return the position an employee held on a given date,
-        based on promotion history. If date < first promotion → old_position.
-        If date >= promotion_date → new_position (current Odoo pos).
-        """
-        if not promo_records:
-            return current_odoo_pos
-        # Sort by date ascending
-        sorted_promos = sorted(promo_records, key=lambda x: x.get('promotion_date', ''))
-        # Walk through promotions to find which position was active on date_str
-        position = sorted_promos[0].get('old_position') or current_odoo_pos
-        for promo in sorted_promos:
-            if date_str >= promo.get('promotion_date', '9999-12-31'):
-                position = promo.get('new_position') or current_odoo_pos
-        return position
-
     def _calc_mds(regular_h, ramadan_h, overtime_h):
-        """MDs = (Regular + Overtime) / 8  +  Ramadan / 6"""
+        """Correct MD formula:
+        MDs = (Regular + Overtime) / 8  +  Ramadan / 6
+        """
         return round((regular_h + overtime_h) / 8.0 + ramadan_h / 6.0, 2)
 
     def _calc_cost(regular_h, ramadan_h, overtime_h, hour_rate, overtime_rate):
-        """Cost = (Regular + Ramadan) × rate  +  Overtime × overtime_rate"""
-        return round(
-            (regular_h + ramadan_h) * (hour_rate or 0) +
-            overtime_h * (overtime_rate or 0), 2
-        )
+        """Correct cost formula:
+        Cost = (Regular + Ramadan) * hour_rate  +  Overtime * overtime_rate
+        """
+        base = (regular_h + ramadan_h) * (hour_rate or 0)
+        ot = overtime_h * (overtime_rate or 0)
+        return round(base + ot, 2)
 
     _all_positions = get_all_positions(db)
 
-    # For each employee: single row OR split into regular + onsite rows
+    # Load promotions once
+    all_promotions = load_promotions()
+
+    # For each employee: segment hours by (position, is_onsite) per day
     employees_out = []
 
     for emp_name, months_data in sorted(person_data.items()):
         country = get_country_from_employee_name(emp_name)
 
-        # Find travel periods for this employee
+        emp_code_match = _re_effort.match(r'^\[([A-Z]\d+)\s*\]', emp_name)
+        emp_code = emp_code_match.group(1) if emp_code_match else ''
+        emp_display = _re_effort.sub(r'^\[[A-Z]\d+\s*\]\s*', '', emp_name).strip()
+
+        odoo_info = odoo_data.get(emp_name, {})
+        odoo_pos = odoo_info.get('position')  # current position in Odoo
+        sar_rate = odoo_info.get('sar_rate', 0)
+
+        # ── Travel periods for this employee ──
         emp_travel_periods = []
         for tr in travel_records:
             if not tr.get('name') or not tr.get('start_date'):
@@ -3612,268 +3606,176 @@ def api_effort_all_months(phase_key):
             if tn == en_clean or tn in en_clean or en_clean in tn:
                 emp_travel_periods.append({'start': tr['start_date'], 'end': tr.get('end_date')})
 
-        # Find promotion records for this employee
+        # ── Promotion records for this employee ──
         emp_promos = []
-        for pr in promotion_records:
+        for pr in all_promotions:
             pn = (pr.get('name') or '').strip().lower()
             en_clean2 = _re_effort.sub(r'\[[A-Z]\d+\s*\]\s*', '', emp_name).strip().lower()
             if pn == en_clean2 or pn in en_clean2 or en_clean2 in pn:
                 emp_promos.append(pr)
         emp_promos.sort(key=lambda x: x.get('promotion_date', ''))
 
-        odoo_info = odoo_data.get(emp_name, {})
-        odoo_pos = odoo_info.get('position')
-        sar_rate = odoo_info.get('sar_rate', 0)
-
-        # Build position strings
-        if country == 'TUN':
-            base_position = f"TUN - {odoo_info.get('odoo_name', emp_name)}"
-            onsite_position = None
-        elif odoo_pos:
-            base_position = f"{country} - {odoo_pos}"
-            onsite_position = _resolve_onsite_position(odoo_pos, country)
-        else:
-            base_position = None
-            onsite_position = None
-
-        emp_code_match = _re_effort.match(r'^\[([A-Z]\d+)\s*\]', emp_name)
-        emp_code = emp_code_match.group(1) if emp_code_match else ''
-        emp_display = _re_effort.sub(r'^\[[A-Z]\d+\s*\]\s*', '', emp_name).strip()
-
-        def _get_rate(position, is_onsite_row, _emp=emp_name, _country=country, _sar=sar_rate):
-            hour_rate = None; overtime_rate = None; rate_source = None
-            if _country == 'TUN':
-                tunis = get_tunis_rate_by_name(db, _emp)
-                if tunis:
-                    hour_rate = tunis['hour_rate']; rate_source = 'tunis_rates_db'
-            elif is_onsite_row:
-                if position:
-                    pos_info = get_position_by_name(db, position)
-                    if pos_info and pos_info.get('hour_rate'):
-                        hour_rate = pos_info['hour_rate']; rate_source = 'positions_db_onsite'
-                if hour_rate is None and _sar and _sar > 0:
-                    hour_rate = round(_sar / SAR_TO_USD, 2); rate_source = 'odoo_fallback'
-            else:
-                if _sar and _sar > 0:
-                    hour_rate = round(_sar / SAR_TO_USD, 2); rate_source = 'odoo'
-                if hour_rate is None and position:
-                    pos_info = get_position_by_name(db, position)
-                    if pos_info and pos_info.get('hour_rate'):
-                        hour_rate = pos_info['hour_rate']; rate_source = 'positions_db'
-            if hour_rate:
-                overtime_rate = round(hour_rate * OVERTIME_MULTIPLIER, 2)
-            return hour_rate, overtime_rate, rate_source
-
-        def _date_is_onsite(date_str, _periods=emp_travel_periods):
-            for period in _periods:
+        def _date_is_onsite(date_str):
+            for period in emp_travel_periods:
                 if date_str < period['start']: continue
                 if period['end'] is None or date_str <= period['end']: return True
             return False
 
-        def _onsite_ratio(year_m, month_m, _country=country, _periods=emp_travel_periods):
-            weekend = TUNIS_WEEKEND if _country == 'TUN' else WEEKEND_DAYS
-            onsite_c = 0; reg_c = 0
-            for day in range(1, _cal.monthrange(year_m, month_m)[1] + 1):
-                try: d_obj = _date_cls2(year_m, month_m, day)
+        def _position_on_date(date_str):
+            """Return (base_position, onsite_position) active on date_str."""
+            # Start with current Odoo position
+            pos = odoo_pos or ''
+            # Walk promotions backwards to find what position was active
+            if emp_promos:
+                # Before first promotion → use old_position from first promo
+                if date_str < emp_promos[0]['promotion_date']:
+                    pos = emp_promos[0].get('old_position') or odoo_pos or ''
+                else:
+                    # Find last promotion that happened before or on date_str
+                    for promo in reversed(emp_promos):
+                        if date_str >= promo['promotion_date']:
+                            pos = promo.get('new_position') or odoo_pos or ''
+                            break
+
+            if country == 'TUN':
+                return f"TUN - {odoo_info.get('odoo_name', emp_name)}", None
+            base = f"{country} - {pos}" if pos else None
+            onsite = _resolve_onsite_position(pos, country) if pos else None
+            return base, onsite
+
+        def _get_rate_for_position(base_pos, is_onsite):
+            """Get hour_rate and overtime_rate for a given position."""
+            hour_rate = None; rate_source = None
+            if country == 'TUN':
+                tunis = get_tunis_rate_by_name(db, emp_name)
+                if tunis:
+                    hour_rate = tunis['hour_rate']; rate_source = 'tunis_rates_db'
+            elif is_onsite:
+                onsite_pos = _resolve_onsite_position(
+                    base_pos.replace(f'{country} - ', '') if base_pos else '', country
+                )
+                if onsite_pos:
+                    pi = get_position_by_name(db, onsite_pos)
+                    if pi and pi.get('hour_rate'):
+                        hour_rate = pi['hour_rate']; rate_source = 'positions_db_onsite'
+                if hour_rate is None and sar_rate and sar_rate > 0:
+                    hour_rate = round(sar_rate / SAR_TO_USD, 2); rate_source = 'odoo_fallback'
+            else:
+                if sar_rate and sar_rate > 0 and not emp_promos:
+                    # Only use Odoo rate if no promotions (Odoo = current rate only)
+                    hour_rate = round(sar_rate / SAR_TO_USD, 2); rate_source = 'odoo'
+                if hour_rate is None and base_pos:
+                    pi = get_position_by_name(db, base_pos)
+                    if pi and pi.get('hour_rate'):
+                        hour_rate = pi['hour_rate']; rate_source = 'positions_db'
+                # Fallback to Odoo if still None
+                if hour_rate is None and sar_rate and sar_rate > 0:
+                    hour_rate = round(sar_rate / SAR_TO_USD, 2); rate_source = 'odoo'
+            overtime_rate = round(hour_rate * OVERTIME_MULTIPLIER, 2) if hour_rate else None
+            return hour_rate, overtime_rate, rate_source
+
+        # ── Per-month segmentation ──
+        # segment_data: { (base_pos, is_onsite): {month_key: {reg, ram, ot}} }
+        from collections import defaultdict as _dd
+        segment_data = _dd(lambda: _dd(lambda: {'regular': 0.0, 'ramadan': 0.0, 'overtime': 0.0}))
+
+        weekend = TUNIS_WEEKEND if country == 'TUN' else WEEKEND_DAYS
+
+        for m in months:
+            mkey = m['key']
+            cell = months_data.get(mkey, {'regular': 0, 'ramadan': 0, 'overtime': 0})
+            total_cell = cell['regular'] + cell['ramadan'] + cell['overtime']
+            if total_cell == 0:
+                continue
+
+            # Count working days per segment in this month
+            seg_counts = _dd(int)  # (base_pos, is_onsite) → working day count
+            days_in_month = _cal.monthrange(m['year'], m['month'])[1]
+            for day in range(1, days_in_month + 1):
+                try: d_obj = _date_cls2(m['year'], m['month'], day)
                 except: continue
                 if d_obj.weekday() in weekend: continue
-                d_str = f"{year_m:04d}-{month_m:02d}-{day:02d}"
-                if _date_is_onsite(d_str, _periods): onsite_c += 1
-                else: reg_c += 1
-            total = onsite_c + reg_c
-            return (onsite_c / total) if total > 0 else 0.0
+                d_str = f"{m['year']:04d}-{m['month']:02d}-{day:02d}"
+                base_p, _ = _position_on_date(d_str)
+                is_on = _date_is_onsite(d_str)
+                seg_counts[(base_p, is_on)] += 1
 
-        has_onsite = bool(emp_travel_periods) and any(
-            _onsite_ratio(m['year'], m['month']) > 0 for m in months
-        )
+            total_working = sum(seg_counts.values())
+            if total_working == 0:
+                # fallback: assign all to current position, not onsite
+                base_p, _ = _position_on_date(mkey + '-15')
+                seg_counts[(base_p, False)] = 1
+                total_working = 1
 
-        if not emp_travel_periods or country == 'TUN' or not has_onsite:
-            # ── Single row ──
-            hour_rate, overtime_rate, rate_source = _get_rate(base_position, False)
-            month_cells = {}
-            for m in months:
-                cell = months_data.get(m['key'], {'regular': 0, 'ramadan': 0, 'overtime': 0})
-                month_cells[m['key']] = {
-                    'regular': round(cell['regular'], 2),
-                    'ramadan': round(cell['ramadan'], 2),
-                    'overtime': round(cell['overtime'], 2),
-                    'total': round(cell['regular'] + cell['ramadan'] + cell['overtime'], 2),
-                }
-            total_reg = sum(c['regular'] for c in month_cells.values())
-            total_ram = sum(c['ramadan'] for c in month_cells.values())
-            total_ot  = sum(c['overtime'] for c in month_cells.values())
+            # Distribute hours proportionally
+            for (base_p, is_on), cnt in seg_counts.items():
+                ratio = cnt / total_working
+                segment_data[(base_p, is_on)][mkey]['regular']  += cell['regular']  * ratio
+                segment_data[(base_p, is_on)][mkey]['ramadan']  += cell['ramadan']  * ratio
+                segment_data[(base_p, is_on)][mkey]['overtime'] += cell['overtime'] * ratio
+
+        # ── Build one row per segment ──
+        if not segment_data:
+            # No hours logged at all
+            base_p = f"{country} - {odoo_pos}" if odoo_pos else '—'
+            hr, ot_r, src = _get_rate_for_position(base_p, False)
             employees_out.append({
                 'name': emp_display, 'full_name': emp_name, 'code': emp_code, 'country': country,
-                'position': base_position or '—', 'hour_rate': hour_rate, 'overtime_rate': overtime_rate,
-                'rate_source': rate_source, 'sar_rate': sar_rate, 'is_onsite': False,
-                'months': month_cells,
-                'total_hours': round(total_reg + total_ram + total_ot, 2),
-                'total_cost_usd': _calc_cost(total_reg, total_ram, total_ot, hour_rate, overtime_rate),
-                'current_mds': _calc_mds(total_reg, total_ram, total_ot),
+                'position': base_p, 'hour_rate': hr, 'overtime_rate': ot_r,
+                'rate_source': src, 'sar_rate': sar_rate, 'is_onsite': False,
+                'months': {m['key']: {'regular':0,'ramadan':0,'overtime':0,'total':0} for m in months},
+                'total_hours': 0, 'total_cost_usd': 0, 'current_mds': 0,
             })
+            continue
 
-        else:
-            # ── Split: regular + onsite rows ──
-            regular_months = {}; onsite_months = {}
+        for (base_p, is_on), mkey_data in sorted(segment_data.items(), key=lambda x: (x[0][0] or '', x[0][1])):
+            full_months = {}
             for m in months:
-                mkey = m['key']
-                cell = months_data.get(mkey, {'regular': 0, 'ramadan': 0, 'overtime': 0})
-                total_cell = cell['regular'] + cell['ramadan'] + cell['overtime']
-                if total_cell == 0:
-                    regular_months[mkey] = {'regular': 0, 'ramadan': 0, 'overtime': 0, 'total': 0}
-                    onsite_months[mkey]  = {'regular': 0, 'ramadan': 0, 'overtime': 0, 'total': 0}
-                    continue
-                on_r = _onsite_ratio(m['year'], m['month'])
-                reg_r = 1.0 - on_r
-                regular_months[mkey] = {
-                    'regular': round(cell['regular']*reg_r, 2), 'ramadan': round(cell['ramadan']*reg_r, 2),
-                    'overtime': round(cell['overtime']*reg_r, 2), 'total': round(total_cell*reg_r, 2),
-                }
-                onsite_months[mkey] = {
-                    'regular': round(cell['regular']*on_r, 2), 'ramadan': round(cell['ramadan']*on_r, 2),
-                    'overtime': round(cell['overtime']*on_r, 2), 'total': round(total_cell*on_r, 2),
+                c = mkey_data.get(m['key'], {'regular': 0, 'ramadan': 0, 'overtime': 0})
+                full_months[m['key']] = {
+                    'regular':  round(c['regular'], 2),
+                    'ramadan':  round(c['ramadan'], 2),
+                    'overtime': round(c['overtime'], 2),
+                    'total':    round(c['regular'] + c['ramadan'] + c['overtime'], 2),
                 }
 
-            # Row 1: Regular
-            hr_r, ot_r, src_r = _get_rate(base_position, False)
-            r_reg = sum(c['regular'] for c in regular_months.values())
-            r_ram = sum(c['ramadan'] for c in regular_months.values())
-            r_ot  = sum(c['overtime'] for c in regular_months.values())
+            seg_reg = sum(v['regular']  for v in full_months.values())
+            seg_ram = sum(v['ramadan']  for v in full_months.values())
+            seg_ot  = sum(v['overtime'] for v in full_months.values())
+            if seg_reg + seg_ram + seg_ot < 0.01:
+                continue  # skip empty segments
+
+            hr, ot_r, src = _get_rate_for_position(base_p, is_on)
+
+            # Label
+            label = emp_display
+            if is_on:
+                label += ' — Onsite'
+
             employees_out.append({
-                'name': emp_display, 'full_name': emp_name, 'code': emp_code, 'country': country,
-                'position': base_position or '—', 'hour_rate': hr_r, 'overtime_rate': ot_r,
-                'rate_source': src_r, 'sar_rate': sar_rate, 'is_onsite': False,
-                'months': regular_months,
-                'total_hours': round(r_reg + r_ram + r_ot, 2),
-                'total_cost_usd': _calc_cost(r_reg, r_ram, r_ot, hr_r, ot_r),
-                'current_mds': _calc_mds(r_reg, r_ram, r_ot),
+                'name': label,
+                'full_name': emp_name,
+                'code': emp_code,
+                'country': country,
+                'position': (_resolve_onsite_position(
+                    (base_p or '').replace(f'{country} - ', ''), country
+                ) if is_on else base_p) or '—',
+                'hour_rate': hr,
+                'overtime_rate': ot_r,
+                'rate_source': src,
+                'sar_rate': sar_rate,
+                'is_onsite': is_on,
+                'months': full_months,
+                'total_hours': round(seg_reg + seg_ram + seg_ot, 2),
+                'total_cost_usd': _calc_cost(seg_reg, seg_ram, seg_ot, hr, ot_r),
+                'current_mds': _calc_mds(seg_reg, seg_ram, seg_ot),
             })
 
-            # Row 2: Onsite
-            total_h_on = sum(c['total'] for c in onsite_months.values())
-            if total_h_on > 0:
-                hr_on, ot_on, src_on = _get_rate(onsite_position, True)
-                o_reg = sum(c['regular'] for c in onsite_months.values())
-                o_ram = sum(c['ramadan'] for c in onsite_months.values())
-                o_ot  = sum(c['overtime'] for c in onsite_months.values())
-                employees_out.append({
-                    'name': emp_display + ' — Onsite', 'full_name': emp_name, 'code': emp_code,
-                    'country': country, 'position': onsite_position or '—',
-                    'hour_rate': hr_on, 'overtime_rate': ot_on, 'rate_source': src_on,
-                    'sar_rate': sar_rate, 'is_onsite': True,
-                    'months': onsite_months,
-                    'total_hours': round(o_reg + o_ram + o_ot, 2),
-                    'total_cost_usd': _calc_cost(o_reg, o_ram, o_ot, hr_on, ot_on),
-                    'current_mds': _calc_mds(o_reg, o_ram, o_ot),
-                })
-
-    # ── PROMOTION SPLIT: add extra rows for employees with promotion history ──
-    # For each employee with promotions, we already have their rows from above.
-    # Now we re-process: split each employee's month cells by promotion date.
-    if promotion_records:
-        final_employees = []
-        for emp_row in employees_out:
-            emp_promos_for_row = []
-            en = emp_row['full_name']
-            en_clean = _re_effort.sub(r'\[[A-Z]\d+\s*\]\s*', '', en).strip().lower()
-            for pr in promotion_records:
-                pn = (pr.get('name') or '').strip().lower()
-                if pn == en_clean or pn in en_clean or en_clean in pn:
-                    emp_promos_for_row.append(pr)
-            emp_promos_for_row.sort(key=lambda x: x.get('promotion_date', ''))
-
-            if not emp_promos_for_row or emp_row.get('is_onsite'):
-                # No promotions or onsite row → keep as-is
-                final_employees.append(emp_row)
-                continue
-
-            # Build period segments: [(start_month, end_month, position_name)]
-            # Segment 1: project start → day before first promotion → old_position
-            # Segment 2: first promotion → day before second promotion → new_position
-            # Segment N: last promotion → end → latest position (current Odoo)
-            segments = []
-            all_month_keys = sorted(emp_row['months'].keys())
-            if not all_month_keys:
-                final_employees.append(emp_row)
-                continue
-
-            promo_dates = [p['promotion_date'] for p in emp_promos_for_row]
-            promo_positions = [p['old_position'] for p in emp_promos_for_row]
-            promo_positions.append(emp_promos_for_row[-1].get('new_position') or emp_row['position'])
-
-            for seg_idx, mkey in enumerate(all_month_keys):
-                # Determine which position was active this month
-                month_end = mkey + '-28'  # approx end of month
-                active_pos = promo_positions[0]
-                for i, pd in enumerate(promo_dates):
-                    if mkey + '-01' >= pd:
-                        active_pos = promo_positions[i + 1]
-                # Group month into segment by position
-                if segments and segments[-1]['position'] == active_pos:
-                    segments[-1]['months'].append(mkey)
-                else:
-                    segments.append({'position': active_pos, 'months': [mkey]})
-
-            if len(segments) == 1:
-                # Only one position used → no split needed
-                final_employees.append(emp_row)
-                continue
-
-            # Build a row per segment
-            for seg in segments:
-                if not seg['months']:
-                    continue
-                seg_pos = seg['position']
-                seg_month_cells = {mkey: emp_row['months'][mkey] for mkey in seg['months']}
-                # Check if any hours in this segment
-                if all(c['total'] == 0 for c in seg_month_cells.values()):
-                    continue
-                # Pad missing months with zeros for display alignment
-                full_month_cells = {}
-                for m in months:
-                    full_month_cells[m['key']] = seg_month_cells.get(
-                        m['key'], {'regular': 0, 'ramadan': 0, 'overtime': 0, 'total': 0}
-                    )
-                # Get rate for this position
-                pos_info = get_position_by_name(db, f"{emp_row['country']} - {seg_pos}") if seg_pos else None
-                if pos_info and pos_info.get('hour_rate'):
-                    hr = pos_info['hour_rate']
-                    rate_src = 'positions_db'
-                elif emp_row['sar_rate'] and emp_row['sar_rate'] > 0:
-                    hr = round(emp_row['sar_rate'] / SAR_TO_USD, 2)
-                    rate_src = 'odoo'
-                else:
-                    hr = emp_row['hour_rate']
-                    rate_src = emp_row['rate_source']
-                ot_r = round(hr * OVERTIME_MULTIPLIER, 2) if hr else None
-                seg_reg = sum(c['regular'] for c in seg_month_cells.values())
-                seg_ram = sum(c['ramadan'] for c in seg_month_cells.values())
-                seg_ot  = sum(c['overtime'] for c in seg_month_cells.values())
-                # Label: show date range
-                first_m = seg['months'][0]
-                last_m  = seg['months'][-1]
-                period_label = f" ({first_m[:7]} → {last_m[:7]})" if first_m != last_m else f" ({first_m[:7]})"
-                final_employees.append({
-                    'name': emp_row['name'] + period_label,
-                    'full_name': emp_row['full_name'],
-                    'code': emp_row['code'],
-                    'country': emp_row['country'],
-                    'position': f"{emp_row['country']} - {seg_pos}" if seg_pos else emp_row['position'],
-                    'hour_rate': hr,
-                    'overtime_rate': ot_r,
-                    'rate_source': rate_src,
-                    'sar_rate': emp_row['sar_rate'],
-                    'is_onsite': False,
-                    'is_promotion_split': True,
-                    'months': full_month_cells,
-                    'total_hours': round(seg_reg + seg_ram + seg_ot, 2),
-                    'total_cost_usd': _calc_cost(seg_reg, seg_ram, seg_ot, hr, ot_r),
-                    'current_mds': _calc_mds(seg_reg, seg_ram, seg_ot),
-                })
-        employees_out = final_employees
-
-    # Sort alphabetically by display name
-    employees_out.sort(key=lambda x: x['name'].lower())
+    # Sort: by display name, then onsite last
+    employees_out.sort(key=lambda x: (
+        x['name'].lower().replace(' — onsite', ''),
+        1 if x.get('is_onsite') else 0
+    ))
 
     return jsonify({
         'phase': phase_key,
@@ -4433,20 +4335,6 @@ def load_promotions():
     return records
 
 
-def get_promotion_periods_for_employee(emp_name):
-    """Returns promotion records for an employee, sorted by date."""
-    import re as _re_promo
-    records = load_promotions()
-    clean = _re_promo.sub(r'^\s*\[[A-Z]\d+\s*\]\s*', '', emp_name).strip().lower()
-    result = []
-    for r in records:
-        rn = (r.get('name') or '').strip().lower()
-        if rn == clean or rn in clean or clean in rn:
-            result.append(r)
-    result.sort(key=lambda x: x.get('promotion_date', ''))
-    return result
-
-
 @app.route('/api/promotions', methods=['GET'])
 def api_promotions_list():
     return jsonify({'records': load_promotions()})
@@ -4496,13 +4384,29 @@ def api_promotions_delete(rec_id):
 
 @app.route('/api/promotions/employee-odoo-position')
 def api_employee_odoo_position():
-    """Get current Odoo position for an employee — used to auto-fill new_position."""
+    """Get current Odoo position + suggest previous level."""
     name = request.args.get('name', '').strip()
     if not name:
         return jsonify({'error': 'name required'}), 400
-    pos = get_odoo_position_for_employee(name)
-    return jsonify({'name': name, 'current_position': pos})
+    current_pos = get_odoo_position_for_employee(name)
 
+    # Suggest old position: strip level prefix to get one level lower
+    suggested_old = None
+    if current_pos:
+        p = current_pos.lower()
+        if 'lead' in p:
+            suggested_old = current_pos.replace('Lead ', 'Sr ').replace('lead ', 'Sr ')
+        elif 'senior' in p or ' sr ' in p or p.startswith('sr '):
+            import re as _r
+            suggested_old = _r.sub(r'(?i)(senior\s+|sr\.?\s+)', '', current_pos).strip()
+        else:
+            suggested_old = current_pos  # already junior
+
+    return jsonify({
+        'name': name,
+        'current_position': current_pos,
+        'suggested_old_position': suggested_old,
+    })
 
 @app.route('/api/travel', methods=['GET'])
 def api_travel_list():
