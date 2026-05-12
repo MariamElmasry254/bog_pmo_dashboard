@@ -2546,8 +2546,8 @@ def parse_estimated_sheet(df):
 # Phase mapping: variance tab → list of Odoo phases
 PHASE_MAPPING = {
     'development': ['Development Phase'],
-    'consultation': ['Consultation phase - Initiation', 'Consultation phase - Analysis',
-                     'Consultation phase - General', 'Consultation phase - UX'],
+    'consultation': ['Consultation phase - Initiation', 'Consultation phase -  Analysis',
+                     'Consultation phase - General', 'Consultation phase -  UX'],
     'support': [],  # Support phase doesn't exist as Odoo phase yet
 }
 
@@ -3387,13 +3387,26 @@ def api_effort_all_months(phase_key):
             return jsonify({'employees': [], 'months': []})
         project_id = projects[0]['id']
 
-        # Find phases
+        # Find phases — try exact match first, then ilike fallback for name variations
         phases = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'project.phase', 'search_read',
             [[('name', 'in', phase_names)]],
             {'fields': ['id', 'name']}
         )
+        # If we didn't find all phases, try ilike for each missing one
+        found_names_lower = {p['name'].strip().lower() for p in phases}
+        for pname in phase_names:
+            if pname.strip().lower() not in found_names_lower:
+                extra = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'project.phase', 'search_read',
+                    [[('name', 'ilike', pname.strip())]],
+                    {'fields': ['id', 'name'], 'limit': 1}
+                )
+                if extra:
+                    phases.extend(extra)
+                    found_names_lower.add(extra[0]['name'].strip().lower())
         phase_ids = [p['id'] for p in phases]
 
         # Get ALL tasks that have phase_id in our phases (any level, not just parents)
