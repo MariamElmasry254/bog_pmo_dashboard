@@ -800,7 +800,6 @@ async function submitTravel() {
 // ====== PROMOTIONS TAB ======
 async function renderPromotionsSubTab() {
   const cont = document.getElementById('varianceContent');
-
   let employees = [];
   try {
     const r = await fetch('/api/project-employees');
@@ -812,21 +811,17 @@ async function renderPromotionsSubTab() {
   cont.innerHTML = `
     <div class="banner banner-info">
       <strong>Promotion Records:</strong>
-      When a team member gets promoted mid-project, add a record here.
-      Current Effort will automatically split their hours into separate rows
-      (before & after promotion), each with the correct rate.
-      The "Position After" is auto-filled from Odoo.
+      Add a record when a team member gets promoted mid-project.
+      Current Effort will automatically split their hours — before & after promotion —
+      each row with the correct rate. Position After is auto-filled from Odoo.
     </div>
-
     <div class="card">
       <h3 class="card-title" id="promoFormTitle">Add Promotion Record</h3>
       <div class="travel-form">
         <div class="form-row">
           <label>Employee Name
-            <input list="promoEmpList" id="prName" placeholder="Type or pick from list…" class="search-input" autocomplete="off">
-            <datalist id="promoEmpList">
-              ${employees.map(e => `<option value="${e.name}">`).join('')}
-            </datalist>
+            <input list="promoEmpList" id="prName" placeholder="Type or pick…" class="search-input" autocomplete="off">
+            <datalist id="promoEmpList">${employees.map(e=>`<option value="${e.name}">`).join('')}</datalist>
           </label>
           <label>Promotion Date
             <input type="date" id="prDate" class="search-input">
@@ -835,11 +830,11 @@ async function renderPromotionsSubTab() {
         <div class="form-row">
           <label>Position BEFORE promotion
             <input type="text" id="prOldPos" placeholder="Auto-suggested from Odoo…" class="search-input" style="width:100%">
-            <span id="prOldPosHint" class="muted-text" style="font-size:10px;margin-top:2px;display:block;"></span>
+            <span id="prOldHint" class="muted-text" style="font-size:10px;margin-top:2px;display:block;"></span>
           </label>
           <label>Position AFTER promotion (current in Odoo)
             <input type="text" id="prNewPos" placeholder="Auto-filled from Odoo…" class="search-input" style="width:100%">
-            <span id="prNewPosStatus" class="muted-text" style="font-size:10px;margin-top:2px;display:block;"></span>
+            <span id="prNewStatus" class="muted-text" style="font-size:10px;margin-top:2px;display:block;"></span>
           </label>
         </div>
         <div class="form-row">
@@ -854,47 +849,41 @@ async function renderPromotionsSubTab() {
         <input type="hidden" id="prEditingId" value="">
       </div>
     </div>
-
     <div class="card">
       <h3 class="card-title">Promotion History</h3>
       <div class="table-scroll">
         <table class="data-table" id="promoTable">
           <thead><tr>
             <th>Employee</th><th>Promotion Date</th>
-            <th>Position Before</th><th>Position After</th>
-            <th>Notes</th><th></th>
+            <th>Position Before</th><th>Position After</th><th>Notes</th><th></th>
           </tr></thead>
           <tbody><tr><td colspan="6" class="loading">Loading…</td></tr></tbody>
         </table>
       </div>
-    </div>
-  `;
+    </div>`;
 
-  // Auto-fetch from Odoo when name selected
   document.getElementById('prName').addEventListener('change', async (e) => {
     const name = e.target.value.trim();
     if (!name) return;
-    const statusEl = document.getElementById('prNewPosStatus');
-    const hintEl = document.getElementById('prOldPosHint');
-    statusEl.textContent = 'Fetching from Odoo…';
+    document.getElementById('prNewStatus').textContent = 'Fetching from Odoo…';
     try {
       const r = await fetch(`/api/promotions/employee-odoo-position?name=${encodeURIComponent(name)}`);
       const d = await r.json();
       if (d.current_position) {
         document.getElementById('prNewPos').value = d.current_position;
-        statusEl.textContent = `✓ From Odoo: "${d.current_position}"`;
-        statusEl.style.color = 'var(--green)';
-        if (d.suggested_old_position) {
-          document.getElementById('prOldPos').value = d.suggested_old_position;
-          hintEl.textContent = `Auto-suggested — edit if wrong`;
-          hintEl.style.color = 'var(--amber)';
-        }
+        document.getElementById('prNewStatus').textContent = `✓ From Odoo: "${d.current_position}"`;
+        document.getElementById('prNewStatus').style.color = 'var(--green)';
       } else {
-        statusEl.textContent = 'Not found in Odoo — enter manually';
-        statusEl.style.color = 'var(--amber)';
+        document.getElementById('prNewStatus').textContent = 'Not found in Odoo — enter manually';
+        document.getElementById('prNewStatus').style.color = 'var(--amber)';
+      }
+      if (d.suggested_old_position) {
+        document.getElementById('prOldPos').value = d.suggested_old_position;
+        document.getElementById('prOldHint').textContent = 'Auto-suggested — edit if wrong';
+        document.getElementById('prOldHint').style.color = 'var(--amber)';
       }
     } catch(err) {
-      statusEl.textContent = 'Could not fetch from Odoo';
+      document.getElementById('prNewStatus').textContent = 'Could not fetch from Odoo';
     }
   });
 
@@ -918,47 +907,43 @@ async function loadPromotionRecords() {
     tr.innerHTML = `
       <td><b>${r.name}</b></td>
       <td><span style="font-family:var(--mono);font-size:12px;">${r.promotion_date}</span></td>
-      <td><span class="muted-text" style="font-size:11px;">${r.old_position || '—'}</span></td>
-      <td><span style="font-size:11px;color:var(--green);font-weight:600;">${r.new_position || '—'}</span></td>
-      <td><span class="muted-text" style="font-size:11px;">${r.notes || ''}</span></td>
+      <td><span class="muted-text" style="font-size:11px;">${r.old_position||'—'}</span></td>
+      <td><span style="font-size:11px;color:var(--green);font-weight:600;">${r.new_position||'—'}</span></td>
+      <td><span class="muted-text" style="font-size:11px;">${r.notes||''}</span></td>
       <td>
-        <button class="see-details-btn" data-promo-edit="${r.id}">Edit</button>
-        <button class="btn-ghost" style="padding:4px 10px;font-size:11px;" data-promo-del="${r.id}">Delete</button>
+        <button class="see-details-btn" data-pe="${r.id}">Edit</button>
+        <button class="btn-ghost" style="padding:4px 10px;font-size:11px;" data-pd="${r.id}">Delete</button>
       </td>`;
     tbody.appendChild(tr);
   });
-  tbody.querySelectorAll('[data-promo-edit]').forEach(b =>
-    b.addEventListener('click', () => startPromoEdit(b.dataset.promoEdit))
-  );
-  tbody.querySelectorAll('[data-promo-del]').forEach(b =>
-    b.addEventListener('click', async () => {
-      if (!confirm('Delete this promotion record?')) return;
-      await fetch(`/api/promotions/${b.dataset.promoDel}`, { method: 'DELETE' });
-      loadPromotionRecords();
-    })
-  );
+  tbody.querySelectorAll('[data-pe]').forEach(b => b.addEventListener('click', () => startPromoEdit(b.dataset.pe)));
+  tbody.querySelectorAll('[data-pd]').forEach(b => b.addEventListener('click', async () => {
+    if (!confirm('Delete?')) return;
+    await fetch(`/api/promotions/${b.dataset.pd}`, {method:'DELETE'});
+    loadPromotionRecords();
+  }));
 }
 
 function startPromoEdit(id) {
-  const r = (AppState.promoRecords || []).find(x => String(x.id) === String(id));
+  const r = (AppState.promoRecords||[]).find(x => String(x.id) === String(id));
   if (!r) return;
-  document.getElementById('prName').value = r.name || '';
-  document.getElementById('prDate').value = r.promotion_date || '';
-  document.getElementById('prOldPos').value = r.old_position || '';
-  document.getElementById('prNewPos').value = r.new_position || '';
-  document.getElementById('prNotes').value = r.notes || '';
+  document.getElementById('prName').value = r.name||'';
+  document.getElementById('prDate').value = r.promotion_date||'';
+  document.getElementById('prOldPos').value = r.old_position||'';
+  document.getElementById('prNewPos').value = r.new_position||'';
+  document.getElementById('prNotes').value = r.notes||'';
   document.getElementById('prEditingId').value = r.id;
   document.getElementById('prSubmit').textContent = '✓ Save Changes';
   document.getElementById('prSubmit').className = 'btn-export';
   document.getElementById('prCancel').style.display = '';
   document.getElementById('promoFormTitle').textContent = `Edit — ${r.name}`;
-  document.querySelector('.travel-form').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  document.querySelector('.travel-form').scrollIntoView({behavior:'smooth',block:'center'});
 }
 
 function cancelPromoEdit() {
   document.getElementById('prEditingId').value = '';
   ['prName','prDate','prOldPos','prNewPos','prNotes'].forEach(id => document.getElementById(id).value = '');
-  ['prNewPosStatus','prOldPosHint'].forEach(id => document.getElementById(id).textContent = '');
+  ['prNewStatus','prOldHint'].forEach(id => document.getElementById(id).textContent = '');
   document.getElementById('prSubmit').textContent = '+ Add Promotion';
   document.getElementById('prSubmit').className = 'btn-primary';
   document.getElementById('prCancel').style.display = 'none';
@@ -966,7 +951,7 @@ function cancelPromoEdit() {
 }
 
 async function submitPromotion() {
-  const editingId = document.getElementById('prEditingId').value;
+  const eid = document.getElementById('prEditingId').value;
   const body = {
     name: document.getElementById('prName').value.trim(),
     promotion_date: document.getElementById('prDate').value,
@@ -974,20 +959,12 @@ async function submitPromotion() {
     new_position: document.getElementById('prNewPos').value.trim(),
     notes: document.getElementById('prNotes').value.trim(),
   };
-  if (!body.name || !body.promotion_date) {
-    alert('Name and promotion date are required');
-    return;
-  }
-  const res = await fetch(editingId ? `/api/promotions/${editingId}` : '/api/promotions', {
-    method: editingId ? 'PUT' : 'POST',
-    headers: {'Content-Type': 'application/json'},
+  if (!body.name || !body.promotion_date) { alert('Name and date required'); return; }
+  const res = await fetch(eid ? `/api/promotions/${eid}` : '/api/promotions', {
+    method: eid ? 'PUT' : 'POST',
+    headers: {'Content-Type':'application/json'},
     body: JSON.stringify(body),
   });
-  if (res.ok) {
-    cancelPromoEdit();
-    loadPromotionRecords();
-  } else {
-    const e = await res.json();
-    alert('Error: ' + (e.error || 'failed'));
-  }
+  if (res.ok) { cancelPromoEdit(); loadPromotionRecords(); }
+  else { const e = await res.json(); alert('Error: '+(e.error||'failed')); }
 }
