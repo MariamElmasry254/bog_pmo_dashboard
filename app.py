@@ -2870,26 +2870,50 @@ def find_tunis_rate(emp_name, tunis_rates):
 
 def get_odoo_position_for_employee(employee_name):
     """Try to fetch position from Odoo hr.employee model for an employee by name.
+    Strips [code] prefix since Odoo stores names without it.
     Returns position name or None.
     """
+    if not employee_name:
+        return None
     if not odoo.uid:
         if not odoo.connect():
             return None
+
+    import re
+    clean_name = re.sub(r'^\s*\[[A-Z]\d+\]\s*', '', employee_name).strip()
+    candidates = [clean_name, employee_name]
+
     try:
-        emps = odoo.models.execute_kw(
-            ODOO_DB, odoo.uid, ODOO_PASSWORD,
-            'hr.employee', 'search_read',
-            [[('name', '=', employee_name)]],
-            {'fields': ['name', 'job_title', 'job_id'], 'limit': 1}
-        )
-        if not emps:
+        emp = None
+        for q in candidates:
+            if not q:
+                continue
+            emps = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'hr.employee', 'search_read',
+                [[('name', '=', q)]],
+                {'fields': ['name', 'job_title', 'job_id'], 'limit': 1}
+            )
+            if emps:
+                emp = emps[0]
+                break
+            emps = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'hr.employee', 'search_read',
+                [[('name', 'ilike', q)]],
+                {'fields': ['name', 'job_title', 'job_id'], 'limit': 1}
+            )
+            if emps:
+                emp = emps[0]
+                break
+
+        if not emp:
             return None
-        emp = emps[0]
         if emp.get('job_id'):
             return emp['job_id'][1]
         return emp.get('job_title') or None
     except Exception as e:
-        logger.warning(f"Odoo position lookup for {employee_name}: {e}")
+        logger.warning(f"Odoo position lookup for '{employee_name}' (cleaned: '{clean_name}'): {e}")
         return None
 
 
@@ -2903,33 +2927,62 @@ def get_odoo_rate_for_employee(employee_name):
     Converts to USD using SAR_TO_USD.
     Returns: { 'hour_rate': float, 'overtime_rate': float, 'source': 'odoo' } or None.
     """
+    if not employee_name:
+        return None
     if not odoo.uid:
         if not odoo.connect():
             return None
+
+    # IMPORTANT: Odoo stores names WITHOUT the [E123] prefix that appears in timesheets!
+    # E.g. timesheet shows "[E102] AbdelRahman Doghish" but hr.employee.name = "AbdelRahman Doghish"
+    import re
+    clean_name = re.sub(r'^\s*\[[A-Z]\d+\]\s*', '', employee_name).strip()
+    # Try both - exact match on cleaned, then ilike on cleaned, then ilike on raw
+    candidates = [clean_name, employee_name]
+
     try:
-        # Try a few field names commonly used for timesheet cost
-        emps = odoo.models.execute_kw(
-            ODOO_DB, odoo.uid, ODOO_PASSWORD,
-            'hr.employee', 'search_read',
-            [[('name', '=', employee_name)]],
-            {'fields': ['name', 'timesheet_cost', 'hourly_cost'], 'limit': 1}
-        )
-        if not emps:
+        emp = None
+        for q in candidates:
+            if not q:
+                continue
+            # Try exact first
+            emps = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'hr.employee', 'search_read',
+                [[('name', '=', q)]],
+                {'fields': ['name', 'timesheet_cost'], 'limit': 1}
+            )
+            if emps:
+                emp = emps[0]
+                break
+            # Try ilike (fuzzy)
+            emps = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'hr.employee', 'search_read',
+                [[('name', 'ilike', q)]],
+                {'fields': ['name', 'timesheet_cost'], 'limit': 1}
+            )
+            if emps:
+                emp = emps[0]
+                break
+
+        if not emp:
             return None
-        emp = emps[0]
-        # timesheet_cost is in local currency (SAR for this Odoo)
-        sar_rate = emp.get('timesheet_cost') or emp.get('hourly_cost')
+
+        sar_rate = emp.get('timesheet_cost')
         if not sar_rate or sar_rate <= 0:
             return None
+
         usd_rate = round(sar_rate / SAR_TO_USD, 2)
         return {
             'hour_rate': usd_rate,
             'overtime_rate': round(usd_rate * OVERTIME_MULTIPLIER, 2),
             'source': 'odoo',
             'sar_rate': sar_rate,
+            'matched_name': emp.get('name'),
         }
     except Exception as e:
-        logger.warning(f"Odoo rate lookup for {employee_name}: {e}")
+        logger.warning(f"Odoo rate lookup for '{employee_name}' (cleaned: '{clean_name}'): {e}")
         return None
 
 
@@ -3010,6 +3063,62 @@ def api_employee_rate():
         'is_onsite': onsite,
         'rate': rate,
     })
+
+
+def batch_fetch_employees_from_odoo(employee_names):
+    """Fetch position + timesheet_cost for a batch of employees in ONE Odoo query.
+    Strips [E123] prefix from names since Odoo stores names without it.
+    Returns: { original_name: {'odoo_name', 'position', 'sar_rate'} }
+    """
+    if not employee_names:
+        return {}
+    if not odoo.uid:
+        if not odoo.connect():
+            return {}
+
+    import re
+    cleaned_to_originals = {}
+    for n in employee_names:
+        if not n:
+            continue
+        clean = re.sub(r'^\s*\[[A-Z]\d+\]\s*', '', n).strip()
+        if clean:
+            cleaned_to_originals.setdefault(clean, []).append(n)
+
+    if not cleaned_to_originals:
+        return {}
+
+    try:
+        emps = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'hr.employee', 'search_read',
+            [[('name', 'in', list(cleaned_to_originals.keys()))]],
+            {'fields': ['id', 'name', 'job_title', 'job_id', 'timesheet_cost']}
+        )
+
+        result = {}
+        for emp in emps:
+            emp_name = emp.get('name', '')
+            position = None
+            if emp.get('job_id'):
+                position = emp['job_id'][1] if isinstance(emp['job_id'], list) else None
+            position = position or emp.get('job_title')
+            sar_rate = emp.get('timesheet_cost') or 0
+
+            entry = {
+                'odoo_name': emp_name,
+                'position': position,
+                'sar_rate': sar_rate,
+            }
+
+            for original in cleaned_to_originals.get(emp_name, []):
+                result[original] = entry
+
+        logger.info(f"Batch fetched {len(emps)} of {len(cleaned_to_originals)} employees from Odoo")
+        return result
+    except Exception as e:
+        logger.warning(f"Batch employee fetch failed: {e}")
+        return {}
 
 
 @app.route('/debug/employee-fields')
@@ -3390,12 +3499,17 @@ def api_effort_all_months(phase_key):
         else:
             person_data[emp_name][month_key]['regular'] += h
 
-    # Step 4: For each employee, lookup position + rate (with onsite check)
+    # Step 4: BATCH fetch all employees from Odoo in ONE query (performance!)
+    all_emp_names = list(person_data.keys())
+    odoo_data = batch_fetch_employees_from_odoo(all_emp_names)
+    logger.info(f"Resolved {len(odoo_data)} of {len(all_emp_names)} employees from Odoo")
+
+    # For each employee, lookup position + rate (with onsite check)
     employees_out = []
     for emp_name, months_data in sorted(person_data.items()):
         country = get_country_from_employee_name(emp_name)
 
-        # Is this person traveling onsite (in any travel record overlapping with the data months)?
+        # Is this person traveling onsite?
         is_onsite = False
         for tr in travel_records:
             if not tr.get('name'):
@@ -3405,16 +3519,17 @@ def api_effort_all_months(phase_key):
             import re
             en_clean = re.sub(r'\[[A-Z]\d+\]\s*', '', en).strip()
             if tn == en_clean or tn in en_clean or en_clean in tn:
-                # name match
                 is_onsite = True
                 break
 
-        # Lookup position from Odoo
-        odoo_pos = get_odoo_position_for_employee(emp_name)
+        # Get from batch result
+        odoo_info = odoo_data.get(emp_name, {})
+        odoo_pos = odoo_info.get('position')
+        sar_rate = odoo_info.get('sar_rate', 0)
 
-        # Build full position string
+        # Build position string
         if country == 'TUN':
-            full_position = f"TUN - {emp_name}"
+            full_position = f"TUN - {odoo_info.get('odoo_name', emp_name)}"
         elif odoo_pos:
             full_position = f"{country} - {odoo_pos}"
             if is_onsite and country == 'EGY':
@@ -3422,10 +3537,37 @@ def api_effort_all_months(phase_key):
         else:
             full_position = None
 
-        # Get rate
-        rate_info = get_employee_rate(emp_name, full_position, is_onsite)
-        hour_rate = rate_info.get('hour_rate') if rate_info else None
-        overtime_rate = rate_info.get('overtime_rate') if rate_info else None
+        # Determine rate
+        hour_rate = None
+        overtime_rate = None
+        rate_source = None
+
+        # Tunis: by name in DB
+        if country == 'TUN':
+            tunis = get_tunis_rate_by_name(db, emp_name)
+            if tunis:
+                hour_rate = tunis['hour_rate']
+                rate_source = 'tunis_rates_db'
+
+        # EGY/KSA: try Odoo first (regular), then DB
+        if hour_rate is None and sar_rate and sar_rate > 0 and not is_onsite:
+            hour_rate = round(sar_rate / SAR_TO_USD, 2)
+            rate_source = 'odoo'
+
+        # Onsite: must come from DB (Odoo doesn't have onsite rates)
+        if hour_rate is None and full_position:
+            pos_info = get_position_by_name(db, full_position)
+            if pos_info and pos_info.get('hour_rate'):
+                hour_rate = pos_info['hour_rate']
+                rate_source = 'positions_db' + ('_onsite' if is_onsite else '')
+
+        # Final fallback: if onsite but only Odoo rate exists, use that
+        if hour_rate is None and sar_rate and sar_rate > 0:
+            hour_rate = round(sar_rate / SAR_TO_USD, 2)
+            rate_source = 'odoo'
+
+        if hour_rate:
+            overtime_rate = round(hour_rate * OVERTIME_MULTIPLIER, 2)
 
         # Build month cells
         month_cells = {}
@@ -3447,7 +3589,6 @@ def api_effort_all_months(phase_key):
             if overtime_rate:
                 total_cost += c['overtime'] * overtime_rate
 
-        # Extract employee code from name
         import re
         emp_code_match = re.match(r'^\[([A-Z]\d+)\]', emp_name)
         emp_code = emp_code_match.group(1) if emp_code_match else ''
@@ -3461,7 +3602,8 @@ def api_effort_all_months(phase_key):
             'position': full_position or '—',
             'hour_rate': hour_rate,
             'overtime_rate': overtime_rate,
-            'rate_source': rate_info.get('source') if rate_info else None,
+            'rate_source': rate_source,
+            'sar_rate': sar_rate,
             'is_onsite': is_onsite,
             'months': month_cells,
             'total_hours': round(total_hours, 2),
