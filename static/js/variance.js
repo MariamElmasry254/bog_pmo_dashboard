@@ -36,6 +36,8 @@ function switchSubTab(key) {
   });
   if (key === 'travel') {
     renderTravelSubTab();
+  } else if (key === 'promotions') {
+    renderPromotionsSubTab();
   } else {
     renderVarianceSubTab(key);
   }
@@ -495,6 +497,7 @@ async function loadEffortLive(phaseKey, containerId) {
               ${monthHeaders1}
               <th rowspan="2" class="num" style="border-left: 2px solid var(--border-strong);">Total<br>Cost ($)</th>
               <th rowspan="2" class="num">Current<br>MDs done</th>
+              <th rowspan="2" class="num" style="border-left: 2px solid #BFDBFE; background: #EFF6FF; color: var(--blue);">This Month<br>MD</th>
             </tr>
             <tr class="eff-row-subhead">
               ${monthHeaders2}
@@ -507,10 +510,20 @@ async function loadEffortLive(phaseKey, containerId) {
     let grandTotalHours = 0;
     let grandTotalMDs = 0;
 
+    // Current month key
+    const now = new Date();
+    const thisMonthKey = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+    let grandThisMonthMDs = 0;
+
     d.employees.forEach((emp, idx) => {
       grandTotalCost += emp.total_cost_usd || 0;
       grandTotalHours += emp.total_hours || 0;
       grandTotalMDs += emp.current_mds || 0;
+
+      // This month MDs = (regular + overtime) / 8 + ramadan / 6
+      const thisCell = emp.months?.[thisMonthKey] || { regular: 0, ramadan: 0, overtime: 0 };
+      const thisMD = (thisCell.regular + thisCell.overtime) / 8 + thisCell.ramadan / 6;
+      grandThisMonthMDs += thisMD;
 
       // Country color
       const countryColor = emp.country === 'KSA' ? '#10B981'
@@ -543,6 +556,9 @@ async function loadEffortLive(phaseKey, containerId) {
         `;
       });
 
+      // This month MD per employee
+      const thisMDDisplay = thisMD > 0 ? `<b style="color:var(--blue);">${fmt.decimal(thisMD)}</b>` : '<span class="muted-text">—</span>';
+
       html += `
         <tr>
           <td style="position: sticky; left: 0; background: white; z-index: 2; font-weight: 600;">${idx + 1}</td>
@@ -556,6 +572,7 @@ async function loadEffortLive(phaseKey, containerId) {
           ${monthCells}
           <td class="num" style="border-left: 2px solid var(--border-strong);"><b style="color: var(--blue);">$${fmt.num(Math.round(emp.total_cost_usd))}</b></td>
           <td class="num"><b>${fmt.decimal(emp.current_mds)}</b></td>
+          <td class="num" style="border-left: 2px solid #BFDBFE; background: #EFF6FF;">${thisMDDisplay}</td>
         </tr>
       `;
     });
@@ -572,32 +589,32 @@ async function loadEffortLive(phaseKey, containerId) {
     html += `
         <td class="num" style="border-left: 2px solid var(--border-strong);"><b style="color: var(--blue);">$${fmt.num(Math.round(grandTotalCost))}</b></td>
         <td class="num"><b style="color: var(--blue);">${fmt.decimal(grandTotalMDs)}</b></td>
-      </tr>
-    `;
-
-    // ── Summary rows: Total Cost SAR + Average Cost per MD ──
-    const totalCostSAR = grandTotalCost * 3.75;
-    const avgCostPerMD = grandTotalMDs > 0 ? totalCostSAR / grandTotalMDs : 0;
-    const summaryColspan = 5 + (months.length * 3) + 2; // # + name + pos + rate + OT rate + months*3 + totalcost + mds
-    html += `
-      <tr style="background: #EFF6FF; border-top: 2px solid var(--blue-light, #BFDBFE);">
-        <td colspan="${summaryColspan}" style="position: sticky; left: 0; background: #EFF6FF; padding: 10px 16px;">
-          <div style="display: flex; gap: 40px; align-items: center; flex-wrap: wrap;">
-            <div style="display: flex; align-items: baseline; gap: 8px;">
-              <span style="font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">Total Cost in SAR</span>
-              <span style="font-size: 18px; font-weight: 700; color: var(--navy);">SAR ${fmt.num(Math.round(totalCostSAR))}</span>
-            </div>
-            <div style="display: flex; align-items: baseline; gap: 8px;">
-              <span style="font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">Average Cost per MD</span>
-              <span style="font-size: 18px; font-weight: 700; color: var(--navy);">SAR ${fmt.num(Math.round(avgCostPerMD))}</span>
-            </div>
-            <div style="display: flex; align-items: baseline; gap: 8px; color: var(--text-muted); font-size: 11px;">
-              <span>($1 = SAR 3.75 · Total MDs: <b style="color:var(--navy)">${fmt.decimal(grandTotalMDs)}</b>)</span>
-            </div>
-          </div>
-        </td>
+        <td class="num" style="border-left: 2px solid #BFDBFE; background: #EFF6FF;"><b style="color: var(--blue);">${fmt.decimal(grandThisMonthMDs)}</b></td>
       </tr>
       </tbody></table></div>
+    `;
+
+    // ── Summary strip OUTSIDE the table ──
+    const totalCostSAR = grandTotalCost * 3.75;
+    const avgCostPerMD = grandTotalMDs > 0 ? totalCostSAR / grandTotalMDs : 0;
+    html += `
+      <div style="display: flex; gap: 32px; align-items: center; flex-wrap: wrap; margin-top: 16px; padding: 14px 18px; background: #EFF6FF; border-radius: 8px; border: 1px solid #BFDBFE;">
+        <div>
+          <div style="font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 2px;">Total Cost in SAR</div>
+          <div style="font-size: 20px; font-weight: 700; color: var(--navy);">SAR ${fmt.num(Math.round(totalCostSAR))}</div>
+        </div>
+        <div style="width: 1px; height: 36px; background: #BFDBFE;"></div>
+        <div>
+          <div style="font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 2px;">Average Cost per MD</div>
+          <div style="font-size: 20px; font-weight: 700; color: var(--navy);">SAR ${fmt.num(Math.round(avgCostPerMD))}</div>
+        </div>
+        <div style="width: 1px; height: 36px; background: #BFDBFE;"></div>
+        <div>
+          <div style="font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 2px;">This Month MDs</div>
+          <div style="font-size: 20px; font-weight: 700; color: var(--blue);">${fmt.decimal(grandThisMonthMDs)}</div>
+        </div>
+        <div style="font-size: 11px; color: var(--text-muted); margin-left: auto;">$1 = SAR 3.75 · Total MDs: <b style="color:var(--navy)">${fmt.decimal(grandTotalMDs)}</b></div>
+      </div>
     `;
     cont.innerHTML = html;
   } catch (err) {
@@ -817,4 +834,185 @@ async function submitTravel() {
     const e = await res.json();
     alert('Error: ' + (e.error || 'failed'));
   }
+}
+
+// ============================================================
+// PROMOTIONS SUB-TAB
+// ============================================================
+async function renderPromotionsSubTab() {
+  const cont = document.getElementById('varianceContent');
+  cont.innerHTML = '<div class="loading">Loading promotions…</div>';
+
+  try {
+    // Load employees for datalist
+    const [promoRes, empRes] = await Promise.all([
+      fetch('/api/promotions'),
+      fetch('/api/project-employees'),
+    ]);
+    const promoData = await promoRes.json();
+    const empData = await empRes.json();
+    const employees = (empData.employees || []).map(e => e.name);
+    const records = promoData.records || [];
+
+    const empOptions = employees.map(e => `<option value="${e}">`).join('');
+
+    cont.innerHTML = `
+      <div class="card" style="margin-bottom: 16px;">
+        <h3 class="card-title" id="promoFormTitle">Add Promotion Record</h3>
+        <p class="muted-text" style="font-size: 12px; margin-bottom: 12px;">
+          Track mid-project promotions so cost calculations use the correct rate before and after promotion date.
+        </p>
+        <datalist id="promoEmpList">${empOptions}</datalist>
+        <div class="travel-form" style="display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 10px; align-items: end;">
+          <div>
+            <label class="filter-label">EMPLOYEE NAME</label>
+            <input type="text" id="promoName" list="promoEmpList" placeholder="Type name…" class="svc-input" style="width:100%; padding:6px 8px; border:1px solid var(--border-strong); border-radius:4px;"
+              oninput="promoFetchOdooPosition()">
+          </div>
+          <div>
+            <label class="filter-label">PROMOTION DATE</label>
+            <input type="date" id="promoDate" class="svc-input" style="width:100%; padding:6px 8px; border:1px solid var(--border-strong); border-radius:4px;">
+          </div>
+          <div>
+            <label class="filter-label">OLD POSITION <span class="muted-text">(before date)</span></label>
+            <input type="text" id="promoOldPos" placeholder="e.g. Business Analyst" class="svc-input" style="width:100%; padding:6px 8px; border:1px solid var(--border-strong); border-radius:4px;">
+          </div>
+          <div>
+            <label class="filter-label">NEW POSITION <span class="muted-text">(after date)</span></label>
+            <input type="text" id="promoNewPos" placeholder="e.g. Senior Business Analyst" class="svc-input" style="width:100%; padding:6px 8px; border:1px solid var(--border-strong); border-radius:4px;">
+          </div>
+        </div>
+        <div style="display: flex; gap: 8px; margin-top: 10px; align-items: center;">
+          <button class="btn-primary" onclick="submitPromotion()">💾 Save Promotion</button>
+          <button class="btn-outline" id="promoCancelBtn" onclick="cancelPromoEdit()" style="display:none;">✕ Cancel</button>
+          <span id="promoOdooHint" class="muted-text" style="font-size: 11px;"></span>
+        </div>
+        <input type="hidden" id="promoEditId" value="">
+      </div>
+
+      <div class="card">
+        <h3 class="card-title">Promotion Records <span class="muted-text">(${records.length})</span></h3>
+        <div class="table-scroll">
+          <table class="data-table" id="promoTable">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Employee</th>
+                <th>Promotion Date</th>
+                <th>Old Position (before)</th>
+                <th>New Position (after)</th>
+                <th>Notes</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="promoTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    `;
+    loadPromoRecords(records);
+  } catch (e) {
+    cont.innerHTML = `<div class="banner banner-warn"><strong>Error:</strong> ${e.message}</div>`;
+  }
+}
+
+function loadPromoRecords(records) {
+  const tbody = document.getElementById('promoTableBody');
+  if (!tbody) return;
+  if (!records || !records.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="loading">No promotion records yet</td></tr>';
+    return;
+  }
+  tbody.innerHTML = records.map((r, i) => `
+    <tr>
+      <td>${i + 1}</td>
+      <td><b>${r.name}</b></td>
+      <td style="font-family: var(--mono); font-size: 12px;">${r.promotion_date || '—'}</td>
+      <td style="color: var(--text-muted); font-size: 12px;">${r.old_position || '—'}</td>
+      <td style="color: var(--blue); font-size: 12px; font-weight: 600;">${r.new_position || '—'}</td>
+      <td class="muted-text" style="font-size: 11px;">${r.notes || ''}</td>
+      <td>
+        <button class="btn-outline" style="font-size: 11px; padding: 3px 8px;" onclick="startPromoEdit(${r.id})">✏️ Edit</button>
+        <button class="btn-outline" style="font-size: 11px; padding: 3px 8px; color: var(--red);" onclick="deletePromo(${r.id})">🗑</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+async function promoFetchOdooPosition() {
+  const name = document.getElementById('promoName')?.value?.trim();
+  const hint = document.getElementById('promoOdooHint');
+  if (!name || name.length < 3) { if (hint) hint.textContent = ''; return; }
+  if (hint) hint.textContent = 'Fetching position from Odoo…';
+  try {
+    const res = await fetch(`/api/promotions/employee-odoo-position?name=${encodeURIComponent(name)}`);
+    const d = await res.json();
+    if (d.current_position) {
+      const newPosEl = document.getElementById('promoNewPos');
+      const oldPosEl = document.getElementById('promoOldPos');
+      if (newPosEl && !newPosEl.value) newPosEl.value = d.current_position;
+      if (oldPosEl && !oldPosEl.value && d.suggested_old_position) oldPosEl.value = d.suggested_old_position;
+      if (hint) hint.textContent = `✓ Odoo position: ${d.current_position}`;
+    } else {
+      if (hint) hint.textContent = 'Position not found in Odoo';
+    }
+  } catch (e) {
+    if (hint) hint.textContent = '';
+  }
+}
+
+async function submitPromotion() {
+  const id = document.getElementById('promoEditId')?.value;
+  const body = {
+    name: document.getElementById('promoName')?.value?.trim(),
+    promotion_date: document.getElementById('promoDate')?.value,
+    old_position: document.getElementById('promoOldPos')?.value?.trim(),
+    new_position: document.getElementById('promoNewPos')?.value?.trim(),
+    notes: '',
+  };
+  if (!body.name || !body.promotion_date) { alert('Name and promotion date are required'); return; }
+
+  const url = id ? `/api/promotions/${id}` : '/api/promotions';
+  const method = id ? 'PUT' : 'POST';
+  const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (res.ok) {
+    cancelPromoEdit();
+    renderPromotionsSubTab();
+  } else {
+    const e = await res.json();
+    alert('Error: ' + (e.error || 'failed'));
+  }
+}
+
+async function startPromoEdit(id) {
+  const res = await fetch('/api/promotions');
+  const d = await res.json();
+  const r = (d.records || []).find(x => x.id === id);
+  if (!r) return;
+  document.getElementById('promoEditId').value = id;
+  document.getElementById('promoName').value = r.name || '';
+  document.getElementById('promoDate').value = r.promotion_date || '';
+  document.getElementById('promoOldPos').value = r.old_position || '';
+  document.getElementById('promoNewPos').value = r.new_position || '';
+  document.getElementById('promoFormTitle').textContent = `Edit Promotion — ${r.name}`;
+  document.getElementById('promoCancelBtn').style.display = '';
+}
+
+function cancelPromoEdit() {
+  document.getElementById('promoEditId').value = '';
+  document.getElementById('promoName').value = '';
+  document.getElementById('promoDate').value = '';
+  document.getElementById('promoOldPos').value = '';
+  document.getElementById('promoNewPos').value = '';
+  document.getElementById('promoFormTitle').textContent = 'Add Promotion Record';
+  const btn = document.getElementById('promoCancelBtn');
+  if (btn) btn.style.display = 'none';
+  const hint = document.getElementById('promoOdooHint');
+  if (hint) hint.textContent = '';
+}
+
+async function deletePromo(id) {
+  if (!confirm('Delete this promotion record?')) return;
+  await fetch(`/api/promotions/${id}`, { method: 'DELETE' });
+  renderPromotionsSubTab();
 }
