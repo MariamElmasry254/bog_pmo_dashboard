@@ -3396,25 +3396,35 @@ def api_effort_all_months(phase_key):
         )
         phase_ids = [p['id'] for p in phases]
 
-        # Get parent tasks
-        parent_tasks = odoo.models.execute_kw(
+        # Get ALL tasks that have phase_id in our phases (any level, not just parents)
+        phase_tasks_direct = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'project.task', 'search_read',
             [[('phase_id', 'in', phase_ids), ('project_id', '=', project_id)]],
             {'fields': ['id', 'child_ids'], 'limit': 5000}
         )
-        parent_ids = {t['id'] for t in parent_tasks}
+        parent_ids = {t['id'] for t in phase_tasks_direct}
 
         # All project tasks → walk parents to find descendants of phase tasks
         all_proj_tasks = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'project.task', 'search_read',
             [[('project_id', '=', project_id)]],
-            {'fields': ['id', 'parent_id'], 'limit': 10000}
+            {'fields': ['id', 'parent_id', 'phase_id'], 'limit': 10000}
         )
         task_map = {t['id']: t for t in all_proj_tasks}
         relevant_ids = set(parent_ids)
+
+        # Also directly include any task whose phase_id is in our phases
         for t in all_proj_tasks:
+            ph = t.get('phase_id')
+            if ph and isinstance(ph, list) and ph[0] in phase_ids:
+                relevant_ids.add(t['id'])
+
+        # Walk parent chains to include sub-tasks of phase tasks
+        for t in all_proj_tasks:
+            if t['id'] in relevant_ids:
+                continue
             cur = t
             visited = set()
             while cur and cur['id'] not in visited:
