@@ -3504,30 +3504,75 @@ def api_effort_all_months(phase_key):
     odoo_data = batch_fetch_employees_from_odoo(all_emp_names)
     logger.info(f"Resolved {len(odoo_data)} of {len(all_emp_names)} employees from Odoo")
 
-    # ── imports needed for onsite split logic ──
+    # ── imports for onsite split logic ──
     import re as _re_effort
     import calendar as _cal
     from datetime import date as _date_cls2
 
-    # ── fuzzy position matcher (handles Senior vs Sr, Sr. vs Sr, etc.) ──
-    def _norm_pos(s):
-        s = s.lower()
-        s = _re_effort.sub(r'\bsenior\b', 'sr', s)
-        s = _re_effort.sub(r'\bsr\.\b', 'sr', s)
-        s = _re_effort.sub(r'\bjunior\b', 'jr', s)
-        s = _re_effort.sub(r'[^a-z0-9\s]', '', s)
-        return _re_effort.sub(r'\s+', ' ', s).strip()
+    # ── keyword-based onsite position lookup ──
+    # Handles mismatches like "Business Analysis Team Lead" → "Lead Business Analyst - onsite"
+    _EGY_ONSITE_MAP = {
+        ('lead',   'business analyst'):  'EGY - Lead Business Analyst - onsite',
+        ('senior', 'business analyst'):  'EGY - Sr Business Analyst - onsite',
+        ('mid',    'business analyst'):  'EGY - Business Analyst - onsite',
+        ('lead',   'software engineer'): 'EGY - Lead Software Engineer - onsite',
+        ('senior', 'software engineer'): 'EGY - Sr. Software Engineer - onsite',
+        ('mid',    'software engineer'): 'EGY - Software Engineer - onsite',
+        ('lead',   'quality engineer'):  'EGY - Lead Quality Engineer - onsite',
+        ('senior', 'quality engineer'):  'EGY - Sr Quality Engineer - onsite',
+        ('mid',    'quality engineer'):  'EGY - Quality Engineer - onsite',
+        ('lead',   'ux designer'):       'EGY - Lead UX Designer - onsite',
+        ('senior', 'ux designer'):       'EGY - Sr UX Designer - onsite',
+        ('mid',    'ux designer'):       'EGY - UX Designer - onsite',
+        ('lead',   'project manager'):   'EGY - Project Manager - onsite',
+        ('senior', 'project manager'):   'EGY - Project Manager - onsite',
+        ('mid',    'project manager'):   'EGY - Project Manager - onsite',
+    }
 
-    def _find_pos_fuzzy(target, all_pos):
-        if not target:
+    def _detect_level(s):
+        p = s.lower()
+        if any(x in p for x in ['lead', 'team lead', 'principal', 'head']):
+            return 'lead'
+        if any(x in p for x in ['senior', 'sr.', ' sr ']):
+            return 'senior'
+        return 'mid'
+
+    def _detect_role(s):
+        p = s.lower()
+        if any(x in p for x in ['project manager', 'pm ']):
+            return 'project manager'
+        if any(x in p for x in ['business anal', 'ba ', ' ba']):
+            return 'business analyst'
+        if any(x in p for x in ['software', 'developer', ' sw ']):
+            return 'software engineer'
+        if any(x in p for x in ['quality', 'qc', 'qa', 'test']):
+            return 'quality engineer'
+        if any(x in p for x in ['ux', 'ui/ux', 'design']):
+            return 'ux designer'
+        # fallback: check for engineer/analyst generically
+        if 'engineer' in p:
+            return 'software engineer'
+        if 'analyst' in p:
+            return 'business analyst'
+        return None
+
+    def _resolve_onsite_position(odoo_pos_str, country, all_pos):
+        """Given Odoo position string, find the matching onsite catalog entry."""
+        if not odoo_pos_str or country != 'EGY':
             return None
+        # Try direct fuzzy first
+        target = f"{country} - {odoo_pos_str} - onsite"
         for p in all_pos:
-            if p.get('position') == target:
-                return p
-        tn = _norm_pos(target)
-        for p in all_pos:
-            if _norm_pos(p.get('position', '')) == tn:
-                return p
+            pn = p.get('position', '')
+            if pn == target:
+                return pn
+            if _re_effort.sub(r'[^a-z0-9\s]', '', pn.lower()) == _re_effort.sub(r'[^a-z0-9\s]', '', target.lower()):
+                return pn
+        # Keyword-based fallback
+        level = _detect_level(odoo_pos_str)
+        role = _detect_role(odoo_pos_str)
+        if role:
+            return _EGY_ONSITE_MAP.get((level, role))
         return None
 
     _all_positions = get_all_positions(db)
@@ -3548,7 +3593,6 @@ def api_effort_all_months(phase_key):
             if tn == en_clean or tn in en_clean or en_clean in tn:
                 emp_travel_periods.append({'start': tr['start_date'], 'end': tr.get('end_date')})
 
-        # Get from batch result
         odoo_info = odoo_data.get(emp_name, {})
         odoo_pos = odoo_info.get('position')
         sar_rate = odoo_info.get('sar_rate', 0)
@@ -3559,7 +3603,7 @@ def api_effort_all_months(phase_key):
             onsite_position = None
         elif odoo_pos:
             base_position = f"{country} - {odoo_pos}"
-            onsite_position = f"{country} - {odoo_pos} - onsite" if country == 'EGY' else None
+            onsite_position = _resolve_onsite_position(odoo_pos, country, _all_positions)
         else:
             base_position = None
             onsite_position = None
@@ -3575,18 +3619,17 @@ def api_effort_all_months(phase_key):
                 if tunis:
                     hour_rate = tunis['hour_rate']; rate_source = 'tunis_rates_db'
             elif is_onsite_row:
-                # Onsite: catalog first (fuzzy), fallback Odoo
-                pos_info = _find_pos_fuzzy(position, _all_positions)
-                if pos_info and pos_info.get('hour_rate'):
-                    hour_rate = pos_info['hour_rate']; rate_source = 'positions_db_onsite'
-                elif _sar and _sar > 0:
+                if position:
+                    pos_info = get_position_by_name(db, position)
+                    if pos_info and pos_info.get('hour_rate'):
+                        hour_rate = pos_info['hour_rate']; rate_source = 'positions_db_onsite'
+                if hour_rate is None and _sar and _sar > 0:
                     hour_rate = round(_sar / SAR_TO_USD, 2); rate_source = 'odoo_fallback'
             else:
-                # Regular: Odoo first, then catalog
                 if _sar and _sar > 0:
                     hour_rate = round(_sar / SAR_TO_USD, 2); rate_source = 'odoo'
-                if hour_rate is None:
-                    pos_info = _find_pos_fuzzy(position, _all_positions)
+                if hour_rate is None and position:
+                    pos_info = get_position_by_name(db, position)
                     if pos_info and pos_info.get('hour_rate'):
                         hour_rate = pos_info['hour_rate']; rate_source = 'positions_db'
             if hour_rate:
@@ -3641,7 +3684,7 @@ def api_effort_all_months(phase_key):
             })
 
         else:
-            # ── Split: regular row + onsite row ──
+            # ── Split: regular + onsite rows ──
             regular_months = {}; onsite_months = {}
             for m in months:
                 mkey = m['key']
@@ -3654,12 +3697,12 @@ def api_effort_all_months(phase_key):
                 on_r = _onsite_ratio(m['year'], m['month'])
                 reg_r = 1.0 - on_r
                 regular_months[mkey] = {
-                    'regular': round(cell['regular'] * reg_r, 2), 'ramadan': round(cell['ramadan'] * reg_r, 2),
-                    'overtime': round(cell['overtime'] * reg_r, 2), 'total': round(total_cell * reg_r, 2),
+                    'regular': round(cell['regular']*reg_r, 2), 'ramadan': round(cell['ramadan']*reg_r, 2),
+                    'overtime': round(cell['overtime']*reg_r, 2), 'total': round(total_cell*reg_r, 2),
                 }
                 onsite_months[mkey] = {
-                    'regular': round(cell['regular'] * on_r, 2), 'ramadan': round(cell['ramadan'] * on_r, 2),
-                    'overtime': round(cell['overtime'] * on_r, 2), 'total': round(total_cell * on_r, 2),
+                    'regular': round(cell['regular']*on_r, 2), 'ramadan': round(cell['ramadan']*on_r, 2),
+                    'overtime': round(cell['overtime']*on_r, 2), 'total': round(total_cell*on_r, 2),
                 }
 
             # Row 1: Regular
@@ -3679,11 +3722,9 @@ def api_effort_all_months(phase_key):
             if total_h_on > 0:
                 hr_on, ot_on, src_on = _get_rate(onsite_position, True)
                 cost_on = sum((c['regular']+c['ramadan'])*(hr_on or 0)+c['overtime']*(ot_on or 0) for c in onsite_months.values())
-                matched = _find_pos_fuzzy(onsite_position, _all_positions)
-                pos_on_display = matched['position'] if matched else (onsite_position or '—')
                 employees_out.append({
                     'name': emp_display + ' — Onsite', 'full_name': emp_name, 'code': emp_code,
-                    'country': country, 'position': pos_on_display,
+                    'country': country, 'position': onsite_position or '—',
                     'hour_rate': hr_on, 'overtime_rate': ot_on, 'rate_source': src_on,
                     'sar_rate': sar_rate, 'is_onsite': True,
                     'months': onsite_months, 'total_hours': round(total_h_on, 2),
