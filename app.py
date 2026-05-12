@@ -3012,6 +3012,54 @@ def api_employee_rate():
     })
 
 
+@app.route('/debug/employee-fields')
+def debug_employee_fields():
+    """Returns ALL fields of all hr.employee records to discover the correct rate field name."""
+    if not odoo.uid:
+        if not odoo.connect():
+            return jsonify({'error': 'Odoo unreachable'}), 500
+    try:
+        # First, get available fields of hr.employee model
+        fields_info = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'hr.employee', 'fields_get',
+            [],
+            {'attributes': ['type', 'string']}
+        )
+        # Filter to likely rate-related fields
+        rate_like = {}
+        for fname, finfo in fields_info.items():
+            label = (finfo.get('string') or '').lower()
+            if any(k in fname.lower() for k in ['cost', 'rate', 'hour', 'salary', 'wage']):
+                rate_like[fname] = finfo
+            elif any(k in label for k in ['cost', 'rate', 'hour', 'salary', 'wage']):
+                rate_like[fname] = finfo
+
+        # Try to fetch sample employee with all likely fields
+        sample = None
+        emp_name = request.args.get('name')
+        if emp_name:
+            try:
+                emps = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'hr.employee', 'search_read',
+                    [[('name', 'ilike', emp_name)]],
+                    {'fields': list(rate_like.keys()) + ['name'], 'limit': 5}
+                )
+                sample = emps
+            except Exception as e:
+                sample = {'error': str(e)}
+
+        return jsonify({
+            'rate_like_fields_count': len(rate_like),
+            'rate_like_fields': rate_like,
+            'sample_employee': sample,
+            'usage': 'Add ?name=Doghish to see actual values for a specific employee',
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 # ============================================================
 # PLAN OVERRIDES (stored in JSON)
 # ============================================================
