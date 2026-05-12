@@ -4393,6 +4393,100 @@ def debug_task_by_name():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/debug/effort-phase')
+def debug_effort_phase():
+    """Debug: check what tasks/timesheets are found for a phase key.
+    Usage: /debug/effort-phase?phase=consultation
+    """
+    phase_key = request.args.get('phase', 'consultation')
+    if not odoo.uid:
+        if not odoo.connect():
+            return jsonify({'error': 'Odoo unreachable'})
+
+    phase_names = PHASE_MAPPING.get(phase_key, [])
+    info = {'phase_key': phase_key, 'phase_names': phase_names}
+
+    try:
+        projects = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.project', 'search_read',
+            [[('name', 'ilike', PROJECT_NAME)]],
+            {'fields': ['id', 'name'], 'limit': 5}
+        )
+        info['projects'] = [{'id': p['id'], 'name': p['name']} for p in projects]
+        if not projects:
+            return jsonify(info)
+        project_id = projects[0]['id']
+
+        phases = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.phase', 'search_read',
+            [[('name', 'in', phase_names)]],
+            {'fields': ['id', 'name']}
+        )
+        info['phases_found'] = [{'id': p['id'], 'name': p['name']} for p in phases]
+        phase_ids = [p['id'] for p in phases]
+
+        if not phase_ids:
+            # Try ilike instead of exact match
+            phases_ilike = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.phase', 'search_read',
+                [[('name', 'ilike', 'Consultation')]],
+                {'fields': ['id', 'name']}
+            )
+            info['phases_ilike_consultation'] = [{'id': p['id'], 'name': p['name']} for p in phases_ilike]
+
+            all_phases = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.phase', 'search_read',
+                [[('project_id', '=', project_id)]],
+                {'fields': ['id', 'name']}
+            )
+            info['all_project_phases'] = [{'id': p['id'], 'name': p['name']} for p in all_phases]
+            return jsonify(info)
+
+        phase_tasks = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [[('phase_id', 'in', phase_ids), ('project_id', '=', project_id)]],
+            {'fields': ['id', 'name', 'phase_id'], 'limit': 20}
+        )
+        info['phase_tasks_count'] = len(phase_tasks)
+        info['phase_tasks_sample'] = [{'id': t['id'], 'name': t['name']} for t in phase_tasks[:5]]
+
+        parent_ids = {t['id'] for t in phase_tasks}
+
+        all_proj_tasks = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [[('project_id', '=', project_id)]],
+            {'fields': ['id', 'parent_id', 'phase_id'], 'limit': 10000}
+        )
+        relevant_ids = set(parent_ids)
+        for t in all_proj_tasks:
+            ph = t.get('phase_id')
+            if ph and isinstance(ph, list) and ph[0] in phase_ids:
+                relevant_ids.add(t['id'])
+
+        info['relevant_task_ids_count'] = len(relevant_ids)
+
+        if relevant_ids:
+            ts_sample = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'account.analytic.line', 'search_read',
+                [[('task_id', 'in', list(relevant_ids)[:100])]],
+                {'fields': ['employee_id', 'date', 'unit_amount'], 'limit': 10}
+            )
+            info['timesheets_sample_count'] = len(ts_sample)
+            info['timesheets_sample'] = ts_sample[:3]
+
+    except Exception as e:
+        info['error'] = str(e)
+
+    return jsonify(info)
+
+
 @app.route('/debug/timesheets')
 def debug_timesheets():
     """Test the actual timesheet fetching path used by the app"""
