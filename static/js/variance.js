@@ -801,22 +801,21 @@ async function submitTravel() {
 async function renderPromotionsSubTab() {
   const cont = document.getElementById('varianceContent');
 
-  // Load employees list
   let employees = [];
   try {
     const r = await fetch('/api/project-employees');
     const d = await r.json();
-    employees = (d.employees || []).map(e => ({ ...e, display: e.name || e.full_name }));
+    employees = d.employees || [];
   } catch(e) {}
-
   AppState.promoEmployees = employees;
 
   cont.innerHTML = `
     <div class="banner banner-info">
       <strong>Promotion Records:</strong>
-      Track when team members get promoted mid-project.
-      The system will automatically split their hours into 2 rows in Current Effort —
-      before and after the promotion date — each with the correct rate.
+      When a team member gets promoted mid-project, add a record here.
+      Current Effort will automatically split their hours into separate rows
+      (before & after promotion), each with the correct rate.
+      The "Position After" is auto-filled from Odoo.
     </div>
 
     <div class="card">
@@ -835,11 +834,12 @@ async function renderPromotionsSubTab() {
         </div>
         <div class="form-row">
           <label>Position BEFORE promotion
-            <input type="text" id="prOldPos" placeholder="e.g. EGY - Business Analyst" class="search-input" style="width:100%">
+            <input type="text" id="prOldPos" placeholder="Auto-suggested from Odoo…" class="search-input" style="width:100%">
+            <span id="prOldPosHint" class="muted-text" style="font-size:10px;margin-top:2px;display:block;"></span>
           </label>
-          <label>Position AFTER promotion
+          <label>Position AFTER promotion (current in Odoo)
             <input type="text" id="prNewPos" placeholder="Auto-filled from Odoo…" class="search-input" style="width:100%">
-            <span id="prNewPosStatus" class="muted-text" style="font-size:11px;"></span>
+            <span id="prNewPosStatus" class="muted-text" style="font-size:10px;margin-top:2px;display:block;"></span>
           </label>
         </div>
         <div class="form-row">
@@ -848,7 +848,7 @@ async function renderPromotionsSubTab() {
           </label>
         </div>
         <div class="form-actions" style="gap:8px;">
-          <button id="prCancel" class="btn-ghost" style="display:none;">Cancel Edit</button>
+          <button id="prCancel" class="btn-ghost" style="display:none;">Cancel</button>
           <button id="prSubmit" class="btn-primary">+ Add Promotion</button>
         </div>
         <input type="hidden" id="prEditingId" value="">
@@ -856,16 +856,13 @@ async function renderPromotionsSubTab() {
     </div>
 
     <div class="card">
-      <h3 class="card-title">Promotion History <span class="muted-text">— click Edit to update</span></h3>
+      <h3 class="card-title">Promotion History</h3>
       <div class="table-scroll">
         <table class="data-table" id="promoTable">
           <thead><tr>
-            <th>Employee</th>
-            <th>Promotion Date</th>
-            <th>Position Before</th>
-            <th>Position After</th>
-            <th>Notes</th>
-            <th></th>
+            <th>Employee</th><th>Promotion Date</th>
+            <th>Position Before</th><th>Position After</th>
+            <th>Notes</th><th></th>
           </tr></thead>
           <tbody><tr><td colspan="6" class="loading">Loading…</td></tr></tbody>
         </table>
@@ -873,19 +870,25 @@ async function renderPromotionsSubTab() {
     </div>
   `;
 
-  // Auto-fetch Odoo position when name selected
+  // Auto-fetch from Odoo when name selected
   document.getElementById('prName').addEventListener('change', async (e) => {
     const name = e.target.value.trim();
     if (!name) return;
     const statusEl = document.getElementById('prNewPosStatus');
+    const hintEl = document.getElementById('prOldPosHint');
     statusEl.textContent = 'Fetching from Odoo…';
     try {
       const r = await fetch(`/api/promotions/employee-odoo-position?name=${encodeURIComponent(name)}`);
       const d = await r.json();
       if (d.current_position) {
         document.getElementById('prNewPos').value = d.current_position;
-        statusEl.textContent = `✓ Auto-filled from Odoo: "${d.current_position}"`;
+        statusEl.textContent = `✓ From Odoo: "${d.current_position}"`;
         statusEl.style.color = 'var(--green)';
+        if (d.suggested_old_position) {
+          document.getElementById('prOldPos').value = d.suggested_old_position;
+          hintEl.textContent = `Auto-suggested — edit if wrong`;
+          hintEl.style.color = 'var(--amber)';
+        }
       } else {
         statusEl.textContent = 'Not found in Odoo — enter manually';
         statusEl.style.color = 'var(--amber)';
@@ -905,43 +908,35 @@ async function loadPromotionRecords() {
   const d = await res.json();
   const tbody = document.querySelector('#promoTable tbody');
   if (!d.records || !d.records.length) {
-    tbody.innerHTML = '<tr><td colspan="6" class="loading">No promotion records yet — add one above</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" class="loading">No promotion records yet</td></tr>';
     return;
   }
   AppState.promoRecords = d.records;
   tbody.innerHTML = '';
-
-  // Group by employee for display
   d.records.forEach(r => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td><b>${r.name}</b></td>
       <td><span style="font-family:var(--mono);font-size:12px;">${r.promotion_date}</span></td>
-      <td>
-        <span class="muted-text" style="font-size:11px;">${r.old_position || '—'}</span>
-      </td>
-      <td>
-        <span style="font-size:11px;color:var(--green);font-weight:600;">${r.new_position || '—'}</span>
-      </td>
+      <td><span class="muted-text" style="font-size:11px;">${r.old_position || '—'}</span></td>
+      <td><span style="font-size:11px;color:var(--green);font-weight:600;">${r.new_position || '—'}</span></td>
       <td><span class="muted-text" style="font-size:11px;">${r.notes || ''}</span></td>
       <td>
         <button class="see-details-btn" data-promo-edit="${r.id}">Edit</button>
         <button class="btn-ghost" style="padding:4px 10px;font-size:11px;" data-promo-del="${r.id}">Delete</button>
-      </td>
-    `;
+      </td>`;
     tbody.appendChild(tr);
   });
-
-  tbody.querySelectorAll('[data-promo-edit]').forEach(b => {
-    b.addEventListener('click', () => startPromoEdit(b.dataset.promoEdit));
-  });
-  tbody.querySelectorAll('[data-promo-del]').forEach(b => {
+  tbody.querySelectorAll('[data-promo-edit]').forEach(b =>
+    b.addEventListener('click', () => startPromoEdit(b.dataset.promoEdit))
+  );
+  tbody.querySelectorAll('[data-promo-del]').forEach(b =>
     b.addEventListener('click', async () => {
       if (!confirm('Delete this promotion record?')) return;
       await fetch(`/api/promotions/${b.dataset.promoDel}`, { method: 'DELETE' });
       loadPromotionRecords();
-    });
-  });
+    })
+  );
 }
 
 function startPromoEdit(id) {
@@ -956,18 +951,18 @@ function startPromoEdit(id) {
   document.getElementById('prSubmit').textContent = '✓ Save Changes';
   document.getElementById('prSubmit').className = 'btn-export';
   document.getElementById('prCancel').style.display = '';
-  document.getElementById('promoFormTitle').textContent = `Edit Promotion #${r.id} — ${r.name}`;
+  document.getElementById('promoFormTitle').textContent = `Edit — ${r.name}`;
   document.querySelector('.travel-form').scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 function cancelPromoEdit() {
   document.getElementById('prEditingId').value = '';
   ['prName','prDate','prOldPos','prNewPos','prNotes'].forEach(id => document.getElementById(id).value = '');
+  ['prNewPosStatus','prOldPosHint'].forEach(id => document.getElementById(id).textContent = '');
   document.getElementById('prSubmit').textContent = '+ Add Promotion';
   document.getElementById('prSubmit').className = 'btn-primary';
   document.getElementById('prCancel').style.display = 'none';
   document.getElementById('promoFormTitle').textContent = 'Add Promotion Record';
-  document.getElementById('prNewPosStatus').textContent = '';
 }
 
 async function submitPromotion() {
@@ -980,23 +975,14 @@ async function submitPromotion() {
     notes: document.getElementById('prNotes').value.trim(),
   };
   if (!body.name || !body.promotion_date) {
-    alert('Employee name and promotion date are required');
+    alert('Name and promotion date are required');
     return;
   }
-  let res;
-  if (editingId) {
-    res = await fetch(`/api/promotions/${editingId}`, {
-      method: 'PUT',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(body),
-    });
-  } else {
-    res = await fetch('/api/promotions', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(body),
-    });
-  }
+  const res = await fetch(editingId ? `/api/promotions/${editingId}` : '/api/promotions', {
+    method: editingId ? 'PUT' : 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
   if (res.ok) {
     cancelPromoEdit();
     loadPromotionRecords();
