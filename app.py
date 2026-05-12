@@ -163,15 +163,47 @@ class OdooClient:
                         )
                         phase_ids = [p['id'] for p in phases]
                         if phase_ids:
-                            tasks = self.models.execute_kw(
+                            # Get ALL tasks with phase_id in our phases (not just parent tasks)
+                            direct_tasks = self.models.execute_kw(
                                 ODOO_DB, self.uid, ODOO_PASSWORD,
                                 'project.task', 'search_read',
                                 [[('phase_id', 'in', phase_ids)]],
                                 {'fields': ['id'], 'limit': 5000}
                             )
-                            phase_task_ids = [t['id'] for t in tasks]
-                            if phase_task_ids:
-                                domain.append(('task_id', 'in', phase_task_ids))
+                            direct_task_ids = {t['id'] for t in direct_tasks}
+
+                            # Also get ALL sub-tasks of those tasks (walk down)
+                            if direct_task_ids:
+                                all_proj_tasks = self.models.execute_kw(
+                                    ODOO_DB, self.uid, ODOO_PASSWORD,
+                                    'project.task', 'search_read',
+                                    [[('project_id.name', 'ilike', PROJECT_NAME)]],
+                                    {'fields': ['id', 'parent_id', 'phase_id'], 'limit': 10000}
+                                )
+                                task_map = {t['id']: t for t in all_proj_tasks}
+                                relevant_ids = set(direct_task_ids)
+                                # Add tasks whose phase_id is in our phases directly
+                                for t in all_proj_tasks:
+                                    ph = t.get('phase_id')
+                                    if ph and isinstance(ph, list) and ph[0] in phase_ids:
+                                        relevant_ids.add(t['id'])
+                                # Walk up parent chains to include sub-tasks
+                                for t in all_proj_tasks:
+                                    if t['id'] in relevant_ids:
+                                        continue
+                                    cur = t
+                                    visited = set()
+                                    while cur and cur['id'] not in visited:
+                                        visited.add(cur['id'])
+                                        if cur['id'] in direct_task_ids:
+                                            relevant_ids.add(t['id'])
+                                            break
+                                        if not cur.get('parent_id'):
+                                            break
+                                        pid = cur['parent_id'][0] if isinstance(cur['parent_id'], list) else cur['parent_id']
+                                        cur = task_map.get(pid)
+
+                                domain.append(('task_id', 'in', list(relevant_ids)))
                             else:
                                 return []
                         else:
@@ -3364,36 +3396,25 @@ def api_effort_all_months(phase_key):
         )
         phase_ids = [p['id'] for p in phases]
 
-        # Get ALL tasks in this project that have phase_id in our phases
-        # (not just parent tasks — some phases have tasks at any level)
-        phase_tasks = odoo.models.execute_kw(
+        # Get parent tasks
+        parent_tasks = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'project.task', 'search_read',
             [[('phase_id', 'in', phase_ids), ('project_id', '=', project_id)]],
             {'fields': ['id', 'child_ids'], 'limit': 5000}
         )
-        parent_ids = {t['id'] for t in phase_tasks}
+        parent_ids = {t['id'] for t in parent_tasks}
 
         # All project tasks → walk parents to find descendants of phase tasks
         all_proj_tasks = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'project.task', 'search_read',
             [[('project_id', '=', project_id)]],
-            {'fields': ['id', 'parent_id', 'phase_id'], 'limit': 10000}
+            {'fields': ['id', 'parent_id'], 'limit': 10000}
         )
         task_map = {t['id']: t for t in all_proj_tasks}
         relevant_ids = set(parent_ids)
-
-        # Also include any task whose phase_id is in our phases directly
         for t in all_proj_tasks:
-            ph = t.get('phase_id')
-            if ph and isinstance(ph, list) and ph[0] in phase_ids:
-                relevant_ids.add(t['id'])
-
-        # Walk parent chains to include sub-tasks of phase tasks
-        for t in all_proj_tasks:
-            if t['id'] in relevant_ids:
-                continue
             cur = t
             visited = set()
             while cur and cur['id'] not in visited:
@@ -3600,170 +3621,6 @@ def api_effort_all_months(phase_key):
         emp_code_match = _re_effort.match(r'^\[([A-Z]\d+)\s*\]', emp_name)
         emp_code = emp_code_match.group(1) if emp_code_match else ''
         emp_display = _re_effort.sub(r'^\[[A-Z]\d+\s*\]\s*', '', emp_name).strip()
-
-        odoo_info = odoo_data.get(emp_name, {})
-        odoo_pos = odoo_info.get('position')
-        sar_rate = odoo_info.get('sar_rate', 0)
-
-        # ── Travel periods ──
-        emp_travel_periods = []
-        for tr in travel_records:
-            if not tr.get('name') or not tr.get('start_date'):
-                continue
-            tn = tr['name'].strip().lower()
-            en_clean = _re_effort.sub(r'\[[A-Z]\d+\s*\]\s*', '', emp_name).strip().lower()
-            if tn == en_clean or tn in en_clean or en_clean in tn:
-                emp_travel_periods.append({'start': tr['start_date'], 'end': tr.get('end_date')})
-
-        # ── Promotion records ──
-        emp_promos = []
-        for pr in all_promotions:
-            pn = (pr.get('name') or '').strip().lower()
-            en_clean2 = _re_effort.sub(r'\[[A-Z]\d+\s*\]\s*', '', emp_name).strip().lower()
-            if pn == en_clean2 or pn in en_clean2 or en_clean2 in pn:
-                emp_promos.append(pr)
-        emp_promos.sort(key=lambda x: x.get('promotion_date', ''))
-
-        def _date_is_onsite(date_str):
-            for period in emp_travel_periods:
-                if date_str < period['start']: continue
-                if period['end'] is None or date_str <= period['end']: return True
-            return False
-
-        def _base_position_on_date(date_str):
-            """Return base position (without country prefix) active on date_str."""
-            pos = odoo_pos or ''
-            if emp_promos:
-                if date_str < emp_promos[0]['promotion_date']:
-                    pos = emp_promos[0].get('old_position') or odoo_pos or ''
-                else:
-                    for promo in reversed(emp_promos):
-                        if date_str >= promo['promotion_date']:
-                            pos = promo.get('new_position') or odoo_pos or ''
-                            break
-            return pos
-
-        def _get_rate_for_pos(base_pos_with_country, is_onsite):
-            hour_rate = None; rate_source = None
-            if country == 'TUN':
-                tunis = get_tunis_rate_by_name(db, emp_name)
-                if tunis:
-                    hour_rate = tunis['hour_rate']; rate_source = 'tunis_rates_db'
-            elif is_onsite:
-                raw_pos = (base_pos_with_country or '').replace(f'{country} - ', '')
-                onsite_pos = _resolve_onsite_position(raw_pos, country)
-                if onsite_pos:
-                    pi = get_position_by_name(db, onsite_pos)
-                    if pi and pi.get('hour_rate'):
-                        hour_rate = pi['hour_rate']; rate_source = 'positions_db_onsite'
-                if hour_rate is None and sar_rate and sar_rate > 0:
-                    hour_rate = round(sar_rate / SAR_TO_USD, 2); rate_source = 'odoo_fallback'
-            else:
-                # If promotions exist, must use DB (Odoo rate = current only)
-                if emp_promos and base_pos_with_country:
-                    pi = get_position_by_name(db, base_pos_with_country)
-                    if pi and pi.get('hour_rate'):
-                        hour_rate = pi['hour_rate']; rate_source = 'positions_db'
-                if hour_rate is None and sar_rate and sar_rate > 0:
-                    hour_rate = round(sar_rate / SAR_TO_USD, 2); rate_source = 'odoo'
-                if hour_rate is None and base_pos_with_country:
-                    pi = get_position_by_name(db, base_pos_with_country)
-                    if pi and pi.get('hour_rate'):
-                        hour_rate = pi['hour_rate']; rate_source = 'positions_db'
-            overtime_rate = round(hour_rate * OVERTIME_MULTIPLIER, 2) if hour_rate else None
-            return hour_rate, overtime_rate, rate_source
-
-        # ── Per-month segmentation ──
-        from collections import defaultdict as _dd2
-        segment_data = _dd2(lambda: _dd2(lambda: {'regular': 0.0, 'ramadan': 0.0, 'overtime': 0.0}))
-        weekend = TUNIS_WEEKEND if country == 'TUN' else WEEKEND_DAYS
-
-        for m in months:
-            mkey = m['key']
-            cell = months_data.get(mkey, {'regular': 0, 'ramadan': 0, 'overtime': 0})
-            total_cell = cell['regular'] + cell['ramadan'] + cell['overtime']
-            if total_cell == 0:
-                continue
-
-            seg_counts = _dd2(int)
-            days_in_month = _cal.monthrange(m['year'], m['month'])[1]
-            for day in range(1, days_in_month + 1):
-                try: d_obj = _date_cls2(m['year'], m['month'], day)
-                except: continue
-                if d_obj.weekday() in weekend: continue
-                d_str = f"{m['year']:04d}-{m['month']:02d}-{day:02d}"
-                raw_pos = _base_position_on_date(d_str)
-                base_p = f"{country} - {raw_pos}" if raw_pos else None
-                is_on = _date_is_onsite(d_str)
-                seg_counts[(base_p, is_on)] += 1
-
-            total_working = sum(seg_counts.values())
-            if total_working == 0:
-                raw_pos = _base_position_on_date(mkey + '-15')
-                base_p = f"{country} - {raw_pos}" if raw_pos else None
-                seg_counts[(base_p, False)] = 1
-                total_working = 1
-
-            for (base_p, is_on), cnt in seg_counts.items():
-                ratio = cnt / total_working
-                segment_data[(base_p, is_on)][mkey]['regular']  += cell['regular']  * ratio
-                segment_data[(base_p, is_on)][mkey]['ramadan']  += cell['ramadan']  * ratio
-                segment_data[(base_p, is_on)][mkey]['overtime'] += cell['overtime'] * ratio
-
-        # ── Build one row per segment ──
-        if not segment_data:
-            base_p = f"{country} - {odoo_pos}" if odoo_pos else '—'
-            hr, ot_r, src = _get_rate_for_pos(base_p, False)
-            employees_out.append({
-                'name': emp_display, 'full_name': emp_name, 'code': emp_code, 'country': country,
-                'position': base_p, 'hour_rate': hr, 'overtime_rate': ot_r, 'rate_source': src,
-                'sar_rate': sar_rate, 'is_onsite': False,
-                'months': {m['key']: {'regular':0,'ramadan':0,'overtime':0,'total':0} for m in months},
-                'total_hours': 0, 'total_cost_usd': 0, 'current_mds': 0,
-            })
-            continue
-
-        for (base_p, is_on), mkey_data in sorted(segment_data.items(), key=lambda x: (x[0][0] or '', x[0][1])):
-            full_months = {}
-            for m in months:
-                c = mkey_data.get(m['key'], {'regular': 0, 'ramadan': 0, 'overtime': 0})
-                full_months[m['key']] = {
-                    'regular':  round(c['regular'], 2),
-                    'ramadan':  round(c['ramadan'], 2),
-                    'overtime': round(c['overtime'], 2),
-                    'total':    round(c['regular'] + c['ramadan'] + c['overtime'], 2),
-                }
-            seg_reg = sum(v['regular']  for v in full_months.values())
-            seg_ram = sum(v['ramadan']  for v in full_months.values())
-            seg_ot  = sum(v['overtime'] for v in full_months.values())
-            if seg_reg + seg_ram + seg_ot < 0.01:
-                continue
-
-            hr, ot_r, src = _get_rate_for_pos(base_p, is_on)
-
-            # Display position
-            if is_on:
-                raw_pos = (base_p or '').replace(f'{country} - ', '')
-                display_pos = _resolve_onsite_position(raw_pos, country) or ((base_p or '') + ' - onsite')
-            else:
-                display_pos = base_p or '—'
-
-            employees_out.append({
-                'name': emp_display + (' — Onsite' if is_on else ''),
-                'full_name': emp_name,
-                'code': emp_code,
-                'country': country,
-                'position': display_pos,
-                'hour_rate': hr,
-                'overtime_rate': ot_r,
-                'rate_source': src,
-                'sar_rate': sar_rate,
-                'is_onsite': is_on,
-                'months': full_months,
-                'total_hours': round(seg_reg + seg_ram + seg_ot, 2),
-                'total_cost_usd': _calc_cost(seg_reg, seg_ram, seg_ot, hr, ot_r),
-                'current_mds': _calc_mds(seg_reg, seg_ram, seg_ot),
-            })
 
     # Sort: name alpha, onsite after regular
     employees_out.sort(key=lambda x: (
