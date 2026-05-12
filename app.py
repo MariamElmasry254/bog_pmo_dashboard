@@ -3509,8 +3509,7 @@ def api_effort_all_months(phase_key):
     import calendar as _cal
     from datetime import date as _date_cls2
 
-    # ── keyword-based onsite position lookup ──
-    # Handles mismatches like "Business Analysis Team Lead" → "Lead Business Analyst - onsite"
+    # ── keyword-based onsite position resolver ──
     _EGY_ONSITE_MAP = {
         ('lead',   'business analyst'):  'EGY - Lead Business Analyst - onsite',
         ('senior', 'business analyst'):  'EGY - Sr Business Analyst - onsite',
@@ -3549,31 +3548,34 @@ def api_effort_all_months(phase_key):
             return 'quality engineer'
         if any(x in p for x in ['ux', 'ui/ux', 'design']):
             return 'ux designer'
-        # fallback: check for engineer/analyst generically
         if 'engineer' in p:
             return 'software engineer'
         if 'analyst' in p:
             return 'business analyst'
         return None
 
-    def _resolve_onsite_position(odoo_pos_str, country, all_pos):
-        """Given Odoo position string, find the matching onsite catalog entry."""
+    def _resolve_onsite_position(odoo_pos_str, country):
         if not odoo_pos_str or country != 'EGY':
             return None
-        # Try direct fuzzy first
-        target = f"{country} - {odoo_pos_str} - onsite"
-        for p in all_pos:
-            pn = p.get('position', '')
-            if pn == target:
-                return pn
-            if _re_effort.sub(r'[^a-z0-9\s]', '', pn.lower()) == _re_effort.sub(r'[^a-z0-9\s]', '', target.lower()):
-                return pn
-        # Keyword-based fallback
         level = _detect_level(odoo_pos_str)
         role = _detect_role(odoo_pos_str)
         if role:
             return _EGY_ONSITE_MAP.get((level, role))
         return None
+
+    def _calc_mds(regular_h, ramadan_h, overtime_h):
+        """Correct MD formula:
+        MDs = (Regular + Overtime) / 8  +  Ramadan / 6
+        """
+        return round((regular_h + overtime_h) / 8.0 + ramadan_h / 6.0, 2)
+
+    def _calc_cost(regular_h, ramadan_h, overtime_h, hour_rate, overtime_rate):
+        """Correct cost formula:
+        Cost = (Regular + Ramadan) * hour_rate  +  Overtime * overtime_rate
+        """
+        base = (regular_h + ramadan_h) * (hour_rate or 0)
+        ot = overtime_h * (overtime_rate or 0)
+        return round(base + ot, 2)
 
     _all_positions = get_all_positions(db)
 
@@ -3603,7 +3605,7 @@ def api_effort_all_months(phase_key):
             onsite_position = None
         elif odoo_pos:
             base_position = f"{country} - {odoo_pos}"
-            onsite_position = _resolve_onsite_position(odoo_pos, country, _all_positions)
+            onsite_position = _resolve_onsite_position(odoo_pos, country)
         else:
             base_position = None
             onsite_position = None
@@ -3666,21 +3668,22 @@ def api_effort_all_months(phase_key):
             for m in months:
                 cell = months_data.get(m['key'], {'regular': 0, 'ramadan': 0, 'overtime': 0})
                 month_cells[m['key']] = {
-                    'regular': round(cell['regular'], 2), 'ramadan': round(cell['ramadan'], 2),
+                    'regular': round(cell['regular'], 2),
+                    'ramadan': round(cell['ramadan'], 2),
                     'overtime': round(cell['overtime'], 2),
                     'total': round(cell['regular'] + cell['ramadan'] + cell['overtime'], 2),
                 }
-            total_hours = sum(c['total'] for c in month_cells.values())
-            total_cost = sum(
-                (c['regular'] + c['ramadan']) * (hour_rate or 0) + c['overtime'] * (overtime_rate or 0)
-                for c in month_cells.values()
-            )
+            total_reg = sum(c['regular'] for c in month_cells.values())
+            total_ram = sum(c['ramadan'] for c in month_cells.values())
+            total_ot  = sum(c['overtime'] for c in month_cells.values())
             employees_out.append({
                 'name': emp_display, 'full_name': emp_name, 'code': emp_code, 'country': country,
                 'position': base_position or '—', 'hour_rate': hour_rate, 'overtime_rate': overtime_rate,
                 'rate_source': rate_source, 'sar_rate': sar_rate, 'is_onsite': False,
-                'months': month_cells, 'total_hours': round(total_hours, 2),
-                'total_cost_usd': round(total_cost, 2), 'current_mds': round(total_hours / WORK_HOURS_PER_DAY, 2),
+                'months': month_cells,
+                'total_hours': round(total_reg + total_ram + total_ot, 2),
+                'total_cost_usd': _calc_cost(total_reg, total_ram, total_ot, hour_rate, overtime_rate),
+                'current_mds': _calc_mds(total_reg, total_ram, total_ot),
             })
 
         else:
@@ -3692,7 +3695,7 @@ def api_effort_all_months(phase_key):
                 total_cell = cell['regular'] + cell['ramadan'] + cell['overtime']
                 if total_cell == 0:
                     regular_months[mkey] = {'regular': 0, 'ramadan': 0, 'overtime': 0, 'total': 0}
-                    onsite_months[mkey] = {'regular': 0, 'ramadan': 0, 'overtime': 0, 'total': 0}
+                    onsite_months[mkey]  = {'regular': 0, 'ramadan': 0, 'overtime': 0, 'total': 0}
                     continue
                 on_r = _onsite_ratio(m['year'], m['month'])
                 reg_r = 1.0 - on_r
@@ -3707,29 +3710,39 @@ def api_effort_all_months(phase_key):
 
             # Row 1: Regular
             hr_r, ot_r, src_r = _get_rate(base_position, False)
-            total_h_r = sum(c['total'] for c in regular_months.values())
-            cost_r = sum((c['regular']+c['ramadan'])*(hr_r or 0)+c['overtime']*(ot_r or 0) for c in regular_months.values())
+            r_reg = sum(c['regular'] for c in regular_months.values())
+            r_ram = sum(c['ramadan'] for c in regular_months.values())
+            r_ot  = sum(c['overtime'] for c in regular_months.values())
             employees_out.append({
                 'name': emp_display, 'full_name': emp_name, 'code': emp_code, 'country': country,
                 'position': base_position or '—', 'hour_rate': hr_r, 'overtime_rate': ot_r,
                 'rate_source': src_r, 'sar_rate': sar_rate, 'is_onsite': False,
-                'months': regular_months, 'total_hours': round(total_h_r, 2),
-                'total_cost_usd': round(cost_r, 2), 'current_mds': round(total_h_r / WORK_HOURS_PER_DAY, 2),
+                'months': regular_months,
+                'total_hours': round(r_reg + r_ram + r_ot, 2),
+                'total_cost_usd': _calc_cost(r_reg, r_ram, r_ot, hr_r, ot_r),
+                'current_mds': _calc_mds(r_reg, r_ram, r_ot),
             })
 
             # Row 2: Onsite
             total_h_on = sum(c['total'] for c in onsite_months.values())
             if total_h_on > 0:
                 hr_on, ot_on, src_on = _get_rate(onsite_position, True)
-                cost_on = sum((c['regular']+c['ramadan'])*(hr_on or 0)+c['overtime']*(ot_on or 0) for c in onsite_months.values())
+                o_reg = sum(c['regular'] for c in onsite_months.values())
+                o_ram = sum(c['ramadan'] for c in onsite_months.values())
+                o_ot  = sum(c['overtime'] for c in onsite_months.values())
                 employees_out.append({
                     'name': emp_display + ' — Onsite', 'full_name': emp_name, 'code': emp_code,
                     'country': country, 'position': onsite_position or '—',
                     'hour_rate': hr_on, 'overtime_rate': ot_on, 'rate_source': src_on,
                     'sar_rate': sar_rate, 'is_onsite': True,
-                    'months': onsite_months, 'total_hours': round(total_h_on, 2),
-                    'total_cost_usd': round(cost_on, 2), 'current_mds': round(total_h_on / WORK_HOURS_PER_DAY, 2),
+                    'months': onsite_months,
+                    'total_hours': round(o_reg + o_ram + o_ot, 2),
+                    'total_cost_usd': _calc_cost(o_reg, o_ram, o_ot, hr_on, ot_on),
+                    'current_mds': _calc_mds(o_reg, o_ram, o_ot),
                 })
+
+    # Sort alphabetically by display name
+    employees_out.sort(key=lambda x: x['name'].lower())
 
     return jsonify({
         'phase': phase_key,
