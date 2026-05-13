@@ -870,9 +870,11 @@ async function profRecomputeAll(phaseKey) {
   const table = document.getElementById(`profit-table-${phaseKey}`);
   if (!table) return;
   const rows = table.querySelectorAll('tr[data-month-key]');
-  let accActualMDs=0, latestData={};
+  let accActualMDs=0, latestData={}, prevViAcc=0;
 
-  rows.forEach((tr, idx) => {
+  let rowIdx = 0;
+  for (const tr of rows) {
+    const idx = rowIdx++;
     const monthKey = tr.dataset.monthKey;
     const thisMonthMDs = effortMDsFinal[monthKey] || 0;
     accActualMDs += thisMonthMDs;
@@ -982,7 +984,7 @@ async function profRecomputeAll(phaseKey) {
 
     latestData = { completionPct, remainingMDs, eacMDs, cpi, profitAtComp, totalRevSAR };
     prevViAcc = viAcc;
-  });
+  }  // end for..of rows
 
   // Update KPI strip with latest row
   const setKPI = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
