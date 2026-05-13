@@ -499,34 +499,35 @@ function renderProfitability(data, phaseKey) {
       <div class="table-scroll">
       <table class="data-table" id="profit-table-${phaseKey}" style="font-size:12px;">
         <thead>
-          <tr style="background:var(--navy); color:white;">
-            <th rowspan="2" style="position:sticky;left:0;background:var(--navy);z-index:3;">Month</th>
-            <th colspan="3" style="text-align:center; border-left:2px solid rgba(255,255,255,0.2);">Presales Budget</th>
-            <th colspan="4" style="text-align:center; border-left:2px solid rgba(255,255,255,0.2);">Current Month</th>
-            <th colspan="4" style="text-align:center; border-left:2px solid rgba(255,255,255,0.2);">Cost Variance</th>
-            <th colspan="4" style="text-align:center; border-left:2px solid rgba(255,255,255,0.2);">Profitability</th>
-            <th colspan="3" style="text-align:center; border-left:2px solid rgba(255,255,255,0.2);">Virtual Invoice</th>
+          <tr>
+            <th rowspan="2" style="position:sticky;left:0;z-index:3;background:var(--navy);color:white;min-width:70px;">Month</th>
+            <th colspan="3" style="text-align:center;background:#1B2A4E;color:#93C5FD;border-left:3px solid #3B82F6;">Presales Budget</th>
+            <th colspan="2" style="text-align:center;background:#1B2A4E;color:#FCD34D;border-left:3px solid #F59E0B;">Current Effort</th>
+            <th colspan="2" style="text-align:center;background:#1a4a7a;color:white;border-left:3px solid #60A5FA;">Editable</th>
+            <th colspan="5" style="text-align:center;background:#1B2A4E;color:#6EE7B7;border-left:3px solid #10B981;">Cost Variance</th>
+            <th colspan="4" style="text-align:center;background:#1B2A4E;color:#FCA5A5;border-left:3px solid #EF4444;">Profitability</th>
+            <th colspan="3" style="text-align:center;background:#1B2A4E;color:#C4B5FD;border-left:3px solid #8B5CF6;">Virtual Invoice</th>
           </tr>
-          <tr style="background:#1e3a5f; color:white; font-size:10px;">
-            <th class="num" style="border-left:2px solid rgba(255,255,255,0.2);">Revenue SAR</th>
-            <th class="num">Est. Cost SAR</th>
-            <th class="num">Est. MDs</th>
-            <th class="num" style="border-left:2px solid rgba(255,255,255,0.2);">This Month MDs</th>
-            <th class="num">Actual MDs</th>
-            <th class="num" style="background:#1a4a7a;">% Completion<br><small style="font-weight:400;">(editable)</small></th>
-            <th class="num" style="background:#1a4a7a;">Remaining MDs<br><small style="font-weight:400;">(editable)</small></th>
-            <th class="num" style="border-left:2px solid rgba(255,255,255,0.2);">Current Cost SAR</th>
-            <th class="num">EAC MDs</th>
-            <th class="num">Est. Cost to Complete SAR</th>
-            <th class="num">Est. at Completion SAR</th>
+          <tr style="font-size:10px;background:#f8fafc;">
+            <th class="num" style="border-left:3px solid #3B82F6;">Revenue<br>SAR</th>
+            <th class="num">Est. Cost<br>SAR</th>
+            <th class="num">Est.<br>MDs</th>
+            <th class="num" style="border-left:3px solid #F59E0B;">This Month<br>MDs</th>
+            <th class="num">Actual MDs<br>to Date</th>
+            <th class="num" style="border-left:3px solid #60A5FA;background:#EFF6FF;">%<br>Completion</th>
+            <th class="num" style="background:#EFF6FF;">Remaining<br>MDs</th>
+            <th class="num" style="border-left:3px solid #10B981;">Current<br>Cost SAR</th>
+            <th class="num">EAC<br>MDs</th>
+            <th class="num">Cost to<br>Complete SAR</th>
+            <th class="num">Est. at<br>Completion SAR</th>
             <th class="num">CPI</th>
-            <th class="num" style="border-left:2px solid rgba(255,255,255,0.2);">Profit at Comp SAR</th>
-            <th class="num">Planned Profit SAR</th>
-            <th class="num">Profit at Comp %</th>
-            <th class="num">Profitability Var SAR</th>
-            <th class="num" style="border-left:2px solid rgba(255,255,255,0.2);">Revenue to Date SAR</th>
-            <th class="num">This Month VI SAR</th>
-            <th class="num">Acc. VI SAR</th>
+            <th class="num" style="border-left:3px solid #EF4444;">Profit at<br>Comp SAR</th>
+            <th class="num">Planned<br>Profit SAR</th>
+            <th class="num">Profit<br>%</th>
+            <th class="num">Prof.<br>Variance SAR</th>
+            <th class="num" style="border-left:3px solid #8B5CF6;">Revenue<br>to Date</th>
+            <th class="num">This Month<br>VI SAR</th>
+            <th class="num">Acc.<br>VI SAR</th>
           </tr>
         </thead>
         <tbody>
@@ -599,9 +600,12 @@ async function profRecomputeAll(phaseKey) {
   // Get presales budget values from live estimated + budget
   let totalRevSAR = 0, totalEstCostSAR = 0, totalEstMDs = 0;
 
-  // Try from budget inputs
+  // Use Final Revenue = Approved Revenue + Σ Δ Revenue changes
   const revEl = document.getElementById(`inp-rev-${phaseKey}`);
-  if (revEl) totalRevSAR = parseFloat(revEl.value) || 0;
+  const approvedRev = revEl ? (parseFloat(revEl.value) || 0) : 0;
+  const budgChanges = _budgetChanges[phaseKey] || [];
+  const deltaRevSum = budgChanges.reduce((s,c) => s + (parseFloat(c.delta_rev)||0), 0);
+  totalRevSAR = approvedRev + deltaRevSum;
 
   // From estimated rows
   if (_estPhase === phaseKey && _estRows && _estRows.length) {
@@ -638,15 +642,9 @@ async function profRecomputeAll(phaseKey) {
   rows.forEach((tr, idx) => {
     const monthKey = tr.dataset.monthKey;
 
-    // This Month MDs — try to get from effort table
-    const thisMonthMDEl = tr.querySelector(`.prof-thismonth-${phaseKey}`);
-    let thisMonthMDs = parseFloat(thisMonthMDEl?.dataset?.mds || 0) || 0;
-
-    // Fallback: get from current effort live data if available
-    if (!thisMonthMDs && AppState._effortMonthMDs) {
-      thisMonthMDs = AppState._effortMonthMDs[monthKey] || 0;
-    }
-
+    // This Month MDs from effort live data (populated by loadEffortLive)
+    const effortMDs = (AppState._effortMonthMDs && AppState._effortMonthMDs[phaseKey]) || {};
+    const thisMonthMDs = effortMDs[monthKey] || 0;
     accActualMDs += thisMonthMDs;
 
     // Editable inputs
@@ -683,7 +681,8 @@ async function profRecomputeAll(phaseKey) {
     tr.querySelectorAll(`.prof-rev-${phaseKey}`).forEach(el => el.textContent = totalRevSAR > 0 ? fSAR(totalRevSAR) : '—');
     tr.querySelectorAll(`.prof-estcost-${phaseKey}`).forEach(el => el.textContent = totalEstCostSAR > 0 ? fSAR(totalEstCostSAR) : '—');
     tr.querySelectorAll(`.prof-estmds-${phaseKey}`).forEach(el => el.textContent = totalEstMDs > 0 ? fNum(totalEstMDs) : '—');
-    tr.querySelectorAll(`.prof-actual-${phaseKey}`).forEach(el => el.textContent = fNum(actualMDs));
+    tr.querySelectorAll(`.prof-thismonth-${phaseKey}`).forEach(el => el.textContent = thisMonthMDs > 0 ? fNum(thisMonthMDs) : '—');
+    tr.querySelectorAll(`.prof-actual-${phaseKey}`).forEach(el => el.textContent = actualMDs > 0 ? fNum(actualMDs) : '—');
 
     // Computed columns
     setSpan(`pc-currcost-${monthKey}`,      currentCostSAR > 0 ? fSAR(currentCostSAR) : '—');
@@ -746,8 +745,9 @@ function applyPlanOverrides(phaseKey) {
       const inp = tr.querySelector('.remaining-input');
       if (inp) inp.value = parseFloat(monthOverrides.remaining).toFixed(2);
     }
-    recomputePlanRow(tr);
   });
+  // Recompute after applying overrides
+  profRecomputeAll(phaseKey);
 }
 
 function renderEffort(data, phaseKey) {
@@ -838,7 +838,7 @@ async function loadEffortLive(phaseKey, containerId) {
     const thisMonthKey = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
     let grandThisMonthMDs = 0;
 
-    // Per-month MD totals for TOTAL row
+    // Per-month MD totals for TOTAL row + profitability
     const monthMDTotals = {};
     months.forEach(m => { monthMDTotals[m.key] = 0; });
 
@@ -856,6 +856,10 @@ async function loadEffortLive(phaseKey, containerId) {
       // This month MDs for summary strip
       const thisCell = emp.months?.[thisMonthKey] || { regular: 0, ramadan: 0, overtime: 0 };
       grandThisMonthMDs += (thisCell.regular + thisCell.overtime) / 8 + thisCell.ramadan / 6;
+
+    // Save to AppState for profitability table
+    if (!AppState._effortMonthMDs) AppState._effortMonthMDs = {};
+    AppState._effortMonthMDs[phaseKey] = monthMDTotals;
 
       // Country color
       const countryColor = emp.country === 'KSA' ? '#10B981'
