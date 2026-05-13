@@ -750,7 +750,7 @@ function renderEstimatedTable(wrap, rows, positions, phaseKey) {
     const at = parseFloat(r.actualTime) || 0;
     const em = parseFloat(r.estMonths) || 0;
     const costPerMonth = hr > 0 && at > 0 ? hr * at : null;
-    const totalCost = costPerMonth !== null && em > 0 ? Math.round(costPerMonth * em) : null;
+    const totalCost = hr > 0 && at > 0 && em > 0 ? hr * at * em : null;  // full precision, no intermediate rounding
     const mds = at > 0 && em > 0 ? at * em / 8 : null;
 
     html += `
@@ -776,14 +776,14 @@ function renderEstimatedTable(wrap, rows, positions, phaseKey) {
             style="width:60px; padding:4px 6px; text-align:right; border:1px solid var(--border-strong); border-radius:4px; font-size:12px;"
             oninput="estOnChange(this)">
         </td>
-        <td class="num" style="font-weight:600; color:var(--navy);">${costPerMonth !== null ? '$' + fmt.num(Math.round(costPerMonth)) : '—'}</td>
+        <td class="num" style="font-weight:600; color:var(--navy);">${costPerMonth !== null ? '$' + fmt.num(costPerMonth.toFixed(2)) : '—'}</td>
         <td class="num">
           <input type="number" step="1" min="1" class="svc-input" data-rowid="${r.id}" data-field="estMonths"
             value="${r.estMonths || ''}" placeholder="#"
             style="width:55px; padding:4px 6px; text-align:right; border:1px solid var(--border-strong); border-radius:4px; font-size:12px;"
             oninput="estOnChange(this)">
         </td>
-        <td class="num"><b style="color:var(--blue);">${totalCost !== null ? '$' + fmt.num(Math.round(totalCost)) : '—'}</b></td>
+        <td class="num"><b style="color:var(--blue);">${totalCost !== null ? '$' + fmt.num(totalCost.toFixed(2)) : '—'}</b></td>
         <td class="num">${mds !== null ? fmt.decimal(mds) : '—'}</td>
         <td><button style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:14px;" onclick="estDeleteRow('${r.id}')">✕</button></td>
       </tr>
@@ -910,15 +910,15 @@ function estUpdateRowCalc(rowId) {
   const at = parseFloat(row.actualTime) || 0;
   const em = parseFloat(row.estMonths) || 0;
   const costPerMonth = hr > 0 && at > 0 ? hr * at : null;
-  const totalCost = costPerMonth !== null && em > 0 ? Math.round(costPerMonth * em) : null;
+  const totalCost = hr > 0 && at > 0 && em > 0 ? hr * at * em : null;
   const mds = at > 0 && em > 0 ? at * em / 8 : null;
 
   const tr = document.querySelector(`tr[data-row="${rowId}"]`);
   if (!tr) return;
   const cells = tr.querySelectorAll('td');
   // cells: #, position, hourRate, actualTime, costPerMonth(4), estMonths(5), totalCost(6), mds(7)
-  if (cells[4]) cells[4].innerHTML = costPerMonth !== null ? `<b style="color:var(--navy);">$${fmt.num(Math.round(costPerMonth))}</b>` : '—';
-  if (cells[6]) cells[6].innerHTML = totalCost !== null ? `<b style="color:var(--blue);">$${fmt.num(Math.round(totalCost))}</b>` : '—';
+  if (cells[4]) cells[4].innerHTML = costPerMonth !== null ? `<b style="color:var(--navy);">$${fmt.num(costPerMonth.toFixed(2))}</b>` : '—';
+  if (cells[6]) cells[6].innerHTML = totalCost !== null ? `<b style="color:var(--blue);">$${fmt.num(totalCost.toFixed(2))}</b>` : '—';
   if (cells[7]) cells[7].textContent = mds !== null ? fmt.decimal(mds) : '—';
 }
 
