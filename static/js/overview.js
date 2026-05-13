@@ -748,6 +748,12 @@ function renderSummary(filteredTasks) {
     : totalRemaining > totalPlanned * 0.5 ? 'kpi-red'
     : totalRemaining > totalPlanned * 0.25 ? 'kpi-amber' : 'kpi-blue';
 
+  const totalEAC = totalActual + totalRemaining;
+  const totalEACMD = totalEAC / 8;
+  const totalRemainingMD = totalRemaining / 8;
+  const totalPlannedMD = totalPlanned / 8;
+  const totalActualMD = totalActual / 8;
+
   summary.innerHTML = `
     <div class="kpi-strip kpi-strip-small" style="margin-bottom: 16px;">
       <div class="kpi-card kpi-blue compact">
@@ -757,18 +763,23 @@ function renderSummary(filteredTasks) {
       </div>
       <div class="kpi-card kpi-navy compact">
         <div class="kpi-label">PLANNED HOURS</div>
-        <div class="kpi-value">${fmt.num(Math.round(totalPlanned))}</div>
-        <div class="kpi-foot">${fmt.decimal(totalPlanned / 8)} days</div>
+        <div class="kpi-value">${fmt.num(Math.round(totalPlanned))}<span class="kpi-unit">h</span></div>
+        <div class="kpi-foot">${fmt.decimal(totalPlannedMD)} MD</div>
       </div>
       <div class="kpi-card kpi-green compact">
         <div class="kpi-label">ACTUAL HOURS</div>
-        <div class="kpi-value">${fmt.num(Math.round(totalActual))}</div>
-        <div class="kpi-foot">${fmt.decimal(totalActual / 8)} days</div>
+        <div class="kpi-value">${fmt.num(Math.round(totalActual))}<span class="kpi-unit">h</span></div>
+        <div class="kpi-foot">${fmt.decimal(totalActualMD)} MD</div>
       </div>
       <div class="kpi-card ${remainingColor} compact">
         <div class="kpi-label">REMAINING</div>
         <div class="kpi-value">${fmt.num(Math.round(totalRemaining))}<span class="kpi-unit">h</span></div>
-        <div class="kpi-foot">${doneCount} done · ${activeCount} active · ${notStartedCount} new</div>
+        <div class="kpi-foot" style="font-weight:600; color:var(--navy);">${fmt.decimal(totalRemainingMD)} MD · ${doneCount} done · ${activeCount} active · ${notStartedCount} new</div>
+      </div>
+      <div class="kpi-card kpi-blue compact">
+        <div class="kpi-label">EAC (Est. at Completion)</div>
+        <div class="kpi-value">${fmt.num(Math.round(totalEAC))}<span class="kpi-unit">h</span></div>
+        <div class="kpi-foot" style="font-weight:700; color:var(--blue);">${fmt.decimal(totalEACMD)} MD</div>
       </div>
     </div>
   `;
@@ -924,7 +935,9 @@ function renderTaskCard(t, childCount, depth, isMatched) {
     progressP = isClosed ? 100 : (t.progress_pct || 0);
   }
 
-  let progressColor, progressLabel;
+  const eacH  = actualH + remainingH;
+  const eacMD = eacH / 8;
+  const remainMD = remainingH / 8;
   if (progressP === 0) { progressColor = '#9CA3AF'; progressLabel = 'Not started'; }
   else if (progressP >= 100 && progressP <= 110) { progressColor = '#10B981'; progressLabel = 'Done'; }
   else if (progressP > 110) { progressColor = '#10B981'; progressLabel = 'Done'; }  // treat over 100 as done
@@ -994,6 +1007,12 @@ function renderTaskCard(t, childCount, depth, isMatched) {
           <div class="tcc-stat">
             <div class="tcc-stat-lbl">REMAIN</div>
             <div class="tcc-stat-val">${fmt.decimal(remainingH)}<small>h</small></div>
+            <div style="font-size:10px; color:var(--navy); font-weight:600; margin-top:2px;">${fmt.decimal(remainMD)} MD</div>
+          </div>
+          <div class="tcc-stat">
+            <div class="tcc-stat-lbl">EAC</div>
+            <div class="tcc-stat-val" style="color:var(--blue);">${fmt.decimal(eacH)}<small>h</small></div>
+            <div style="font-size:10px; color:var(--blue); font-weight:700; margin-top:2px;">${fmt.decimal(eacMD)} MD</div>
           </div>
           <div class="tcc-progress-num" style="color: ${progressColor};">
             ${fmt.decimal(Math.min(100, progressP))}<small>%</small>
