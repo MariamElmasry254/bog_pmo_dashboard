@@ -69,7 +69,7 @@ function renderVarianceSubTab(key) {
       if (sect.key === 'budget') html += renderBudget(sect.data, key);
       else if (sect.key === 'profitability') html += renderProfitability(sect.data, key);
       else if (sect.key === 'effort') html += renderEffort(sect.data, key);
-      else if (sect.key === 'estimated') html += renderEstimated(sect.data);
+      else if (sect.key === 'estimated') html += renderEstimated(sect.data, key);
     }
     html += '</div>';
   });
@@ -78,6 +78,15 @@ function renderVarianceSubTab(key) {
 
   // Wire up auto-save for any budget inputs
   wireBudgetInputs(cont);
+
+  // Load live effort + estimated tables
+  const activePhase = key;
+  if (data.sections.some(s => s.key === 'effort')) {
+    setTimeout(() => loadEffortLive(activePhase, 'effortLiveWrap'), 50);
+  }
+  if (data.sections.some(s => s.key === 'estimated')) {
+    setTimeout(() => loadEstimatedLive(activePhase, 'estimatedLiveWrap'), 50);
+  }
 }
 
 function renderBudget(data, phaseKey) {
@@ -629,29 +638,240 @@ async function loadEffortLive(phaseKey, containerId) {
   }
 }
 
-function renderEstimated(data) {
-  if (!data.positions || !data.positions.length) {
-    return '<div class="loading">No estimated cost data</div>';
+function renderEstimated(data, phaseKey) {
+  // Build interactive estimated cost table — editable rows, auto-calc from positions catalog
+  return `<div id="estimatedLiveWrap">
+    <div class="loading">Loading estimated cost table…</div>
+  </div>`;
+}
+
+async function loadEstimatedLive(phaseKey, containerId) {
+  const wrap = document.getElementById(containerId || 'estimatedLiveWrap');
+  if (!wrap) return;
+
+  // Load positions catalog from DB
+  let positions = [];
+  try {
+    const r = await fetch('/api/positions');
+    const d = await r.json();
+    positions = (d.positions || []).filter(p => p.hour_rate);
+  } catch (e) {}
+
+  // Load saved rows from DB
+  const storageKey = `estimated_rows_${phaseKey || 'dev'}`;
+  let rows = [];
+  try {
+    const saved = localStorage.getItem(storageKey);
+    if (saved) rows = JSON.parse(saved);
+  } catch (e) {}
+  if (!rows.length) {
+    rows = [makeEstRow()];
   }
-  const cols = data.columns.filter(c => c && !c.startsWith('col_'));
-  let html = '<div class="card"><h3 class="card-title">Estimated Cost by Position</h3><div class="table-scroll"><table class="data-table"><thead><tr>';
-  cols.forEach(c => html += `<th>${c}</th>`);
-  html += '</tr></thead><tbody>';
-  data.positions.forEach(p => {
-    html += '<tr>';
-    cols.forEach(c => {
-      let v = p[c];
-      let cell = '—';
-      if (v != null && v !== '') {
-        if (typeof v === 'number') cell = fmt.decimal(v);
-        else cell = v;
-      }
-      html += `<td>${cell}</td>`;
-    });
-    html += '</tr>';
+
+  renderEstimatedTable(wrap, rows, positions, phaseKey);
+}
+
+let _estPositions = [];
+let _estRows = [];
+let _estPhase = '';
+
+function makeEstRow(position = '', hourRate = '', actualTime = 176, estMonths = '') {
+  return { id: Date.now() + Math.random(), position, hourRate, actualTime, estMonths };
+}
+
+function renderEstimatedTable(wrap, rows, positions, phaseKey) {
+  _estPositions = positions;
+  _estRows = rows;
+  _estPhase = phaseKey;
+
+  const posOptions = positions.map(p =>
+    `<option value="${p.position || p.name}">${p.position || p.name} — $${p.hour_rate}/h</option>`
+  ).join('');
+
+  // Compute totals
+  let totalUSD = 0, totalMDs = 0;
+  rows.forEach(r => {
+    const hr = parseFloat(r.hourRate) || 0;
+    const at = parseFloat(r.actualTime) || 0;
+    const em = parseFloat(r.estMonths) || 0;
+    const costPerMonth = hr * at;
+    const totalCost = costPerMonth * em;
+    const mds = at * em / 8;
+    totalUSD += totalCost;
+    totalMDs += mds;
   });
-  html += '</tbody></table></div></div>';
-  return html;
+
+  const totalSAR = totalUSD * 3.75;
+  const totalSARperMonth = rows.length ? (totalSAR / Math.max(1, Math.max(...rows.map(r => parseFloat(r.estMonths) || 0)))) : 0;
+  const avgMDsPerMonth = rows.length ? (totalMDs / Math.max(1, Math.max(...rows.map(r => parseFloat(r.estMonths) || 0)))) : 0;
+  const costPerMDSAR = totalMDs > 0 ? totalSAR / totalMDs : 0;
+
+  let html = `
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <h3 class="card-title" style="margin:0;">Estimated Cost by Position <span class="muted-text" style="font-size:12px;">— editable · auto-calculates from DB rates</span></h3>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-outline" style="font-size:11px;" onclick="estAddRow()">+ Add Row</button>
+          <button class="btn-outline" style="font-size:11px; color:var(--red);" onclick="estClearAll()">🗑 Clear All</button>
+        </div>
+      </div>
+      <div class="table-scroll">
+        <table class="data-table" id="estTable">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th style="min-width:220px;">Position</th>
+              <th class="num">Hour Rate ($)</th>
+              <th class="num">Actual Time<br><small>(MH/month)</small></th>
+              <th class="num">Cost per Month<br><small>($)</small></th>
+              <th class="num">Est. # of<br>Months</th>
+              <th class="num">Total Cost<br>USD</th>
+              <th class="num">Total No<br>of MDs</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+  `;
+
+  rows.forEach((r, i) => {
+    const hr = parseFloat(r.hourRate) || 0;
+    const at = parseFloat(r.actualTime) || 0;
+    const em = parseFloat(r.estMonths) || 0;
+    const costPerMonth = hr > 0 && at > 0 ? hr * at : null;
+    const totalCost = costPerMonth !== null && em > 0 ? costPerMonth * em : null;
+    const mds = at > 0 && em > 0 ? at * em / 8 : null;
+
+    html += `
+      <tr data-row="${r.id}">
+        <td style="color:var(--text-muted); font-size:11px;">${i + 1}</td>
+        <td>
+          <select class="svc-input est-pos-select" data-rowid="${r.id}" style="width:100%; padding:4px 6px; font-size:12px; border:1px solid var(--border-strong); border-radius:4px;"
+            onchange="estOnPosChange(this)">
+            <option value="">— select position —</option>
+            ${posOptions}
+          </select>
+          <script>document.querySelector('[data-row="${r.id}"] select').value = ${JSON.stringify(r.position || '')};</script>
+        </td>
+        <td class="num">
+          <input type="number" step="0.01" class="svc-input" data-rowid="${r.id}" data-field="hourRate"
+            value="${r.hourRate || ''}" placeholder="$"
+            style="width:70px; padding:4px 6px; text-align:right; border:1px solid var(--border-strong); border-radius:4px; font-size:12px;"
+            oninput="estOnChange(this)">
+        </td>
+        <td class="num">
+          <input type="number" step="1" class="svc-input" data-rowid="${r.id}" data-field="actualTime"
+            value="${r.actualTime || 176}" placeholder="176"
+            style="width:60px; padding:4px 6px; text-align:right; border:1px solid var(--border-strong); border-radius:4px; font-size:12px;"
+            oninput="estOnChange(this)">
+        </td>
+        <td class="num" style="font-weight:600; color:var(--navy);">${costPerMonth !== null ? '$' + fmt.num(Math.round(costPerMonth)) : '—'}</td>
+        <td class="num">
+          <input type="number" step="1" min="1" class="svc-input" data-rowid="${r.id}" data-field="estMonths"
+            value="${r.estMonths || ''}" placeholder="#"
+            style="width:55px; padding:4px 6px; text-align:right; border:1px solid var(--border-strong); border-radius:4px; font-size:12px;"
+            oninput="estOnChange(this)">
+        </td>
+        <td class="num"><b style="color:var(--blue);">${totalCost !== null ? '$' + fmt.num(Math.round(totalCost)) : '—'}</b></td>
+        <td class="num">${mds !== null ? fmt.decimal(mds) : '—'}</td>
+        <td><button style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:14px;" onclick="estDeleteRow('${r.id}')">✕</button></td>
+      </tr>
+    `;
+  });
+
+  html += `
+          </tbody>
+          <tfoot>
+            <tr style="background:var(--navy); color:white; font-weight:700;">
+              <td colspan="6" style="text-align:right; padding:8px 12px;">TOTAL</td>
+              <td class="num" style="color:#93C5FD;">$${fmt.num(Math.round(totalUSD))}</td>
+              <td class="num" style="color:#93C5FD;">${fmt.decimal(totalMDs)}</td>
+              <td></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+
+    <!-- Summary strip (mirrors Excel summary block) -->
+    <div class="card" style="margin-top:12px; background:#F8FAFC;">
+      <div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:0; border:1px solid var(--border-strong); border-radius:6px; overflow:hidden;">
+        ${[
+          ['TOTAL USD per month (22 days)', `$${fmt.num(Math.round(totalUSD / Math.max(1, Math.max(...rows.map(r=>parseFloat(r.estMonths)||0)))))} USD`],
+          ['TOTAL Estimated Cost per month (22 days) SAR', `${fmt.num(Math.round(totalSAR / Math.max(1, Math.max(...rows.map(r=>parseFloat(r.estMonths)||0)))))} SAR`],
+          ['Estimated MDs / Month', fmt.decimal(avgMDsPerMonth)],
+          ['TOTAL Estimated Cost per MD SAR', `${fmt.num(Math.round(costPerMDSAR))} SAR`],
+        ].map(([label, val]) => `
+          <div style="padding:12px 16px; border-right:1px solid var(--border-strong);">
+            <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:4px;">${label}</div>
+            <div style="font-size:16px; font-weight:700; color:var(--navy);">${val}</div>
+          </div>
+        `).join('')}
+      </div>
+      <div style="margin-top:10px; padding:14px 18px; background:var(--navy); border-radius:6px; display:flex; justify-content:space-between; align-items:center;">
+        <span style="color:#93C5FD; font-size:13px; font-weight:600;">Total Project Estimated Cost (SAR)</span>
+        <span style="color:white; font-size:22px; font-weight:700;">SAR ${fmt.num(Math.round(totalSAR))}</span>
+      </div>
+    </div>
+  `;
+
+  wrap.innerHTML = html;
+
+  // Set select values properly after render
+  rows.forEach(r => {
+    const sel = wrap.querySelector(`[data-row="${r.id}"] select`);
+    if (sel && r.position) sel.value = r.position;
+  });
+}
+
+function estSave() {
+  try {
+    localStorage.setItem(`estimated_rows_${_estPhase}`, JSON.stringify(_estRows));
+  } catch (e) {}
+}
+
+function estOnPosChange(sel) {
+  const rowId = sel.dataset.rowid;
+  const posName = sel.value;
+  const row = _estRows.find(r => String(r.id) === String(rowId));
+  if (!row) return;
+  row.position = posName;
+  // Auto-fill hour rate from positions catalog
+  const pos = _estPositions.find(p => (p.position || p.name) === posName);
+  if (pos && pos.hour_rate) {
+    row.hourRate = pos.hour_rate;
+  }
+  estSave();
+  renderEstimatedTable(document.getElementById('estimatedLiveWrap'), _estRows, _estPositions, _estPhase);
+}
+
+function estOnChange(inp) {
+  const rowId = inp.dataset.rowid;
+  const field = inp.dataset.field;
+  const row = _estRows.find(r => String(r.id) === String(rowId));
+  if (!row) return;
+  row[field] = inp.value;
+  estSave();
+  renderEstimatedTable(document.getElementById('estimatedLiveWrap'), _estRows, _estPositions, _estPhase);
+}
+
+function estAddRow() {
+  _estRows.push(makeEstRow('', '', 176, ''));
+  estSave();
+  renderEstimatedTable(document.getElementById('estimatedLiveWrap'), _estRows, _estPositions, _estPhase);
+}
+
+function estDeleteRow(id) {
+  _estRows = _estRows.filter(r => String(r.id) !== String(id));
+  if (!_estRows.length) _estRows = [makeEstRow()];
+  estSave();
+  renderEstimatedTable(document.getElementById('estimatedLiveWrap'), _estRows, _estPositions, _estPhase);
+}
+
+function estClearAll() {
+  if (!confirm('Clear all rows?')) return;
+  _estRows = [makeEstRow()];
+  estSave();
+  renderEstimatedTable(document.getElementById('estimatedLiveWrap'), _estRows, _estPositions, _estPhase);
 }
 
 // ====== TRAVEL & ONSITE ======
