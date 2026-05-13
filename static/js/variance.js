@@ -497,7 +497,6 @@ async function loadEffortLive(phaseKey, containerId) {
               ${monthHeaders1}
               <th rowspan="2" class="num" style="border-left: 2px solid var(--border-strong);">Total<br>Cost ($)</th>
               <th rowspan="2" class="num">Current<br>MDs done</th>
-              <th rowspan="2" class="num" style="border-left: 2px solid #BFDBFE; background: #EFF6FF; color: var(--blue);">This Month<br>MD</th>
             </tr>
             <tr class="eff-row-subhead">
               ${monthHeaders2}
@@ -515,15 +514,24 @@ async function loadEffortLive(phaseKey, containerId) {
     const thisMonthKey = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
     let grandThisMonthMDs = 0;
 
+    // Per-month MD totals for TOTAL row
+    const monthMDTotals = {};
+    months.forEach(m => { monthMDTotals[m.key] = 0; });
+
     d.employees.forEach((emp, idx) => {
       grandTotalCost += emp.total_cost_usd || 0;
       grandTotalHours += emp.total_hours || 0;
       grandTotalMDs += emp.current_mds || 0;
 
-      // This month MDs = (regular + overtime) / 8 + ramadan / 6
+      // Accumulate per-month MDs
+      months.forEach(m => {
+        const cell = emp.months?.[m.key] || { regular: 0, ramadan: 0, overtime: 0 };
+        monthMDTotals[m.key] += (cell.regular + cell.overtime) / 8 + cell.ramadan / 6;
+      });
+
+      // This month MDs for summary strip
       const thisCell = emp.months?.[thisMonthKey] || { regular: 0, ramadan: 0, overtime: 0 };
-      const thisMD = (thisCell.regular + thisCell.overtime) / 8 + thisCell.ramadan / 6;
-      grandThisMonthMDs += thisMD;
+      grandThisMonthMDs += (thisCell.regular + thisCell.overtime) / 8 + thisCell.ramadan / 6;
 
       // Country color
       const countryColor = emp.country === 'KSA' ? '#10B981'
@@ -556,9 +564,6 @@ async function loadEffortLive(phaseKey, containerId) {
         `;
       });
 
-      // This month MD per employee
-      const thisMDDisplay = thisMD > 0 ? `<b style="color:var(--blue);">${fmt.decimal(thisMD)}</b>` : '<span class="muted-text">—</span>';
-
       html += `
         <tr>
           <td style="position: sticky; left: 0; background: white; z-index: 2; font-weight: 600;">${idx + 1}</td>
@@ -572,24 +577,26 @@ async function loadEffortLive(phaseKey, containerId) {
           ${monthCells}
           <td class="num" style="border-left: 2px solid var(--border-strong);"><b style="color: var(--blue);">$${fmt.num(Math.round(emp.total_cost_usd))}</b></td>
           <td class="num"><b>${fmt.decimal(emp.current_mds)}</b></td>
-          <td class="num" style="border-left: 2px solid #BFDBFE; background: #EFF6FF;">${thisMDDisplay}</td>
         </tr>
       `;
     });
 
-    // Totals row
+    // Totals row — with per-month MD subtotals
     html += `
       <tr style="background: var(--bg-subtle); font-weight: 700;">
         <td colspan="2" style="position: sticky; left: 0; background: var(--bg-subtle); z-index: 2;">TOTAL</td>
         <td colspan="3" style="position: sticky; background: var(--bg-subtle); z-index: 2;">${d.total_employees} employees</td>
     `;
-    months.forEach(() => {
-      html += `<td colspan="3" class="num" style="border-left: 2px solid var(--border-strong);">—</td>`;
+    months.forEach(m => {
+      const mds = monthMDTotals[m.key] || 0;
+      html += `
+        <td colspan="3" class="num" style="border-left: 2px solid var(--border-strong); vertical-align: middle;">
+          ${mds > 0 ? `<div style="font-size:10px; color:var(--text-muted); font-weight:400; margin-bottom:1px;">MDs</div><span style="color:var(--blue); font-size:13px;">${fmt.decimal(mds)}</span>` : '—'}
+        </td>`;
     });
     html += `
         <td class="num" style="border-left: 2px solid var(--border-strong);"><b style="color: var(--blue);">$${fmt.num(Math.round(grandTotalCost))}</b></td>
         <td class="num"><b style="color: var(--blue);">${fmt.decimal(grandTotalMDs)}</b></td>
-        <td class="num" style="border-left: 2px solid #BFDBFE; background: #EFF6FF;"><b style="color: var(--blue);">${fmt.decimal(grandThisMonthMDs)}</b></td>
       </tr>
       </tbody></table></div>
     `;
