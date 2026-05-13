@@ -647,6 +647,12 @@ let _estPositions = [];
 let _estRows = [];
 let _estPhase = '';
 
+// Format number with exact 2 decimal places + thousand separators, no rounding
+function fmtExact(n) {
+  if (n === null || n === undefined || isNaN(n)) return '—';
+  return n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
 function makeEstRow(position = '', hourRate = '', actualTime = 176, estMonths = '') {
   return { id: Date.now() + Math.random(), position, hourRate, actualTime, estMonths };
 }
@@ -776,14 +782,14 @@ function renderEstimatedTable(wrap, rows, positions, phaseKey) {
             style="width:60px; padding:4px 6px; text-align:right; border:1px solid var(--border-strong); border-radius:4px; font-size:12px;"
             oninput="estOnChange(this)">
         </td>
-        <td class="num" style="font-weight:600; color:var(--navy);">${costPerMonth !== null ? '$' + fmt.num(costPerMonth.toFixed(2)) : '—'}</td>
+        <td class="num" style="font-weight:600; color:var(--navy);">${costPerMonth !== null ? '$' + fmtExact(costPerMonth) : '—'}</td>
         <td class="num">
           <input type="number" step="1" min="1" class="svc-input" data-rowid="${r.id}" data-field="estMonths"
             value="${r.estMonths || ''}" placeholder="#"
             style="width:55px; padding:4px 6px; text-align:right; border:1px solid var(--border-strong); border-radius:4px; font-size:12px;"
             oninput="estOnChange(this)">
         </td>
-        <td class="num"><b style="color:var(--blue);">${totalCost !== null ? '$' + fmt.num(totalCost.toFixed(2)) : '—'}</b></td>
+        <td class="num"><b style="color:var(--blue);">${totalCost !== null ? '$' + fmtExact(totalCost) : '—'}</b></td>
         <td class="num">${mds !== null ? fmt.decimal(mds) : '—'}</td>
         <td><button style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:14px;" onclick="estDeleteRow('${r.id}')">✕</button></td>
       </tr>
@@ -917,8 +923,8 @@ function estUpdateRowCalc(rowId) {
   if (!tr) return;
   const cells = tr.querySelectorAll('td');
   // cells: #, position, hourRate, actualTime, costPerMonth(4), estMonths(5), totalCost(6), mds(7)
-  if (cells[4]) cells[4].innerHTML = costPerMonth !== null ? `<b style="color:var(--navy);">$${fmt.num(costPerMonth.toFixed(2))}</b>` : '—';
-  if (cells[6]) cells[6].innerHTML = totalCost !== null ? `<b style="color:var(--blue);">$${fmt.num(totalCost.toFixed(2))}</b>` : '—';
+  if (cells[4]) cells[4].innerHTML = costPerMonth !== null ? `<b style="color:var(--navy);">$${fmtExact(costPerMonth)}</b>` : '—';
+  if (cells[6]) cells[6].innerHTML = totalCost !== null ? `<b style="color:var(--blue);">$${fmtExact(totalCost)}</b>` : '—';
   if (cells[7]) cells[7].textContent = mds !== null ? fmt.decimal(mds) : '—';
 }
 
