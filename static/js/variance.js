@@ -20,14 +20,38 @@ window.loadVariance = async function() {
   }
   const cont = document.getElementById('varianceContent');
   cont.innerHTML = '<div class="loading">Loading variance data…</div>';
-  const res = await fetch('/api/variance');
-  const d = await res.json();
-  if (!d.available) {
-    cont.innerHTML = '<div class="banner banner-warn"><strong>Not configured:</strong> variance.xlsx not found in /data folder.</div>';
-    return;
+  try {
+    const res = await fetch('/api/variance');
+    const d = await res.json();
+    if (!d.available) {
+      cont.innerHTML = '<div class="banner banner-warn"><strong>Not configured:</strong> variance.xlsx not found in /data folder. Budget & Profitability still available below.</div>';
+      // Still show budget/estimated/effort tabs without Excel data
+      AppState.varianceData = { tabs: {
+        development: { label:'Development', sections:[
+          {key:'budget', label:'Budget', data:{approved:{},final:{},changes:[]}},
+          {key:'profitability', label:'Profitability', data:{months:[]}},
+          {key:'effort', label:'Current Effort', data:{}},
+          {key:'estimated', label:'Estimated Cost', data:{positions:[],columns:[]}},
+        ]},
+        consultation: { label:'Consultation', sections:[
+          {key:'budget', label:'Budget', data:{approved:{},final:{},changes:[]}},
+          {key:'profitability', label:'Profitability', data:{months:[]}},
+          {key:'effort', label:'Current Effort', data:{}},
+          {key:'estimated', label:'Estimated Cost', data:{positions:[],columns:[]}},
+        ]},
+        support: { label:'Support', sections:[
+          {key:'budget', label:'Budget', data:{approved:{},final:{},changes:[]}},
+          {key:'estimated', label:'Estimated Cost', data:{positions:[],columns:[]}},
+        ]},
+      }};
+      switchSubTab('development');
+      return;
+    }
+    AppState.varianceData = d;
+    switchSubTab('development');
+  } catch(e) {
+    cont.innerHTML = `<div class="banner banner-warn"><strong>Error loading variance:</strong> ${e.message}</div>`;
   }
-  AppState.varianceData = d;
-  switchSubTab('development');
 };
 
 function switchSubTab(key) {
@@ -66,10 +90,15 @@ function renderVarianceSubTab(key) {
     if (sect.error) {
       html += `<div class="banner banner-warn"><strong>Parse error:</strong> ${sect.error}</div>`;
     } else if (sect.data) {
-      if (sect.key === 'budget') html += renderBudget(sect.data, key);
-      else if (sect.key === 'profitability') html += renderProfitability(sect.data, key);
-      else if (sect.key === 'effort') html += renderEffort(sect.data, key);
-      else if (sect.key === 'estimated') html += renderEstimated(sect.data, key);
+      try {
+        if (sect.key === 'budget') html += renderBudget(sect.data, key);
+        else if (sect.key === 'profitability') html += renderProfitability(sect.data, key);
+        else if (sect.key === 'effort') html += renderEffort(sect.data, key);
+        else if (sect.key === 'estimated') html += renderEstimated(sect.data, key);
+      } catch(e) {
+        html += `<div class="banner banner-warn"><strong>Render error (${sect.key}):</strong> ${e.message}</div>`;
+        console.error('Render error:', sect.key, e);
+      }
     }
     html += '</div>';
   });
@@ -461,6 +490,9 @@ function renderProfitability(data, phaseKey) {
 
   // Months come from Odoo effort data (AppState._effortMonths) — not Excel sheet
   // We render a placeholder first, then populate when effort data is ready
+
+  return html;
+}
 
 async function profBuildTable(phaseKey) {
   const wrap = document.getElementById(`prof-table-wrap-${phaseKey}`);
@@ -1658,5 +1690,4 @@ async function deletePromo(id) {
   if (!confirm('Delete this promotion record?')) return;
   await fetch(`/api/promotions/${id}`, { method: 'DELETE' });
   renderPromotionsSubTab();
-}
 }
