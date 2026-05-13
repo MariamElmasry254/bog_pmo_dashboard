@@ -1006,11 +1006,11 @@ function renderTaskCard(t, childCount, depth, isMatched) {
           </div>
           <div class="tcc-stat">
             <div class="tcc-stat-lbl">REMAIN</div>
-            <div class="tcc-stat-val">${fmt.decimal(remainingH)}<small>h</small> <span style="font-size:10px;color:var(--navy);font-weight:700;">${fmt.decimal(remainingH/8)} MD</span></div>
+            <div class="tcc-stat-val">${fmt.decimal(remainingH)}<small>h</small></div>
           </div>
           <div class="tcc-stat">
             <div class="tcc-stat-lbl">EAC</div>
-            <div class="tcc-stat-val" style="color:var(--blue);">${fmt.decimal(actualH+remainingH)}<small>h</small> <span style="font-size:10px;font-weight:700;">${fmt.decimal((actualH+remainingH)/8)} MD</span></div>
+            <div class="tcc-stat-val" style="color:var(--blue);">${fmt.decimal(actualH+remainingH)}<small>h</small></div>
           </div>
           <div class="tcc-progress-num" style="color: ${progressColor};">
             ${fmt.decimal(Math.min(100, progressP))}<small>%</small>
