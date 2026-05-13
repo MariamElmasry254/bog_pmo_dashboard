@@ -676,6 +676,15 @@ async function loadEstimatedLive(phaseKey, containerId) {
   } catch (e) {}
   if (!rows.length) rows = [makeEstRow()];
 
+  // Auto-update hour rates from DB for any saved rows with a position set
+  rows = rows.map(r => {
+    if (r.position) {
+      const pos = positions.find(p => (p.position || p.name) === r.position);
+      if (pos && pos.hour_rate) r.hourRate = parseFloat(pos.hour_rate);
+    }
+    return r;
+  });
+
   _estPositions = positions;
   _estRows = rows;
   _estPhase = phaseKey;
@@ -861,16 +870,25 @@ async function estSave() {
   } catch (e) { console.warn('estSave error:', e); }
 }
 
-function estOnPosChange(sel) {
+async function estOnPosChange(sel) {
   const rowId = sel.dataset.rowid;
   const posName = sel.value;
   const row = _estRows.find(r => String(r.id) === String(rowId));
   if (!row) return;
   row.position = posName;
+
+  // Get rate from catalog (exact value stored in DB)
   const pos = _estPositions.find(p => (p.position || p.name) === posName);
-  if (pos && pos.hour_rate) row.hourRate = parseFloat(pos.hour_rate); // keep full precision
+  if (pos && pos.hour_rate) {
+    row.hourRate = parseFloat(pos.hour_rate);
+    // Update the input field with exact value
+    const hrInput = document.querySelector(`tr[data-row="${rowId}"] input[data-field="hourRate"]`);
+    if (hrInput) hrInput.value = parseFloat(pos.hour_rate).toFixed(2);
+  }
+
   estScheduleSave();
-  renderEstimatedTable(document.getElementById('estimatedLiveWrap'), _estRows, _estPositions, _estPhase);
+  estUpdateRowCalc(rowId);
+  estUpdateTotals();
 }
 
 function estOnChange(inp) {
