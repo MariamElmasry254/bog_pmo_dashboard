@@ -80,15 +80,14 @@ function renderVarianceSubTab(key) {
   wireBudgetInputs(cont);
 
   // Load live effort + estimated tables AFTER DOM is set
-  if (data.sections.some(s => s.key === 'effort')) {
+  if (tab.sections.some(s => s.key === 'effort')) {
     const effortContainerId = `effort-live-${key}`;
     setTimeout(() => loadEffortLive(key, effortContainerId), 100);
   }
-  if (data.sections.some(s => s.key === 'estimated')) {
+  if (tab.sections.some(s => s.key === 'estimated')) {
     setTimeout(() => {
       const wrap = document.getElementById('estimatedLiveWrap');
       if (wrap) loadEstimatedLive(key, 'estimatedLiveWrap');
-      else console.warn('estimatedLiveWrap still not found after 200ms');
     }, 200);
   }
 }
