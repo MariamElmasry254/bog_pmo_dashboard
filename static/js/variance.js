@@ -268,7 +268,7 @@ async function loadBudgetChanges(phaseKey) {
   } catch (e) {}
   if (!_budgetChanges[phaseKey]) _budgetChanges[phaseKey] = [];
 
-  // Load saved revenue override and populate input
+  // Load saved revenue override and populate input (always override with saved value)
   try {
     const r = await fetch(`/api/variance/budget-override/${phaseKey}`);
     if (r.ok) {
@@ -277,9 +277,7 @@ async function loadBudgetChanges(phaseKey) {
       const savedRev = overrides['approved.revenue_sar'];
       if (savedRev !== undefined && savedRev !== null) {
         const revEl = document.getElementById(`inp-rev-${phaseKey}`);
-        if (revEl && !revEl.value) {
-          revEl.value = savedRev;
-        }
+        if (revEl) revEl.value = savedRev;  // always set from DB
       }
     }
   } catch(e) {}
@@ -532,7 +530,7 @@ function renderProfitability(data, phaseKey) {
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
         <div>
           <h3 class="card-title" style="margin:0;">Monthly Profitability Variance</h3>
-          <span class="muted-text" style="font-size:11px;">% Completion & Remaining MDs are editable · all other columns auto-calculated · auto-saved</span>
+          <span class="muted-text" style="font-size:11px;">Enter % Completion and Remaining MDs per month · all other columns auto-calculated · auto-saved</span>
         </div>
         <button class="btn-outline" style="font-size:11px;" onclick="profBuildTable('${phaseKey}')">↻ Recalculate</button>
       </div>
@@ -577,9 +575,9 @@ async function profBuildTable(phaseKey) {
           <th rowspan="2" style="position:sticky;left:0;z-index:3;background:var(--navy);color:white;min-width:70px;">Month</th>
           <th colspan="3" style="text-align:center;background:#1B2A4E;color:#93C5FD;border-left:3px solid #3B82F6;">Presales Budget</th>
           <th colspan="2" style="text-align:center;background:#1B2A4E;color:#FCD34D;border-left:3px solid #F59E0B;">Current Effort</th>
-          <th colspan="2" style="text-align:center;background:#1a4a7a;color:white;border-left:3px solid #60A5FA;">Editable</th>
-          <th colspan="5" style="text-align:center;background:#1B2A4E;color:#6EE7B7;border-left:3px solid #10B981;">Cost Variance</th>
-          <th colspan="4" style="text-align:center;background:#1B2A4E;color:#FCA5A5;border-left:3px solid #EF4444;">Profitability</th>
+          <th colspan="2" style="text-align:center;background:#1B2A4E;color:#93C5FD;border-left:3px solid #60A5FA;">% Completion & Remaining</th>
+          <th colspan="7" style="text-align:center;background:#1B2A4E;color:#6EE7B7;border-left:3px solid #10B981;">Cost Variance</th>
+          <th colspan="6" style="text-align:center;background:#1B2A4E;color:#FCA5A5;border-left:3px solid #EF4444;">Profitability</th>
           <th colspan="3" style="text-align:center;background:#1B2A4E;color:#C4B5FD;border-left:3px solid #8B5CF6;">Virtual Invoice</th>
         </tr>
         <tr style="font-size:10px;background:#f8fafc;">
@@ -588,17 +586,20 @@ async function profBuildTable(phaseKey) {
           <th class="num">Est.<br>MDs</th>
           <th class="num" style="border-left:3px solid #F59E0B;">This Month<br>MDs</th>
           <th class="num">Actual MDs<br>to Date</th>
-          <th class="num" style="border-left:3px solid #60A5FA;background:#EFF6FF;">%<br>Completion</th>
-          <th class="num" style="background:#EFF6FF;">Remaining<br>MDs</th>
+          <th class="num" style="border-left:3px solid #60A5FA;">%<br>Completion</th>
+          <th class="num">Remaining<br>MDs</th>
           <th class="num" style="border-left:3px solid #10B981;">Current<br>Cost SAR</th>
           <th class="num">EAC<br>MDs</th>
           <th class="num">Cost to<br>Complete SAR</th>
           <th class="num">Est. at<br>Completion SAR</th>
           <th class="num">CPI</th>
+          <th class="num">Variance<br>SAR</th>
+          <th class="num">Variance<br>%</th>
           <th class="num" style="border-left:3px solid #EF4444;">Profit at<br>Comp SAR</th>
           <th class="num">Planned<br>Profit SAR</th>
           <th class="num">Profit<br>%</th>
-          <th class="num">Prof.<br>Variance SAR</th>
+          <th class="num">Prof. Var<br>SAR</th>
+          <th class="num">Prof. Var<br>%</th>
           <th class="num" style="border-left:3px solid #8B5CF6;">Revenue<br>to Date</th>
           <th class="num">This Month<br>VI SAR</th>
           <th class="num">Acc.<br>VI SAR</th>
@@ -618,7 +619,7 @@ async function profBuildTable(phaseKey) {
             <td class="num prof-estmds-${phaseKey}">—</td>
             <td class="num prof-thismonth-${phaseKey}" style="border-left:3px solid #F59E0B;">—</td>
             <td class="num prof-actual-${phaseKey}">—</td>
-            <td class="num" style="background:#EFF6FF;border-left:3px solid #60A5FA;">
+            <td class="num" style="border-left:3px solid #60A5FA;">
               <input type="number" step="0.01" min="0" max="200"
                 class="completion-input" data-phase="${phaseKey}" data-month="${monthKey}" data-field="completion"
                 value="${savedPct}"
@@ -626,7 +627,7 @@ async function profBuildTable(phaseKey) {
                 oninput="profRecomputeAll('${phaseKey}')" onblur="saveOverride(this)">
               <span style="font-size:10px;color:var(--text-muted);">%</span>
             </td>
-            <td class="num" style="background:#EFF6FF;">
+            <td class="num">
               <input type="number" step="0.01" min="0"
                 class="remaining-input" data-phase="${phaseKey}" data-month="${monthKey}" data-field="remaining"
                 value="${savedRem}"
@@ -638,10 +639,13 @@ async function profBuildTable(phaseKey) {
             <td class="num"><span class="pc-costtocomplete-${monthKey}">—</span></td>
             <td class="num"><span class="pc-eac-cost-${monthKey}">—</span></td>
             <td class="num"><span class="pc-cpi-${monthKey}">—</span></td>
+            <td class="num"><span class="pc-variance-${monthKey}">—</span></td>
+            <td class="num"><span class="pc-variance-pct-${monthKey}">—</span></td>
             <td class="num" style="border-left:3px solid #EF4444;"><span class="pc-profit-comp-${monthKey}">—</span></td>
             <td class="num"><span class="pc-planned-profit-${monthKey}">—</span></td>
             <td class="num"><span class="pc-profit-pct-${monthKey}">—</span></td>
             <td class="num"><span class="pc-prof-var-${monthKey}">—</span></td>
+            <td class="num"><span class="pc-prof-var-pct-${monthKey}">—</span></td>
             <td class="num" style="border-left:3px solid #8B5CF6;"><span class="pc-rev-todate-${monthKey}">—</span></td>
             <td class="num"><span class="pc-vi-month-${monthKey}">—</span></td>
             <td class="num"><span class="pc-vi-acc-${monthKey}">—</span></td>
@@ -713,17 +717,27 @@ async function profRecomputeAll(phaseKey) {
     const completionPct = parseFloat(compInp?.value) || 0;  // e.g. 3 = 3%
     const remainingMDs  = parseFloat(remInp?.value)  || 0;
 
-    // ── Formulas ──
-    const actualMDs     = accActualMDs;
-    const currentCostSAR = actualMDs * costPerMD;                          // Actual MDs × (Total Cost / Total MDs)
-    const eacMDs        = actualMDs + remainingMDs;                         // EAC = Actual + Remaining
-    const estCostToComplete = remainingMDs * costPerMD;                     // Remaining × cost/MD
-    const estAtCompletion   = currentCostSAR + estCostToComplete;           // Current Cost + Cost to Complete
-    const cpi           = eacMDs > 0 ? totalEstMDs / eacMDs : 0;           // Est MDs / EAC MDs
-    const revToDate     = totalRevSAR * (completionPct / 100);              // Revenue × % Completion
-    const profitAtComp  = totalRevSAR - estAtCompletion;                    // Revenue - EAC Cost
+    // Current Cost = cumulative cost from effort (real rates per person)
+    const effortCosts  = (AppState._effortMonthCosts && AppState._effortMonthCosts[phaseKey]) || {};
+    let accCostUSD = 0;
+    // Get cumulative cost up to this month
+    months.forEach(m2 => {
+      if (m2.key <= monthKey) accCostUSD += effortCosts[m2.key] || 0;
+    });
+    const currentCostSAR = accCostUSD * 3.75;
+
+    const eacMDs        = actualMDs + remainingMDs;
+    const estCostToComplete = remainingMDs * costPerMD;
+    const estAtCompletion   = currentCostSAR + estCostToComplete;
+    const cpi           = eacMDs > 0 ? totalEstMDs / eacMDs : 0;
+    const variance      = (totalEstMDs - eacMDs) * costPerMD;           // SAR
+    const variancePct   = totalEstCostSAR > 0 ? variance / totalEstCostSAR * 100 : 0;
+    const expectedOverrunSAR = estAtCompletion - totalEstCostSAR;
+    const revToDate     = totalRevSAR * (completionPct / 100);
+    const profitAtComp  = totalRevSAR - estAtCompletion;
     const profitAtCompPct = totalRevSAR > 0 ? profitAtComp / totalRevSAR * 100 : 0;
-    const profVar       = profitAtComp - plannedProfit;                     // Profit at Comp - Planned Profit
+    const profVar       = profitAtComp - plannedProfit;
+    const profVarPct    = totalRevSAR > 0 ? profVar / totalRevSAR * 100 : 0;
 
     // Virtual Invoice
     const viThisMonth = revToDate;                                          // = Revenue to Date this month
@@ -753,13 +767,18 @@ async function profRecomputeAll(phaseKey) {
     const cpiColor = cpi >= 1 ? 'var(--green)' : cpi > 0 ? 'var(--amber)' : 'var(--text-muted)';
     setSpan(`pc-cpi-${monthKey}`,           cpi > 0 ? `<b style="color:${cpiColor};">${fNum(cpi)}</b>` : '—');
 
-    const profColor2 = profitAtComp > 0 ? 'var(--green)' : 'var(--red)';
-    setSpan(`pc-profit-comp-${monthKey}`,   profitAtComp !== 0 ? `<b style="color:${profColor2};">${fSAR(profitAtComp)}</b>` : '—');
-    setSpan(`pc-planned-profit-${monthKey}`, plannedProfit !== 0 ? fSAR(plannedProfit) : '—');
-    setSpan(`pc-profit-pct-${monthKey}`,    profitAtCompPct !== 0 ? `<b style="color:${profColor2};">${fmt.decimal(profitAtCompPct)}%</b>` : '—');
+    const varColor = variance >= 0 ? 'var(--green)' : 'var(--red)';
+    setSpan(`pc-variance-${monthKey}`,      `<span style="color:${varColor};">${fSAR(variance)}</span>`);
+    setSpan(`pc-variance-pct-${monthKey}`,  `<span style="color:${varColor};">${fmt.decimal(variancePct)}%</span>`);
 
-    const varColor = profVar >= 0 ? 'var(--green)' : 'var(--red)';
-    setSpan(`pc-prof-var-${monthKey}`,      profVar !== 0 ? `<span style="color:${varColor};">${fSAR(profVar)}</span>` : '—');
+    const profColor2 = profitAtComp > 0 ? 'var(--green)' : 'var(--red)';
+    setSpan(`pc-profit-comp-${monthKey}`,   `<b style="color:${profColor2};">${fSAR(profitAtComp)}</b>`);
+    setSpan(`pc-planned-profit-${monthKey}`, fSAR(plannedProfit));
+    setSpan(`pc-profit-pct-${monthKey}`,    `<b style="color:${profColor2};">${fmt.decimal(profitAtCompPct)}%</b>`);
+
+    const pvColor = profVar >= 0 ? 'var(--green)' : 'var(--red)';
+    setSpan(`pc-prof-var-${monthKey}`,      `<span style="color:${pvColor};">${fSAR(profVar)}</span>`);
+    setSpan(`pc-prof-var-pct-${monthKey}`,  `<span style="color:${pvColor};">${fmt.decimal(profVarPct)}%</span>`);
 
     setSpan(`pc-rev-todate-${monthKey}`,    revToDate > 0 ? fSAR(revToDate) : '—');
     setSpan(`pc-vi-month-${monthKey}`,      revToDate > 0 ? fSAR(revToDate) : '—');
@@ -900,33 +919,30 @@ async function loadEffortLive(phaseKey, containerId) {
 
     // Per-month MD totals for TOTAL row + profitability
     const monthMDTotals = {};
-    months.forEach(m => { monthMDTotals[m.key] = 0; });
+    const monthCostTotals = {};
+    months.forEach(m => { monthMDTotals[m.key] = 0; monthCostTotals[m.key] = 0; });
 
     d.employees.forEach((emp, idx) => {
       grandTotalCost += emp.total_cost_usd || 0;
       grandTotalHours += emp.total_hours || 0;
       grandTotalMDs += emp.current_mds || 0;
 
-      // Accumulate per-month MDs
+      // Accumulate per-month MDs and costs
       months.forEach(m => {
         const cell = emp.months?.[m.key] || { regular: 0, ramadan: 0, overtime: 0 };
-        monthMDTotals[m.key] += (cell.regular + cell.overtime) / 8 + cell.ramadan / 6;
+        const monthMDs = (cell.regular + cell.overtime) / 8 + cell.ramadan / 6;
+        monthMDTotals[m.key] += monthMDs;
+        // Cost for this month = this employee's hours × their rate
+        const hr = emp.hour_rate || 0;
+        const otr = emp.overtime_rate || hr * 1.5;
+        const monthCostUSD = (cell.regular + cell.ramadan) * hr + cell.overtime * otr;
+        if (!monthCostTotals[m.key]) monthCostTotals[m.key] = 0;
+        monthCostTotals[m.key] += monthCostUSD;
       });
 
       // This month MDs for summary strip
       const thisCell = emp.months?.[thisMonthKey] || { regular: 0, ramadan: 0, overtime: 0 };
       grandThisMonthMDs += (thisCell.regular + thisCell.overtime) / 8 + thisCell.ramadan / 6;
-
-    // Save months + MDs to AppState for profitability table
-    if (!AppState._effortMonthMDs) AppState._effortMonthMDs = {};
-    if (!AppState._effortMonths)   AppState._effortMonths   = {};
-    AppState._effortMonthMDs[phaseKey] = monthMDTotals;
-    AppState._effortMonths[phaseKey]   = months;
-    // Rebuild profitability table now that we have months + MDs
-    if (document.getElementById(`prof-table-wrap-${phaseKey}`)) {
-      profBuildTable(phaseKey);
-    }
-
       // Country color
       const countryColor = emp.country === 'KSA' ? '#10B981'
                          : emp.country === 'TUN' ? '#F59E0B'
