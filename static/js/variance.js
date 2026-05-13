@@ -741,7 +741,7 @@ function renderEstimatedTable(wrap, rows, positions, phaseKey) {
     const at = parseFloat(r.actualTime) || 0;
     const em = parseFloat(r.estMonths) || 0;
     const costPerMonth = hr > 0 && at > 0 ? hr * at : null;
-    const totalCost = costPerMonth !== null && em > 0 ? costPerMonth * em : null;
+    const totalCost = costPerMonth !== null && em > 0 ? Math.round(costPerMonth * em) : null;
     const mds = at > 0 && em > 0 ? at * em / 8 : null;
 
     html += `
@@ -757,8 +757,8 @@ function renderEstimatedTable(wrap, rows, positions, phaseKey) {
         </td>
         <td class="num">
           <input type="number" step="0.01" class="svc-input" data-rowid="${r.id}" data-field="hourRate"
-            value="${r.hourRate || ''}" placeholder="$"
-            style="width:70px; padding:4px 6px; text-align:right; border:1px solid var(--border-strong); border-radius:4px; font-size:12px;"
+            value="${r.hourRate ? parseFloat(r.hourRate).toFixed(2) : ''}" placeholder="$"
+            style="width:75px; padding:4px 6px; text-align:right; border:1px solid var(--border-strong); border-radius:4px; font-size:12px;"
             oninput="estOnChange(this)">
         </td>
         <td class="num">
@@ -868,7 +868,7 @@ function estOnPosChange(sel) {
   if (!row) return;
   row.position = posName;
   const pos = _estPositions.find(p => (p.position || p.name) === posName);
-  if (pos && pos.hour_rate) row.hourRate = pos.hour_rate;
+  if (pos && pos.hour_rate) row.hourRate = parseFloat(pos.hour_rate); // keep full precision
   estScheduleSave();
   renderEstimatedTable(document.getElementById('estimatedLiveWrap'), _estRows, _estPositions, _estPhase);
 }
@@ -892,7 +892,7 @@ function estUpdateRowCalc(rowId) {
   const at = parseFloat(row.actualTime) || 0;
   const em = parseFloat(row.estMonths) || 0;
   const costPerMonth = hr > 0 && at > 0 ? hr * at : null;
-  const totalCost = costPerMonth !== null && em > 0 ? costPerMonth * em : null;
+  const totalCost = costPerMonth !== null && em > 0 ? Math.round(costPerMonth * em) : null;
   const mds = at > 0 && em > 0 ? at * em / 8 : null;
 
   const tr = document.querySelector(`tr[data-row="${rowId}"]`);
