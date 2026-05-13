@@ -749,37 +749,39 @@ function renderSummary(filteredTasks) {
     : totalRemaining > totalPlanned * 0.25 ? 'kpi-amber' : 'kpi-blue';
 
   const totalEAC = totalActual + totalRemaining;
-  const totalEACMD = totalEAC / 8;
-  const totalRemainingMD = totalRemaining / 8;
-  const totalPlannedMD = totalPlanned / 8;
-  const totalActualMD = totalActual / 8;
+  const eacMD = totalEAC / 8;
+  const remMD = totalRemaining / 8;
+
+  // Save remaining MD to AppState for Profitability tab
+  if (!AppState._taskRemainingMDs) AppState._taskRemainingMDs = {};
+  AppState._taskRemainingMDs[AppState.ovActivePhase || 'development'] = remMD;
 
   summary.innerHTML = `
     <div class="kpi-strip kpi-strip-small" style="margin-bottom: 16px;">
       <div class="kpi-card kpi-blue compact">
         <div class="kpi-label">TASKS</div>
         <div class="kpi-value">${totalTasks}</div>
-        <div class="kpi-foot">${parentsCount} parents · ${subsCount} subs</div>
+        <div class="kpi-foot">${parentsCount} parents · ${subsCount} subs · <span style="color:var(--green)">${doneCount} done</span> · <span style="color:var(--amber)">${activeCount} active</span> · ${notStartedCount} new</div>
       </div>
       <div class="kpi-card kpi-navy compact">
         <div class="kpi-label">PLANNED HOURS</div>
         <div class="kpi-value">${fmt.num(Math.round(totalPlanned))}<span class="kpi-unit">h</span></div>
-        <div class="kpi-foot">${fmt.decimal(totalPlannedMD)} MD</div>
+        <div class="kpi-foot">${fmt.decimal(totalPlanned/8)} MD</div>
       </div>
       <div class="kpi-card kpi-green compact">
         <div class="kpi-label">ACTUAL HOURS</div>
         <div class="kpi-value">${fmt.num(Math.round(totalActual))}<span class="kpi-unit">h</span></div>
-        <div class="kpi-foot">${fmt.decimal(totalActualMD)} MD</div>
+        <div class="kpi-foot">${fmt.decimal(totalActual/8)} MD</div>
       </div>
       <div class="kpi-card ${remainingColor} compact">
         <div class="kpi-label">REMAINING</div>
         <div class="kpi-value">${fmt.num(Math.round(totalRemaining))}<span class="kpi-unit">h</span></div>
-        <div class="kpi-foot" style="font-weight:600; color:var(--navy);">${fmt.decimal(totalRemainingMD)} MD · ${doneCount} done · ${activeCount} active · ${notStartedCount} new</div>
+        <div class="kpi-foot" style="font-weight:700;">${fmt.decimal(remMD)} MD</div>
       </div>
       <div class="kpi-card kpi-blue compact">
-        <div class="kpi-label">EAC (Est. at Completion)</div>
+        <div class="kpi-label">EAC</div>
         <div class="kpi-value">${fmt.num(Math.round(totalEAC))}<span class="kpi-unit">h</span></div>
-        <div class="kpi-foot" style="font-weight:700; color:var(--blue);">${fmt.decimal(totalEACMD)} MD</div>
+        <div class="kpi-foot" style="font-weight:700; color:var(--blue);">${fmt.decimal(eacMD)} MD</div>
       </div>
     </div>
   `;
@@ -935,9 +937,7 @@ function renderTaskCard(t, childCount, depth, isMatched) {
     progressP = isClosed ? 100 : (t.progress_pct || 0);
   }
 
-  const eacH  = actualH + remainingH;
-  const eacMD = eacH / 8;
-  const remainMD = remainingH / 8;
+  let progressColor, progressLabel;
   if (progressP === 0) { progressColor = '#9CA3AF'; progressLabel = 'Not started'; }
   else if (progressP >= 100 && progressP <= 110) { progressColor = '#10B981'; progressLabel = 'Done'; }
   else if (progressP > 110) { progressColor = '#10B981'; progressLabel = 'Done'; }  // treat over 100 as done
@@ -1006,13 +1006,11 @@ function renderTaskCard(t, childCount, depth, isMatched) {
           </div>
           <div class="tcc-stat">
             <div class="tcc-stat-lbl">REMAIN</div>
-            <div class="tcc-stat-val">${fmt.decimal(remainingH)}<small>h</small></div>
-            <div style="font-size:10px; color:var(--navy); font-weight:600; margin-top:2px;">${fmt.decimal(remainMD)} MD</div>
+            <div class="tcc-stat-val">${fmt.decimal(remainingH)}<small>h</small> <span style="font-size:10px;color:var(--navy);font-weight:700;">${fmt.decimal(remainingH/8)} MD</span></div>
           </div>
           <div class="tcc-stat">
             <div class="tcc-stat-lbl">EAC</div>
-            <div class="tcc-stat-val" style="color:var(--blue);">${fmt.decimal(eacH)}<small>h</small></div>
-            <div style="font-size:10px; color:var(--blue); font-weight:700; margin-top:2px;">${fmt.decimal(eacMD)} MD</div>
+            <div class="tcc-stat-val" style="color:var(--blue);">${fmt.decimal(actualH+remainingH)}<small>h</small> <span style="font-size:10px;font-weight:700;">${fmt.decimal((actualH+remainingH)/8)} MD</span></div>
           </div>
           <div class="tcc-progress-num" style="color: ${progressColor};">
             ${fmt.decimal(Math.min(100, progressP))}<small>%</small>
