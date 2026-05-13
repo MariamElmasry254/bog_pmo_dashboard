@@ -104,7 +104,9 @@ function renderBudget(data, phaseKey) {
     const step = type === 'pct' ? '0.0001' : '0.01';
     const cls = type === 'pct' ? 'budget-input budget-input-pct' : 'budget-input';
     const id = autoId ? `id="${autoId}"` : '';
-    return `<input type="number" step="${step}" class="${cls}" ${id} data-phase="${phaseKey}" data-path="${path}" value="${v}" oninput="budgetAutoCalc('${phaseKey}')">`;
+    return `<input type="number" step="${step}" class="${cls}" ${id} data-phase="${phaseKey}" data-path="${path}" value="${v}"
+      oninput="budgetAutoCalc('${phaseKey}')"
+      onblur="budgetSaveRevenue('${phaseKey}')">`;
   }
 
   const overrideBadge = data._has_overrides
@@ -187,42 +189,35 @@ function renderBudget(data, phaseKey) {
           <span class="label">Total Revenue (SAR)</span>
           <span class="value" style="font-weight:700;" id="fin-rev-sar-${phaseKey}">—</span>
         </div>
-        <div class="budget-row">
+        <div class="budget-row" id="fin-delta-cost-row-${phaseKey}" style="display:none;">
           <span class="label">Δ Cost (SAR)</span>
-          <span class="value" id="fin-delta-cost-${phaseKey}" style="color:var(--red);">—</span>
+          <span class="value" id="fin-delta-cost-${phaseKey}">—</span>
         </div>
-        <div class="budget-row">
+        <div class="budget-row" id="fin-delta-rev-row-${phaseKey}" style="display:none;">
           <span class="label">Δ Revenue (SAR)</span>
-          <span class="value" id="fin-delta-rev-${phaseKey}" style="color:var(--red);">—</span>
+          <span class="value" id="fin-delta-rev-${phaseKey}">—</span>
         </div>
         <div class="budget-row highlight">
           <span class="label">Profit (SAR)</span>
-          <span class="value" style="font-weight:700; color:var(--green);" id="fin-profit-sar-${phaseKey}">—</span>
+          <span class="value" style="font-weight:700;" id="fin-profit-sar-${phaseKey}">—</span>
         </div>
         <div class="budget-row highlight">
           <span class="label">Profit %</span>
-          <span class="value" style="font-weight:700; color:var(--green);" id="fin-profit-pct-${phaseKey}">—</span>
+          <span class="value" style="font-weight:700;" id="fin-profit-pct-${phaseKey}">—</span>
         </div>
       </div>
     </div>
 
-    <!-- APPROVED BUDGET CHANGES — editable rows -->
+    <!-- APPROVED BUDGET CHANGES -->
     <div class="card" id="budget-changes-card-${phaseKey}">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-        <h3 class="card-title" style="margin:0;">Approved Budget Changes</h3>
-        <button class="btn-outline" style="font-size:11px;" onclick="budgetAddChange('${phaseKey}')">+ Add Row</button>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <div>
+          <h3 class="card-title" style="margin:0;">Approved Budget Changes</h3>
+          <p class="muted-text" style="font-size:11px; margin:4px 0 0;">Changes to cost or revenue vs. approved baseline · auto-saved</p>
+        </div>
+        <button class="btn-primary" style="font-size:12px; padding:6px 14px;" onclick="budgetAddChange('${phaseKey}')">+ Add Change</button>
       </div>
-      <table class="data-table" id="budget-changes-table-${phaseKey}">
-        <thead><tr>
-          <th>#</th>
-          <th>Reason</th>
-          <th>Plan / CR ID</th>
-          <th class="num">Δ Cost (SAR)</th>
-          <th class="num">Δ Revenue (SAR)</th>
-          <th></th>
-        </tr></thead>
-        <tbody id="budget-changes-body-${phaseKey}"></tbody>
-      </table>
+      <div id="budget-changes-body-${phaseKey}"></div>
     </div>
   `;
 
@@ -246,31 +241,69 @@ async function loadBudgetChanges(phaseKey) {
 }
 
 function renderBudgetChanges(phaseKey) {
-  const tbody = document.getElementById(`budget-changes-body-${phaseKey}`);
-  if (!tbody) return;
+  const cont = document.getElementById(`budget-changes-body-${phaseKey}`);
+  if (!cont) return;
   const changes = _budgetChanges[phaseKey] || [];
+
   if (!changes.length) {
-    tbody.innerHTML = '<tr><td colspan="6" class="loading" style="font-size:12px;">No changes yet — click "+ Add Row"</td></tr>';
+    cont.innerHTML = `<div style="text-align:center; padding:24px; color:var(--text-muted); font-size:13px;">
+      No budget changes recorded yet — click "+ Add Change" to add one
+    </div>`;
     return;
   }
-  tbody.innerHTML = changes.map((c, i) => `
-    <tr data-chg="${c.id}">
-      <td style="color:var(--text-muted);">${i+1}</td>
-      <td><input type="text" class="svc-input" style="width:100%;padding:4px 6px;font-size:12px;border:1px solid var(--border-strong);border-radius:4px;"
-        placeholder="Reason" value="${c.reason||''}"
-        oninput="_budgetChanges['${phaseKey}'][${i}].reason=this.value; budgetSaveChanges('${phaseKey}'); budgetAutoCalc('${phaseKey}')"></td>
-      <td><input type="text" class="svc-input" style="width:80px;padding:4px 6px;font-size:12px;border:1px solid var(--border-strong);border-radius:4px;"
-        placeholder="CR-001" value="${c.plan_id||''}"
-        oninput="_budgetChanges['${phaseKey}'][${i}].plan_id=this.value; budgetSaveChanges('${phaseKey}')"></td>
-      <td class="num"><input type="number" step="0.01" class="svc-input" style="width:110px;padding:4px 6px;font-size:12px;text-align:right;border:1px solid var(--border-strong);border-radius:4px;"
-        placeholder="0" value="${c.delta_cost||''}"
-        oninput="_budgetChanges['${phaseKey}'][${i}].delta_cost=parseFloat(this.value)||0; budgetSaveChanges('${phaseKey}'); budgetAutoCalc('${phaseKey}')"></td>
-      <td class="num"><input type="number" step="0.01" class="svc-input" style="width:110px;padding:4px 6px;font-size:12px;text-align:right;border:1px solid var(--border-strong);border-radius:4px;"
-        placeholder="0" value="${c.delta_rev||''}"
-        oninput="_budgetChanges['${phaseKey}'][${i}].delta_rev=parseFloat(this.value)||0; budgetSaveChanges('${phaseKey}'); budgetAutoCalc('${phaseKey}')"></td>
-      <td><button style="background:none;border:none;cursor:pointer;color:var(--text-muted);" onclick="budgetDeleteChange('${phaseKey}',${i})">✕</button></td>
-    </tr>
-  `).join('');
+
+  cont.innerHTML = changes.map((c, i) => {
+    const rev = parseFloat(c.delta_rev) || 0;
+    const cost = parseFloat(c.delta_cost) || 0;
+    const revColor = rev < 0 ? 'var(--red)' : rev > 0 ? 'var(--green)' : 'var(--text-muted)';
+    const costColor = cost > 0 ? 'var(--red)' : cost < 0 ? 'var(--green)' : 'var(--text-muted)';
+    return `
+    <div style="display:grid; grid-template-columns:1fr auto auto auto auto; gap:12px; align-items:center;
+      padding:12px 16px; border:1px solid var(--border-strong); border-radius:8px; margin-bottom:8px; background:white;">
+      <div>
+        <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; margin-bottom:3px;">Reason / Description</div>
+        <input type="text" style="width:100%; padding:5px 8px; border:1px solid var(--border-strong); border-radius:4px; font-size:13px;"
+          placeholder="e.g. Third party license" value="${c.reason||''}"
+          oninput="_budgetChanges['${phaseKey}'][${i}].reason=this.value; budgetSaveChanges('${phaseKey}')">
+      </div>
+      <div style="min-width:90px;">
+        <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; margin-bottom:3px;">Plan / CR ID</div>
+        <input type="text" style="width:100%; padding:5px 8px; border:1px solid var(--border-strong); border-radius:4px; font-size:13px;"
+          placeholder="CR-001" value="${c.plan_id||''}"
+          oninput="_budgetChanges['${phaseKey}'][${i}].plan_id=this.value; budgetSaveChanges('${phaseKey}')">
+      </div>
+      <div style="min-width:130px;">
+        <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; margin-bottom:3px;">Δ Cost (SAR)</div>
+        <input type="number" step="1" style="width:100%; padding:5px 8px; border:1px solid var(--border-strong); border-radius:4px; font-size:13px; text-align:right; color:${costColor};"
+          placeholder="0" value="${c.delta_cost||''}"
+          oninput="_budgetChanges['${phaseKey}'][${i}].delta_cost=parseFloat(this.value)||0; budgetSaveChanges('${phaseKey}'); budgetAutoCalc('${phaseKey}')">
+      </div>
+      <div style="min-width:130px;">
+        <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; margin-bottom:3px;">Δ Revenue (SAR)</div>
+        <input type="number" step="1" style="width:100%; padding:5px 8px; border:1px solid var(--border-strong); border-radius:4px; font-size:13px; text-align:right; color:${revColor};"
+          placeholder="0" value="${c.delta_rev||''}"
+          oninput="_budgetChanges['${phaseKey}'][${i}].delta_rev=parseFloat(this.value)||0; budgetSaveChanges('${phaseKey}'); budgetAutoCalc('${phaseKey}')">
+      </div>
+      <button onclick="budgetDeleteChange('${phaseKey}',${i})"
+        style="background:none; border:1px solid var(--border-strong); border-radius:6px; padding:6px 10px; cursor:pointer; color:var(--red); font-size:13px;" title="Delete">🗑</button>
+    </div>`;
+  }).join('');
+}
+
+// Auto-save revenue input
+async function budgetSaveRevenue(phaseKey) {
+  const revEl = document.getElementById(`inp-rev-${phaseKey}`);
+  if (!revEl) return;
+  const value = parseFloat(revEl.value) || null;
+  try {
+    await fetch('/api/variance/budget-override', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ phase: phaseKey, path: 'approved.revenue_sar', value })
+    });
+    revEl.style.borderColor = 'var(--green)';
+    setTimeout(() => { revEl.style.borderColor = ''; }, 1200);
+  } catch(e) {}
 }
 
 async function budgetSaveChanges(phaseKey) {
@@ -353,20 +386,20 @@ function budgetAutoCalc(phaseKey) {
   setEl(`fin-cost-sar-${phaseKey}`,   fmt.money(Math.round(finCostSAR)) + ' SAR');
   setEl(`fin-rev-sar-${phaseKey}`,    fmt.money(Math.round(finRevSAR))  + ' SAR');
 
-  // Delta display — show only if there are changes
+  // Show/hide delta rows based on whether there are changes
+  const showDeltaCostRow = document.getElementById(`fin-delta-cost-row-${phaseKey}`);
+  const showDeltaRevRow  = document.getElementById(`fin-delta-rev-row-${phaseKey}`);
+  if (showDeltaCostRow) showDeltaCostRow.style.display = deltaCostTotal !== 0 ? '' : 'none';
+  if (showDeltaRevRow)  showDeltaRevRow.style.display  = deltaRevTotal  !== 0 ? '' : 'none';
+
   if (deltaCostTotal !== 0) {
     setEl(`fin-delta-cost-${phaseKey}`, (deltaCostTotal > 0 ? '+' : '') + fmt.money(Math.abs(deltaCostTotal)) + ' SAR',
       deltaCostTotal > 0 ? 'var(--red)' : 'var(--green)');
-  } else {
-    setEl(`fin-delta-cost-${phaseKey}`, '—');
   }
   if (deltaRevTotal !== 0) {
-    const sign = deltaRevTotal > 0 ? '+' : '';
     setEl(`fin-delta-rev-${phaseKey}`,
       deltaRevTotal < 0 ? '(' + fmt.money(Math.abs(deltaRevTotal)) + ')' : '+' + fmt.money(deltaRevTotal) + ' SAR',
       deltaRevTotal > 0 ? 'var(--green)' : 'var(--red)');
-  } else {
-    setEl(`fin-delta-rev-${phaseKey}`, '—');
   }
 
   setEl(`fin-profit-sar-${phaseKey}`, finRevSAR > 0 ? fmt.money(Math.round(finProfit)) + ' SAR' : '—', profColor(finProfitPct));
