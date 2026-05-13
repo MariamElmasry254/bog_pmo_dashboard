@@ -677,8 +677,8 @@ async function _doBuildProfTable(phaseKey, wrap, months) {
           const savedPct = mo.completion !== undefined ? parseFloat(mo.completion).toFixed(2) : '0.00';
           const savedRem = mo.remaining  !== undefined ? parseFloat(mo.remaining).toFixed(2)  : '0.00';
           return `
-          <tr data-month-key="${monthKey}">
-            <td style="position:sticky;left:0;background:white;z-index:2;font-family:var(--mono);font-size:11px;">${monthKey}</td>
+          <tr data-month-key="${monthKey}" style="height:52px;">
+            <td style="position:sticky;left:0;background:white;z-index:2;font-family:var(--mono);font-size:12px;font-weight:600;padding:8px 10px;">${monthKey}</td>
             <td class="num prof-rev-${phaseKey}" style="border-left:3px solid #3B82F6;">—</td>
             <td class="num prof-estcost-${phaseKey}">—</td>
             <td class="num prof-estmds-${phaseKey}">—</td>
@@ -748,50 +748,79 @@ async function profRecomputeAll(phaseKey) {
     totalEstCostSAR = costUSD * 3.75;
   }
 
-  // If no estimated loaded, try budget display values
-  if (!totalEstCostSAR) {
-    const costEl = document.getElementById(`bud-cost-sar-${phaseKey}`);
-    if (costEl) totalEstCostSAR = parseFloat((costEl.textContent||'').replace(/[^0-9.]/g,'')) || 0;
-  }
-  if (!totalEstMDs) {
-    const mdsEl = document.getElementById(`bud-mds-${phaseKey}`);
-    if (mdsEl) totalEstMDs = parseFloat((mdsEl.textContent||'').replace(/[^0-9.]/g,'')) || 0;
+  // If no estimated loaded yet, fetch from API
+  if (!totalEstCostSAR || !totalEstMDs) {
+    try {
+      const r = await fetch(`/api/estimated-rows?phase=${phaseKey}`);
+      if (r.ok) {
+        const d = await r.json();
+        const savedRows = d.rows || [];
+        if (savedRows.length) {
+          let costUSD = 0;
+          savedRows.forEach(r => {
+            const hr = parseFloat(r.hourRate)||0, at = parseFloat(r.actualTime)||0, em = parseFloat(r.estMonths)||0;
+            costUSD      += hr * at * em;
+            totalEstMDs  += at * em / 8;
+          });
+          totalEstCostSAR = costUSD * 3.75;
+          // Cache in _estRows for next time
+          if (!_estRows || !_estRows.length) { _estRows = savedRows; _estPhase = phaseKey; }
+        }
+      }
+    } catch(e) {}
   }
 
-  const costPerMD = totalEstMDs > 0 ? totalEstCostSAR / totalEstMDs : 0; // SAR per MD
+  // Also load revenue from DB if not available
+  if (!totalRevSAR) {
+    try {
+      const r = await fetch(`/api/variance/budget-override/${phaseKey}`);
+      if (r.ok) {
+        const d = await r.json();
+        const ov = d.overrides || {};
+        const savedRev = ov['approved.revenue_sar'];
+        if (savedRev) {
+          if (!AppState._savedRevenue) AppState._savedRevenue = {};
+          AppState._savedRevenue[phaseKey] = parseFloat(savedRev);
+          totalRevSAR = parseFloat(savedRev);
+          // Add delta changes
+          const budgChanges2 = _budgetChanges[phaseKey] || [];
+          totalRevSAR += budgChanges2.reduce((s,c) => s + (parseFloat(c.delta_rev)||0), 0);
+        }
+      }
+    } catch(e) {}
+  }
+
+  const costPerMD = totalEstMDs > 0 ? totalEstCostSAR / totalEstMDs : 0;
   const plannedProfit = totalRevSAR - totalEstCostSAR;
 
   const table = document.getElementById(`profit-table-${phaseKey}`);
   if (!table) return;
 
+  const months = (AppState._effortMonths && AppState._effortMonths[phaseKey]) || [];
   const rows = table.querySelectorAll('tr[data-month-key]');
   let accActualMDs = 0;
-  let prevViAcc = 0;
   let latestData = {};
 
   rows.forEach((tr, idx) => {
     const monthKey = tr.dataset.monthKey;
 
-    // This Month MDs from effort live data (populated by loadEffortLive)
     const effortMDs = (AppState._effortMonthMDs && AppState._effortMonthMDs[phaseKey]) || {};
     const thisMonthMDs = effortMDs[monthKey] || 0;
     accActualMDs += thisMonthMDs;
+    const actualMDs = accActualMDs;
 
-    // Editable inputs
     const compInp = tr.querySelector('.completion-input');
     const remInp  = tr.querySelector('.remaining-input');
-    const completionPct = parseFloat(compInp?.value) || 0;  // e.g. 3 = 3%
+    const completionPct = parseFloat(compInp?.value) || 0;
     const remainingMDs  = parseFloat(remInp?.value)  || 0;
 
     // Current Cost = cumulative cost from effort (real rates per person)
-    const effortCosts  = (AppState._effortMonthCosts && AppState._effortMonthCosts[phaseKey]) || {};
+    const effortCosts = (AppState._effortMonthCosts && AppState._effortMonthCosts[phaseKey]) || {};
     let accCostUSD = 0;
-    // Get cumulative cost up to this month
     months.forEach(m2 => {
       if (m2.key <= monthKey) accCostUSD += effortCosts[m2.key] || 0;
     });
     const currentCostSAR = accCostUSD * 3.75;
-
     const eacMDs        = actualMDs + remainingMDs;
     const estCostToComplete = remainingMDs * costPerMD;
     const estAtCompletion   = currentCostSAR + estCostToComplete;
@@ -817,10 +846,11 @@ async function profRecomputeAll(phaseKey) {
       if (el) { el.innerHTML = val; if (color) el.style.color = color; }
     };
 
-    // Update presales columns
+    // Update presales columns (same every row)
     tr.querySelectorAll(`.prof-rev-${phaseKey}`).forEach(el => el.textContent = totalRevSAR > 0 ? fSAR(totalRevSAR) : '—');
     tr.querySelectorAll(`.prof-estcost-${phaseKey}`).forEach(el => el.textContent = totalEstCostSAR > 0 ? fSAR(totalEstCostSAR) : '—');
     tr.querySelectorAll(`.prof-estmds-${phaseKey}`).forEach(el => el.textContent = totalEstMDs > 0 ? fNum(totalEstMDs) : '—');
+    // Current effort columns
     tr.querySelectorAll(`.prof-thismonth-${phaseKey}`).forEach(el => el.textContent = thisMonthMDs > 0 ? fNum(thisMonthMDs) : '—');
     tr.querySelectorAll(`.prof-actual-${phaseKey}`).forEach(el => el.textContent = actualMDs > 0 ? fNum(actualMDs) : '—');
 
