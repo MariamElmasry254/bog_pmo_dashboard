@@ -297,8 +297,11 @@ async function loadBudgetChanges(phaseKey) {
       const overrides = d.overrides || {};
       const savedRev = overrides['approved.revenue_sar'];
       if (savedRev !== undefined && savedRev !== null) {
+        // Save to AppState for profitability to use even before budget DOM loads
+        if (!AppState._savedRevenue) AppState._savedRevenue = {};
+        AppState._savedRevenue[phaseKey] = parseFloat(savedRev);
         const revEl = document.getElementById(`inp-rev-${phaseKey}`);
-        if (revEl) revEl.value = savedRev;  // always set from DB
+        if (revEl) revEl.value = savedRev;
       }
     }
   } catch(e) {}
@@ -363,6 +366,9 @@ async function budgetSaveRevenue(phaseKey) {
   const revEl = document.getElementById(`inp-rev-${phaseKey}`);
   if (!revEl) return;
   const value = parseFloat(revEl.value) || null;
+  // Save to AppState immediately
+  if (!AppState._savedRevenue) AppState._savedRevenue = {};
+  AppState._savedRevenue[phaseKey] = value;
   try {
     await fetch('/api/variance/budget-override', {
       method: 'POST',
@@ -707,7 +713,8 @@ async function profRecomputeAll(phaseKey) {
 
   // Use Final Revenue = Approved Revenue + Σ Δ Revenue changes
   const revEl = document.getElementById(`inp-rev-${phaseKey}`);
-  const approvedRev = revEl ? (parseFloat(revEl.value) || 0) : 0;
+  const approvedRev = revEl ? (parseFloat(revEl.value) || 0)
+    : (AppState._savedRevenue && AppState._savedRevenue[phaseKey]) || 0;
   const budgChanges = _budgetChanges[phaseKey] || [];
   const deltaRevSum = budgChanges.reduce((s,c) => s + (parseFloat(c.delta_rev)||0), 0);
   totalRevSAR = approvedRev + deltaRevSum;
