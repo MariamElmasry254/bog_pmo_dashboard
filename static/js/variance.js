@@ -1,3 +1,25 @@
+function profFillFromTasks(phaseKey) {
+  // Fill last month's Remaining MDs from Tasks Analysis AppState
+  const remMD = AppState._taskRemainingMDs && AppState._taskRemainingMDs[phaseKey];
+  if (!remMD) {
+    alert('No Tasks Analysis data found — open the Overview tab first and let it load.');
+    return;
+  }
+  // Set remaining in the LAST row only (latest month)
+  const table = document.getElementById(`profit-table-${phaseKey}`);
+  if (!table) return;
+  const rows = table.querySelectorAll('tr[data-month-key]');
+  const lastRow = rows[rows.length - 1];
+  if (!lastRow) return;
+  const remInp = lastRow.querySelector('.remaining-input');
+  if (remInp) {
+    remInp.value = remMD.toFixed(2);
+    remInp.dispatchEvent(new Event('input'));
+    remInp.dispatchEvent(new Event('blur'));
+  }
+  profRecomputeAll(phaseKey);
+}
+
 /* Variance tab — mirrors variance.xlsx with sub-tabs */
 
 window.loadVariance = async function() {
@@ -560,7 +582,12 @@ function renderProfitability(data, phaseKey) {
           <h3 class="card-title" style="margin:0;">Monthly Profitability Variance</h3>
           <span class="muted-text" style="font-size:11px;">Enter % Completion and Remaining MDs per month · all other columns auto-calculated · auto-saved</span>
         </div>
-        <button class="btn-outline" style="font-size:11px;" onclick="profBuildTable('${phaseKey}')">↻ Recalculate</button>
+        <div style="display:flex;gap:8px;">
+          <button class="btn-outline" style="font-size:12px;padding:6px 14px;" 
+            title="Fill Remaining MDs from Tasks Analysis tab"
+            onclick="profFillFromTasks('${phaseKey}')">📋 Fill from Tasks</button>
+          <button class="btn-primary" style="font-size:12px;padding:6px 16px;" onclick="profBuildTable('${phaseKey}')">↻ Recalculate</button>
+        </div>
       </div>
       <div id="prof-table-wrap-${phaseKey}">
         <div class="loading">Waiting for Current Effort data…</div>
@@ -646,28 +673,28 @@ async function _doBuildProfTable(phaseKey, wrap, months) {
           <th colspan="3" style="text-align:center;background:#1B2A4E;color:#C4B5FD;border-left:3px solid #8B5CF6;">Virtual Invoice</th>
         </tr>
         <tr style="font-size:10px;background:#f8fafc;">
-          <th class="num" style="border-left:3px solid #3B82F6;">Revenue<br>SAR</th>
-          <th class="num">Est. Cost<br>SAR</th>
-          <th class="num">Est.<br>MDs</th>
-          <th class="num" style="border-left:3px solid #F59E0B;">This Month<br>MDs</th>
-          <th class="num">Actual MDs<br>to Date</th>
-          <th class="num" style="border-left:3px solid #60A5FA;">%<br>Completion</th>
-          <th class="num">Remaining<br>MDs</th>
-          <th class="num" style="border-left:3px solid #10B981;">Current<br>Cost SAR</th>
-          <th class="num">EAC<br>MDs</th>
-          <th class="num">Cost to<br>Complete SAR</th>
-          <th class="num">Est. at<br>Completion SAR</th>
+          <th class="num" style="border-left:3px solid #3B82F6;">Revenue SAR</th>
+          <th class="num">Est. Cost SAR</th>
+          <th class="num">Est. MDs</th>
+          <th class="num" style="border-left:3px solid #F59E0B;">This Month MDs</th>
+          <th class="num">Actual MDs to Date</th>
+          <th class="num" style="border-left:3px solid #60A5FA;">% Completion</th>
+          <th class="num">Remaining MDs</th>
+          <th class="num" style="border-left:3px solid #10B981;">Current Cost SAR</th>
+          <th class="num">EAC MDs</th>
+          <th class="num">Cost to Complete SAR</th>
+          <th class="num">Est. at Completion SAR</th>
           <th class="num">CPI</th>
-          <th class="num">Variance<br>SAR</th>
-          <th class="num">Variance<br>%</th>
-          <th class="num" style="border-left:3px solid #EF4444;">Profit at<br>Comp SAR</th>
-          <th class="num">Planned<br>Profit SAR</th>
-          <th class="num">Profit<br>%</th>
-          <th class="num">Prof. Var<br>SAR</th>
-          <th class="num">Prof. Var<br>%</th>
-          <th class="num" style="border-left:3px solid #8B5CF6;">Revenue<br>to Date</th>
-          <th class="num">This Month<br>VI SAR</th>
-          <th class="num">Acc.<br>VI SAR</th>
+          <th class="num">Variance SAR</th>
+          <th class="num">Variance %</th>
+          <th class="num" style="border-left:3px solid #EF4444;">Profit at Comp SAR</th>
+          <th class="num">Planned Profit SAR</th>
+          <th class="num">Profit %</th>
+          <th class="num">Prof. Var SAR</th>
+          <th class="num">Prof. Var %</th>
+          <th class="num" style="border-left:3px solid #8B5CF6;">Revenue to Date</th>
+          <th class="num">This Month VI SAR</th>
+          <th class="num">Acc. VI SAR</th>
         </tr>
       </thead>
       <tbody>
@@ -971,9 +998,9 @@ async function loadEffortLive(phaseKey, containerId) {
     months.forEach(m => {
       monthHeaders1 += `<th colspan="3" class="num eff-month-head" style="border-left: 2px solid var(--border-strong);">${m.label}</th>`;
       monthHeaders2 += `
-        <th class="num" style="border-left: 2px solid var(--border-strong); font-size: 9px;">Regular<br>(MH)</th>
-        <th class="num" style="font-size: 9px;">Ramadan<br>Hours</th>
-        <th class="num" style="font-size: 9px;">Overtime<br>(MH)</th>
+        <th class="num" style="border-left: 2px solid var(--border-strong); font-size: 9px;">Regular (MH)</th>
+        <th class="num" style="font-size: 9px;">Ramadan Hours</th>
+        <th class="num" style="font-size: 9px;">Overtime (MH)</th>
       `;
     });
 
@@ -994,8 +1021,8 @@ async function loadEffortLive(phaseKey, containerId) {
               <th rowspan="2" class="num">Hour Rate ($)</th>
               <th rowspan="2" class="num">Overtime Rate</th>
               ${monthHeaders1}
-              <th rowspan="2" class="num" style="border-left: 2px solid var(--border-strong);">Total<br>Cost ($)</th>
-              <th rowspan="2" class="num">Current<br>MDs done</th>
+              <th rowspan="2" class="num" style="border-left: 2px solid var(--border-strong);">Total Cost ($)</th>
+              <th rowspan="2" class="num">Current MDs done</th>
             </tr>
             <tr class="eff-row-subhead">
               ${monthHeaders2}
@@ -1246,9 +1273,9 @@ function renderEstimatedTable(wrap, rows, positions, phaseKey) {
               <th class="num">Hour Rate ($)</th>
               <th class="num">Actual Time<br><small>(MH/month)</small></th>
               <th class="num">Cost per Month<br><small>($)</small></th>
-              <th class="num">Est. # of<br>Months</th>
-              <th class="num">Total Cost<br>USD</th>
-              <th class="num">Total No<br>of MDs</th>
+              <th class="num">Est. # of Months</th>
+              <th class="num">Total Cost USD</th>
+              <th class="num">Total No of MDs</th>
               <th></th>
             </tr>
           </thead>
