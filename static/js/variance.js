@@ -806,13 +806,13 @@ function renderEstimatedTable(wrap, rows, positions, phaseKey) {
         ].map(([label, val]) => `
           <div style="padding:12px 16px; border-right:1px solid var(--border-strong);">
             <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:4px;">${label}</div>
-            <div style="font-size:16px; font-weight:700; color:var(--navy);">${val}</div>
+            <div class="est-summary-val" style="font-size:16px; font-weight:700; color:var(--navy);">${val}</div>
           </div>
         `).join('')}
       </div>
       <div style="margin-top:10px; padding:14px 18px; background:var(--navy); border-radius:6px; display:flex; justify-content:space-between; align-items:center;">
         <span style="color:#93C5FD; font-size:13px; font-weight:600;">Total Project Estimated Cost (SAR)</span>
-        <span style="color:white; font-size:22px; font-weight:700;">SAR ${fmt.num(Math.round(totalSAR))}</span>
+        <span class="est-total-sar" style="color:white; font-size:22px; font-weight:700;">SAR ${fmt.num(Math.round(totalSAR))}</span>
       </div>
     </div>
   `;
@@ -836,18 +836,40 @@ async function estSave() {
   } catch (e) { console.warn('estSave failed:', e); }
 }
 
+let _estSaveTimer = null;
+function estScheduleSave() {
+  clearTimeout(_estSaveTimer);
+  _estSaveTimer = setTimeout(async () => {
+    try {
+      const res = await fetch('/api/estimated-rows', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phase: _estPhase, rows: _estRows })
+      });
+      if (!res.ok) console.warn('estSave failed', res.status);
+    } catch (e) { console.warn('estSave error:', e); }
+  }, 800);
+}
+
+async function estSave() {
+  try {
+    await fetch('/api/estimated-rows', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phase: _estPhase, rows: _estRows })
+    });
+  } catch (e) { console.warn('estSave error:', e); }
+}
+
 function estOnPosChange(sel) {
   const rowId = sel.dataset.rowid;
   const posName = sel.value;
   const row = _estRows.find(r => String(r.id) === String(rowId));
   if (!row) return;
   row.position = posName;
-  // Auto-fill hour rate from positions catalog
   const pos = _estPositions.find(p => (p.position || p.name) === posName);
-  if (pos && pos.hour_rate) {
-    row.hourRate = pos.hour_rate;
-  }
-  estSave();
+  if (pos && pos.hour_rate) row.hourRate = pos.hour_rate;
+  estScheduleSave();
   renderEstimatedTable(document.getElementById('estimatedLiveWrap'), _estRows, _estPositions, _estPhase);
 }
 
@@ -857,27 +879,81 @@ function estOnChange(inp) {
   const row = _estRows.find(r => String(r.id) === String(rowId));
   if (!row) return;
   row[field] = inp.value;
-  estSave();
-  renderEstimatedTable(document.getElementById('estimatedLiveWrap'), _estRows, _estPositions, _estPhase);
+  estScheduleSave();
+  // Only update the computed cells, not re-render the whole table
+  estUpdateRowCalc(rowId);
+  estUpdateTotals();
 }
 
-function estAddRow() {
+function estUpdateRowCalc(rowId) {
+  const row = _estRows.find(r => String(r.id) === String(rowId));
+  if (!row) return;
+  const hr = parseFloat(row.hourRate) || 0;
+  const at = parseFloat(row.actualTime) || 0;
+  const em = parseFloat(row.estMonths) || 0;
+  const costPerMonth = hr > 0 && at > 0 ? hr * at : null;
+  const totalCost = costPerMonth !== null && em > 0 ? costPerMonth * em : null;
+  const mds = at > 0 && em > 0 ? at * em / 8 : null;
+
+  const tr = document.querySelector(`tr[data-row="${rowId}"]`);
+  if (!tr) return;
+  const cells = tr.querySelectorAll('td');
+  // cells: #, position, hourRate, actualTime, costPerMonth(4), estMonths(5), totalCost(6), mds(7)
+  if (cells[4]) cells[4].innerHTML = costPerMonth !== null ? `<b style="color:var(--navy);">$${fmt.num(Math.round(costPerMonth))}</b>` : '—';
+  if (cells[6]) cells[6].innerHTML = totalCost !== null ? `<b style="color:var(--blue);">$${fmt.num(Math.round(totalCost))}</b>` : '—';
+  if (cells[7]) cells[7].textContent = mds !== null ? fmt.decimal(mds) : '—';
+}
+
+function estUpdateTotals() {
+  let totalUSD = 0, totalMDs = 0;
+  _estRows.forEach(r => {
+    const hr = parseFloat(r.hourRate) || 0;
+    const at = parseFloat(r.actualTime) || 0;
+    const em = parseFloat(r.estMonths) || 0;
+    totalUSD += hr * at * em;
+    totalMDs += at * em / 8;
+  });
+  const totalSAR = totalUSD * 3.75;
+  const maxMonths = Math.max(1, ..._estRows.map(r => parseFloat(r.estMonths) || 0));
+  const costPerMDSAR = totalMDs > 0 ? totalSAR / totalMDs : 0;
+
+  // Update tfoot — cols: #(0), pos(1), hr(2), at(3), cpm(4), months(5), totalUSD(6), mds(7), del(8)
+  const tfoot = document.querySelector('#estTable tfoot tr');
+  if (tfoot) {
+    const cells = tfoot.querySelectorAll('td');
+    if (cells[1]) cells[1].innerHTML = `<span style="color:#93C5FD;">$${fmt.num(Math.round(totalUSD))}</span>`;
+    if (cells[2]) cells[2].innerHTML = `<span style="color:#93C5FD;">${fmt.decimal(totalMDs)}</span>`;
+  }
+
+  // Update summary strip
+  const summaryEls = document.querySelectorAll('.est-summary-val');
+  if (summaryEls.length >= 4) {
+    summaryEls[0].textContent = `$${fmt.num(Math.round(totalUSD / maxMonths))} USD`;
+    summaryEls[1].textContent = `${fmt.num(Math.round(totalSAR / maxMonths))} SAR`;
+    summaryEls[2].textContent = fmt.decimal(totalMDs / maxMonths);
+    summaryEls[3].textContent = `${fmt.num(Math.round(costPerMDSAR))} SAR`;
+  }
+  const totalEl = document.querySelector('.est-total-sar');
+  if (totalEl) totalEl.textContent = `SAR ${fmt.num(Math.round(totalSAR))}`;
+}
+
+async function estAddRow() {
   _estRows.push(makeEstRow('', '', 176, ''));
-  estSave();
+  await estSave();
   renderEstimatedTable(document.getElementById('estimatedLiveWrap'), _estRows, _estPositions, _estPhase);
 }
 
-function estDeleteRow(id) {
+async function estDeleteRow(id) {
   _estRows = _estRows.filter(r => String(r.id) !== String(id));
   if (!_estRows.length) _estRows = [makeEstRow()];
-  estSave();
+  await estSave();
   renderEstimatedTable(document.getElementById('estimatedLiveWrap'), _estRows, _estPositions, _estPhase);
 }
 
-function estClearAll() {
+async function estClearAll() {
   if (!confirm('Clear all rows?')) return;
   _estRows = [makeEstRow()];
-  estSave();
+  await estSave();
   renderEstimatedTable(document.getElementById('estimatedLiveWrap'), _estRows, _estPositions, _estPhase);
 }
 
