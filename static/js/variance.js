@@ -258,6 +258,7 @@ function renderBudget(data, phaseKey) {
 const _budgetChanges = {};  // { phaseKey: [{id, reason, plan_id, delta_cost, delta_rev}] }
 
 async function loadBudgetChanges(phaseKey) {
+  // Load changes
   try {
     const r = await fetch(`/api/budget-changes?phase=${phaseKey}`);
     if (r.ok) {
@@ -266,6 +267,23 @@ async function loadBudgetChanges(phaseKey) {
     }
   } catch (e) {}
   if (!_budgetChanges[phaseKey]) _budgetChanges[phaseKey] = [];
+
+  // Load saved revenue override and populate input
+  try {
+    const r = await fetch(`/api/variance/budget-override/${phaseKey}`);
+    if (r.ok) {
+      const d = await r.json();
+      const overrides = d.overrides || {};
+      const savedRev = overrides['approved.revenue_sar'];
+      if (savedRev !== undefined && savedRev !== null) {
+        const revEl = document.getElementById(`inp-rev-${phaseKey}`);
+        if (revEl && !revEl.value) {
+          revEl.value = savedRev;
+        }
+      }
+    }
+  } catch(e) {}
+
   renderBudgetChanges(phaseKey);
   budgetAutoCalc(phaseKey);
 }
@@ -479,17 +497,53 @@ function wireBudgetInputs(container) {
 }
 
 function renderProfitability(data, phaseKey) {
-  // Pre-fetch overrides + estimated rows
+  // Pre-fetch overrides
   fetch('/api/plan-overrides').then(r => r.json()).then(o => {
     AppState.planOverrides = o.plan_overrides || {};
-    setTimeout(() => {
-      applyPlanOverrides(phaseKey);
-      profRecomputeAll(phaseKey);
-    }, 100);
+    setTimeout(() => profBuildTable(phaseKey), 100);
   });
 
-  // Months come from Odoo effort data (AppState._effortMonths) — not Excel sheet
-  // We render a placeholder first, then populate when effort data is ready
+  const html = `
+    <div class="kpi-strip kpi-strip-small" id="prof-kpi-${phaseKey}">
+      <div class="kpi-card kpi-blue compact">
+        <div class="kpi-label">% COMPLETION</div>
+        <div class="kpi-value" id="prof-kpi-completion-${phaseKey}">—</div>
+        <div class="kpi-foot">latest month</div>
+      </div>
+      <div class="kpi-card kpi-amber compact">
+        <div class="kpi-label">REMAINING MDs</div>
+        <div class="kpi-value" id="prof-kpi-remaining-${phaseKey}">—</div>
+      </div>
+      <div class="kpi-card kpi-navy compact">
+        <div class="kpi-label">EAC MDs</div>
+        <div class="kpi-value" id="prof-kpi-eac-${phaseKey}">—</div>
+      </div>
+      <div class="kpi-card kpi-green compact">
+        <div class="kpi-label">CPI</div>
+        <div class="kpi-value" id="prof-kpi-cpi-${phaseKey}">—</div>
+        <div class="kpi-foot">cost performance index</div>
+      </div>
+      <div class="kpi-card kpi-blue compact">
+        <div class="kpi-label">PROFIT AT COMPLETION</div>
+        <div class="kpi-value" id="prof-kpi-profit-${phaseKey}">—</div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:12px;" id="prof-card-${phaseKey}">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <div>
+          <h3 class="card-title" style="margin:0;">Monthly Profitability Variance</h3>
+          <span class="muted-text" style="font-size:11px;">% Completion & Remaining MDs are editable · all other columns auto-calculated · auto-saved</span>
+        </div>
+        <button class="btn-outline" style="font-size:11px;" onclick="profBuildTable('${phaseKey}')">↻ Recalculate</button>
+      </div>
+      <div id="prof-table-wrap-${phaseKey}">
+        <div class="loading">Waiting for Current Effort data…</div>
+      </div>
+    </div>
+  `;
+
+  // Build table once effort data is available
+  setTimeout(() => profBuildTable(phaseKey), 500);
 
   return html;
 }
