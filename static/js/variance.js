@@ -1,23 +1,30 @@
 function profFillFromTasks(phaseKey) {
-  // Fill last month's Remaining MDs from Tasks Analysis AppState
   const remMD = AppState._taskRemainingMDs && AppState._taskRemainingMDs[phaseKey];
   if (!remMD) {
-    alert('No Tasks Analysis data found — open the Overview tab first and let it load.');
+    alert('No Tasks Analysis data found — open the Overview tab first and let it load, then come back here.');
     return;
   }
-  // Set remaining in the LAST row only (latest month)
+  // Set remaining in the LAST row that has actual effort (not 0)
   const table = document.getElementById(`profit-table-${phaseKey}`);
   if (!table) return;
-  const rows = table.querySelectorAll('tr[data-month-key]');
-  const lastRow = rows[rows.length - 1];
-  if (!lastRow) return;
-  const remInp = lastRow.querySelector('.remaining-input');
+  const rows = Array.from(table.querySelectorAll('tr[data-month-key]'));
+  // Find last row with actual MDs
+  let targetRow = rows[rows.length - 1];
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const effortMDs = (AppState._effortMonthMDs && AppState._effortMonthMDs[phaseKey]) || {};
+    const mk = rows[i].dataset.monthKey;
+    if ((effortMDs[mk] || 0) > 0) { targetRow = rows[i]; break; }
+  }
+  if (!targetRow) return;
+  const remInp = targetRow.querySelector('.remaining-input');
   if (remInp) {
     remInp.value = remMD.toFixed(2);
-    remInp.dispatchEvent(new Event('input'));
     remInp.dispatchEvent(new Event('blur'));
   }
   profRecomputeAll(phaseKey);
+  // Flash feedback
+  const btn = document.querySelector(`[onclick="profFillFromTasks('${phaseKey}')"]`);
+  if (btn) { btn.textContent = '✓ Filled!'; btn.style.color='var(--green)'; setTimeout(()=>{btn.textContent='📋 Fill from Tasks';btn.style.color='';},2000); }
 }
 
 /* Variance tab — mirrors variance.xlsx with sub-tabs */
@@ -749,7 +756,13 @@ async function _doBuildProfTable(phaseKey, wrap, months) {
   `;
 
   wrap.innerHTML = tableHtml;
-  profRecomputeAll(phaseKey);
+  // Auto-fill remaining MDs from Tasks Analysis if available
+  const taskRemMD = AppState._taskRemainingMDs && AppState._taskRemainingMDs[phaseKey];
+  if (taskRemMD) {
+    profFillFromTasks(phaseKey);
+  } else {
+    profRecomputeAll(phaseKey);
+  }
 }
 
 async function profRecomputeAll(phaseKey) {
