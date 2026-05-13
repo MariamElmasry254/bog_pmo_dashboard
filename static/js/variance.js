@@ -708,21 +708,24 @@ function renderEstimatedTable(wrap, rows, positions, phaseKey) {
 
   // Compute totals
   let totalUSD = 0, totalMDs = 0;
+  let sumCostPerMonth = 0;  // sum(hour_rate × actual_time) = TOTAL USD per month
+  let sumActualTime = 0;    // sum(actual_time MH) for MDs/month
   rows.forEach(r => {
     const hr = parseFloat(r.hourRate) || 0;
     const at = parseFloat(r.actualTime) || 0;
     const em = parseFloat(r.estMonths) || 0;
-    const costPerMonth = hr * at;
-    const totalCost = costPerMonth * em;
-    const mds = at * em / 8;
-    totalUSD += totalCost;
-    totalMDs += mds;
+    sumCostPerMonth += hr * at;
+    sumActualTime += at;
+    totalUSD += hr * at * em;
+    totalMDs += at * em / 8;
   });
 
   const totalSAR = totalUSD * 3.75;
-  const totalSARperMonth = rows.length ? (totalSAR / Math.max(1, Math.max(...rows.map(r => parseFloat(r.estMonths) || 0)))) : 0;
-  const avgMDsPerMonth = rows.length ? (totalMDs / Math.max(1, Math.max(...rows.map(r => parseFloat(r.estMonths) || 0)))) : 0;
-  const costPerMDSAR = totalMDs > 0 ? totalSAR / totalMDs : 0;
+  // Correct equations:
+  const totalUSDperMonth = sumCostPerMonth;            // sum(Cost per month)
+  const totalSARperMonth = totalUSDperMonth * 3.75;    // × 3.75
+  const estMDsPerMonth = sumActualTime / 8;            // sum(Actual Time MH) / 8
+  const costPerMDSAR = estMDsPerMonth > 0 ? totalSARperMonth / estMDsPerMonth : 0; // SAR/month ÷ MDs/month
 
   let html = `
     <div class="card">
@@ -814,10 +817,10 @@ function renderEstimatedTable(wrap, rows, positions, phaseKey) {
     <div class="card" style="margin-top:12px; background:#F8FAFC;">
       <div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:0; border:1px solid var(--border-strong); border-radius:6px; overflow:hidden;">
         ${[
-          ['TOTAL USD per month (22 days)', `$${fmt.num(Math.round(totalUSD / Math.max(1, Math.max(...rows.map(r=>parseFloat(r.estMonths)||0)))))} USD`],
-          ['TOTAL Estimated Cost per month (22 days) SAR', `${fmt.num(Math.round(totalSAR / Math.max(1, Math.max(...rows.map(r=>parseFloat(r.estMonths)||0)))))} SAR`],
-          ['Estimated MDs / Month', fmt.decimal(avgMDsPerMonth)],
-          ['TOTAL Estimated Cost per MD SAR', `${fmt.num(Math.round(costPerMDSAR))} SAR`],
+          ['TOTAL USD per month (22 days)', `$${fmtExact(totalUSDperMonth)} USD`],
+          ['TOTAL Estimated Cost per month (22 days) SAR', `${fmtExact(totalSARperMonth)} SAR`],
+          ['Estimated MDs / Month', fmtExact(estMDsPerMonth)],
+          ['TOTAL Estimated Cost per MD SAR', `${fmtExact(costPerMDSAR)} SAR`],
         ].map(([label, val]) => `
           <div style="padding:12px 16px; border-right:1px solid var(--border-strong);">
             <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:4px;">${label}</div>
@@ -930,16 +933,21 @@ function estUpdateRowCalc(rowId) {
 
 function estUpdateTotals() {
   let totalUSD = 0, totalMDs = 0;
+  let sumCostPerMonth = 0, sumActualTime = 0;
   _estRows.forEach(r => {
     const hr = parseFloat(r.hourRate) || 0;
     const at = parseFloat(r.actualTime) || 0;
     const em = parseFloat(r.estMonths) || 0;
+    sumCostPerMonth += hr * at;
+    sumActualTime += at;
     totalUSD += hr * at * em;
     totalMDs += at * em / 8;
   });
   const totalSAR = totalUSD * 3.75;
-  const maxMonths = Math.max(1, ..._estRows.map(r => parseFloat(r.estMonths) || 0));
-  const costPerMDSAR = totalMDs > 0 ? totalSAR / totalMDs : 0;
+  const totalUSDperMonth = sumCostPerMonth;
+  const totalSARperMonth = totalUSDperMonth * 3.75;
+  const estMDsPerMonth = sumActualTime / 8;
+  const costPerMDSAR = estMDsPerMonth > 0 ? totalSARperMonth / estMDsPerMonth : 0;
 
   // Update tfoot — cols: #(0), pos(1), hr(2), at(3), cpm(4), months(5), totalUSD(6), mds(7), del(8)
   const tfoot = document.querySelector('#estTable tfoot tr');
@@ -952,13 +960,13 @@ function estUpdateTotals() {
   // Update summary strip
   const summaryEls = document.querySelectorAll('.est-summary-val');
   if (summaryEls.length >= 4) {
-    summaryEls[0].textContent = `$${fmt.num(Math.round(totalUSD / maxMonths))} USD`;
-    summaryEls[1].textContent = `${fmt.num(Math.round(totalSAR / maxMonths))} SAR`;
-    summaryEls[2].textContent = fmt.decimal(totalMDs / maxMonths);
-    summaryEls[3].textContent = `${fmt.num(Math.round(costPerMDSAR))} SAR`;
+    summaryEls[0].textContent = `$${fmtExact(totalUSDperMonth)} USD`;
+    summaryEls[1].textContent = `${fmtExact(totalSARperMonth)} SAR`;
+    summaryEls[2].textContent = fmtExact(estMDsPerMonth);
+    summaryEls[3].textContent = `${fmtExact(costPerMDSAR)} SAR`;
   }
   const totalEl = document.querySelector('.est-total-sar');
-  if (totalEl) totalEl.textContent = `SAR ${fmt.num(Math.round(totalSAR))}`;
+  if (totalEl) totalEl.textContent = `SAR ${fmtExact(totalSAR)}`;
 }
 
 async function estAddRow() {
