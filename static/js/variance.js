@@ -779,83 +779,97 @@ async function _doBuildProfTable(phaseKey, wrap, months) {
 }
 
 async function profRecomputeAll(phaseKey) {
-  // Get presales budget values from live estimated + budget
   let totalRevSAR = 0, totalEstCostSAR = 0, totalEstMDs = 0;
 
-  // Use Final Revenue = Approved Revenue + Σ Δ Revenue changes
+  // ── 1. Revenue: DOM → AppState → DB ──
   const revEl = document.getElementById(`inp-rev-${phaseKey}`);
-  const approvedRev = revEl ? (parseFloat(revEl.value) || 0)
-    : (AppState._savedRevenue && AppState._savedRevenue[phaseKey]) || 0;
-  const budgChanges = _budgetChanges[phaseKey] || [];
-  const deltaRevSum = budgChanges.reduce((s,c) => s + (parseFloat(c.delta_rev)||0), 0);
-  totalRevSAR = approvedRev + deltaRevSum;
-
-  // From estimated rows
-  if (_estPhase === phaseKey && _estRows && _estRows.length) {
-    let costUSD = 0;
-    _estRows.forEach(r => {
-      const hr = parseFloat(r.hourRate)||0, at = parseFloat(r.actualTime)||0, em = parseFloat(r.estMonths)||0;
-      costUSD    += hr * at * em;
-      totalEstMDs += at * em / 8;
-    });
-    totalEstCostSAR = costUSD * 3.75;
-  }
-
-  // If no estimated loaded yet, fetch from API
-  if (!totalEstCostSAR || !totalEstMDs) {
-    try {
-      const r = await fetch(`/api/estimated-rows?phase=${phaseKey}`);
-      if (r.ok) {
-        const d = await r.json();
-        const savedRows = d.rows || [];
-        if (savedRows.length) {
-          let costUSD = 0;
-          savedRows.forEach(r => {
-            const hr = parseFloat(r.hourRate)||0, at = parseFloat(r.actualTime)||0, em = parseFloat(r.estMonths)||0;
-            costUSD      += hr * at * em;
-            totalEstMDs  += at * em / 8;
-          });
-          totalEstCostSAR = costUSD * 3.75;
-          // Cache in _estRows for next time
-          if (!_estRows || !_estRows.length) { _estRows = savedRows; _estPhase = phaseKey; }
-        }
-      }
-    } catch(e) {}
-  }
-
-  // Also load revenue from DB if not available
-  if (!totalRevSAR) {
+  if (revEl && parseFloat(revEl.value)) {
+    totalRevSAR = parseFloat(revEl.value);
+  } else if (AppState._savedRevenue?.[phaseKey]) {
+    totalRevSAR = AppState._savedRevenue[phaseKey];
+  } else {
     try {
       const r = await fetch(`/api/variance/budget-override/${phaseKey}`);
       if (r.ok) {
         const d = await r.json();
-        const ov = d.overrides || {};
-        const savedRev = ov['approved.revenue_sar'];
-        if (savedRev) {
-          if (!AppState._savedRevenue) AppState._savedRevenue = {};
-          AppState._savedRevenue[phaseKey] = parseFloat(savedRev);
-          totalRevSAR = parseFloat(savedRev);
-          // Add delta changes
-          const budgChanges2 = _budgetChanges[phaseKey] || [];
-          totalRevSAR += budgChanges2.reduce((s,c) => s + (parseFloat(c.delta_rev)||0), 0);
-        }
+        const sv = (d.overrides||{})['approved.revenue_sar'];
+        if (sv) { totalRevSAR = parseFloat(sv); if (!AppState._savedRevenue) AppState._savedRevenue={}; AppState._savedRevenue[phaseKey]=totalRevSAR; }
+      }
+    } catch(e) {}
+  }
+  // Add delta changes
+  const budgChanges = _budgetChanges[phaseKey] || [];
+  totalRevSAR += budgChanges.reduce((s,c) => s + (parseFloat(c.delta_rev)||0), 0);
+
+  // ── 2. Estimated rows: cache → DB ──
+  const estRows = (_estPhase === phaseKey && _estRows?.length) ? _estRows : null;
+  if (estRows) {
+    let costUSD = 0;
+    estRows.forEach(r => {
+      const hr=parseFloat(r.hourRate)||0, at=parseFloat(r.actualTime)||0, em=parseFloat(r.estMonths)||0;
+      costUSD += hr*at*em; totalEstMDs += at*em/8;
+    });
+    totalEstCostSAR = costUSD * 3.75;
+  } else {
+    try {
+      const r = await fetch(`/api/estimated-rows?phase=${phaseKey}`);
+      if (r.ok) {
+        const d = await r.json();
+        let costUSD = 0;
+        (d.rows||[]).forEach(r => {
+          const hr=parseFloat(r.hourRate)||0, at=parseFloat(r.actualTime)||0, em=parseFloat(r.estMonths)||0;
+          costUSD += hr*at*em; totalEstMDs += at*em/8;
+        });
+        totalEstCostSAR = costUSD * 3.75;
+        if (!_estRows?.length) { _estRows = d.rows||[]; _estPhase = phaseKey; }
+      }
+    } catch(e) {}
+  }
+
+  // ── 3. Effort MDs + Costs: AppState → API ──
+  let effortMDs = AppState._effortMonthMDs?.[phaseKey];
+  let effortCosts = AppState._effortMonthCosts?.[phaseKey];
+  let months = AppState._effortMonths?.[phaseKey] || [];
+
+  if (!effortMDs || !months.length) {
+    try {
+      const res = await fetch(`/api/effort/${phaseKey}/all-months`);
+      const d = await res.json();
+      if (d.months?.length) {
+        months = d.months;
+        const mMDs={}, mCosts={};
+        months.forEach(m => { mMDs[m.key]=0; mCosts[m.key]=0; });
+        (d.employees||[]).forEach(emp => {
+          months.forEach(m => {
+            const cell = emp.months?.[m.key]||{regular:0,ramadan:0,overtime:0};
+            mMDs[m.key] += (cell.regular+cell.overtime)/8 + cell.ramadan/6;
+            const hr=emp.hour_rate||0, otr=emp.overtime_rate||hr*1.5;
+            mCosts[m.key] += (cell.regular+cell.ramadan)*hr + cell.overtime*otr;
+          });
+        });
+        effortMDs=mMDs; effortCosts=mCosts;
+        if (!AppState._effortMonths) AppState._effortMonths={};
+        if (!AppState._effortMonthMDs) AppState._effortMonthMDs={};
+        if (!AppState._effortMonthCosts) AppState._effortMonthCosts={};
+        AppState._effortMonths[phaseKey]=months;
+        AppState._effortMonthMDs[phaseKey]=mMDs;
+        AppState._effortMonthCosts[phaseKey]=mCosts;
       }
     } catch(e) {}
   }
 
   const costPerMD = totalEstMDs > 0 ? totalEstCostSAR / totalEstMDs : 0;
-  const plannedProfit = totalRevSAR - totalEstCostSAR;
+  const finProfitPct = AppState._finalProfitPct?.[phaseKey] || 0;
+  const plannedProfitSAR = finProfitPct * totalRevSAR;
 
   const table = document.getElementById(`profit-table-${phaseKey}`);
   if (!table) return;
-
-  const months = (AppState._effortMonths && AppState._effortMonths[phaseKey]) || [];
   const rows = table.querySelectorAll('tr[data-month-key]');
-  let accActualMDs = 0;
-  let latestData = {};
+  let accActualMDs=0, latestData={};
 
   rows.forEach((tr, idx) => {
-    const thisMonthMDs = effortMDs[monthKey] || 0;
+    const monthKey = tr.dataset.monthKey;
+    const thisMonthMDs = (effortMDs||{})[monthKey] || 0;
     accActualMDs += thisMonthMDs;
     const actualMDs = accActualMDs;
 
