@@ -575,10 +575,29 @@ async function profBuildTable(phaseKey) {
   // Get months from effort data (AppState._effortMonths set by loadEffortLive)
   let months = (AppState._effortMonths && AppState._effortMonths[phaseKey]) || [];
 
+  // If no data yet, retry up to 5 times with 1s delay
   if (!months.length) {
-    wrap.innerHTML = '<div class="loading">No effort data yet — load Current Effort first then click Recalculate</div>';
+    wrap.innerHTML = '<div class="loading">Waiting for Current Effort data…</div>';
+    let retries = 0;
+    const retry = setInterval(() => {
+      retries++;
+      months = (AppState._effortMonths && AppState._effortMonths[phaseKey]) || [];
+      if (months.length || retries >= 10) {
+        clearInterval(retry);
+        if (months.length) {
+          _doBuildProfTable(phaseKey, wrap, months);
+        } else {
+          wrap.innerHTML = '<div class="loading" style="color:var(--text-muted);">No effort data — click ↻ Recalculate after Current Effort loads</div>';
+        }
+      }
+    }, 800);
     return;
   }
+
+  _doBuildProfTable(phaseKey, wrap, months);
+}
+
+async function _doBuildProfTable(phaseKey, wrap, months) {
 
   // Load saved overrides
   let overrides = {};
