@@ -511,6 +511,11 @@ function budgetAutoCalc(phaseKey) {
   setEl(`fin-profit-pct-${phaseKey}`, finRevSAR > 0 ? fmt.decimal(finProfitPct) + '%' : '—', profColor(finProfitPct));
 
   // KPI strip
+  // Save final profit % for profitability to use
+  if (finRevSAR > 0) {
+    if (!AppState._finalProfitPct) AppState._finalProfitPct = {};
+    AppState._finalProfitPct[phaseKey] = finProfit / finRevSAR;
+  }
   setEl(`kpi-mds-${phaseKey}`,        mds > 0 ? fmt.num(Math.round(mds)) : '—');
   setEl(`kpi-cost-${phaseKey}`,       costSAR > 0 ? fmt.money(Math.round(costSAR)) : '—');
   setEl(`kpi-profit-pct-${phaseKey}`, approvedRevSAR > 0 ? fmt.decimal(appProfitPct)+'%' : '—', profColor(appProfitPct));
@@ -675,7 +680,7 @@ async function _doBuildProfTable(phaseKey, wrap, months) {
           <th colspan="3" style="text-align:center;background:#1B2A4E;color:#93C5FD;border-left:3px solid #3B82F6;">Presales Budget</th>
           <th colspan="2" style="text-align:center;background:#1B2A4E;color:#FCD34D;border-left:3px solid #F59E0B;">Current Effort</th>
           <th colspan="2" style="text-align:center;background:#1B2A4E;color:#93C5FD;border-left:3px solid #60A5FA;">% Completion & Remaining</th>
-          <th colspan="7" style="text-align:center;background:#1B2A4E;color:#6EE7B7;border-left:3px solid #10B981;">Cost Variance</th>
+          <th colspan="8" style="text-align:center;background:#1B2A4E;color:#6EE7B7;border-left:3px solid #10B981;">Cost Variance</th>
           <th colspan="6" style="text-align:center;background:#1B2A4E;color:#FCA5A5;border-left:3px solid #EF4444;">Profitability</th>
           <th colspan="3" style="text-align:center;background:#1B2A4E;color:#C4B5FD;border-left:3px solid #8B5CF6;">Virtual Invoice</th>
         </tr>
@@ -689,6 +694,7 @@ async function _doBuildProfTable(phaseKey, wrap, months) {
           <th class="num">Remaining MDs</th>
           <th class="num" style="border-left:3px solid #10B981;">Current Cost SAR</th>
           <th class="num">EAC MDs</th>
+          <th class="num">Expected Overrun</th>
           <th class="num">Cost to Complete SAR</th>
           <th class="num">Est. at Completion SAR</th>
           <th class="num">CPI</th>
@@ -735,6 +741,7 @@ async function _doBuildProfTable(phaseKey, wrap, months) {
             </td>
             <td class="num" style="border-left:3px solid #10B981;"><span class="pc-currcost-${monthKey}">—</span></td>
             <td class="num"><span class="pc-eac-${monthKey}">—</span></td>
+            <td class="num"><span class="pc-overrun-${monthKey}">—</span></td>
             <td class="num"><span class="pc-costtocomplete-${monthKey}">—</span></td>
             <td class="num"><span class="pc-eac-cost-${monthKey}">—</span></td>
             <td class="num"><span class="pc-cpi-${monthKey}">—</span></td>
@@ -861,18 +868,24 @@ async function profRecomputeAll(phaseKey) {
       if (m2.key <= monthKey) accCostUSD += effortCosts[m2.key] || 0;
     });
     const currentCostSAR = accCostUSD * 3.75;
-    const eacMDs        = actualMDs + remainingMDs;
+    // ── All equations per reference sheet ──
+    const eacMDs            = actualMDs + remainingMDs;
+    const expectedOverrun   = (completionPct > 0 && totalEstMDs > 0)
+                              ? (actualMDs / totalEstMDs) / (completionPct / 100) - 1 : 0;
     const estCostToComplete = remainingMDs * costPerMD;
-    const estAtCompletion   = currentCostSAR + estCostToComplete;
-    const cpi           = eacMDs > 0 ? totalEstMDs / eacMDs : 0;
-    const variance      = (totalEstMDs - eacMDs) * costPerMD;           // SAR
-    const variancePct   = totalEstCostSAR > 0 ? variance / totalEstCostSAR * 100 : 0;
-    const expectedOverrunSAR = estAtCompletion - totalEstCostSAR;
-    const revToDate     = totalRevSAR * (completionPct / 100);
-    const profitAtComp  = totalRevSAR - estAtCompletion;
-    const profitAtCompPct = totalRevSAR > 0 ? profitAtComp / totalRevSAR * 100 : 0;
-    const profVar       = profitAtComp - plannedProfit;
-    const profVarPct    = totalRevSAR > 0 ? profVar / totalRevSAR * 100 : 0;
+    const estAtCompletion   = estCostToComplete + currentCostSAR;
+    const cpi               = estAtCompletion > 0 ? totalEstCostSAR / estAtCompletion : 0;
+    const costVarianceSAR   = totalEstCostSAR - estAtCompletion;
+    const costVariancePct   = totalRevSAR > 0 ? costVarianceSAR / totalRevSAR * 100 : 0;
+    const revToDate         = totalRevSAR * (completionPct / 100);
+    const profitAtComp      = totalRevSAR - estAtCompletion;
+    const profitAtCompPct   = totalRevSAR > 0 ? profitAtComp / totalRevSAR * 100 : 0;
+    // Planned profit from Final Budget profit %
+    const plannedProfitFinal= (AppState._finalProfitPct && AppState._finalProfitPct[phaseKey])
+                              ? AppState._finalProfitPct[phaseKey] * totalRevSAR : plannedProfit;
+    const profVar           = profitAtComp - plannedProfitFinal;
+    const profVarPct        = totalRevSAR > 0 ? profVar / totalRevSAR * 100 : 0;
+    const progressPct       = estAtCompletion > 0 ? currentCostSAR / estAtCompletion * 100 : 0;
 
     // Virtual Invoice
     const viThisMonth = revToDate;                                          // = Revenue to Date this month
@@ -897,15 +910,17 @@ async function profRecomputeAll(phaseKey) {
     // Computed columns
     setSpan(`pc-currcost-${monthKey}`,      currentCostSAR > 0 ? fSAR(currentCostSAR) : '—');
     setSpan(`pc-eac-${monthKey}`,           `<b style="color:var(--blue);">${fNum(eacMDs)}</b>`);
+    const ovColor = expectedOverrun > 0 ? 'var(--red)' : 'var(--green)';
+    setSpan(`pc-overrun-${monthKey}`, expectedOverrun !== 0 ? `<span style="color:${ovColor};">${fmt.decimal(expectedOverrun*100)}%</span>` : '—');
     setSpan(`pc-costtocomplete-${monthKey}`, estCostToComplete > 0 ? fSAR(estCostToComplete) : '—');
     setSpan(`pc-eac-cost-${monthKey}`,       estAtCompletion > 0 ? fSAR(estAtCompletion) : '—');
 
     const cpiColor = cpi >= 1 ? 'var(--green)' : cpi > 0 ? 'var(--amber)' : 'var(--text-muted)';
     setSpan(`pc-cpi-${monthKey}`,           cpi > 0 ? `<b style="color:${cpiColor};">${fNum(cpi)}</b>` : '—');
 
-    const varColor = variance >= 0 ? 'var(--green)' : 'var(--red)';
-    setSpan(`pc-variance-${monthKey}`,      `<span style="color:${varColor};">${fSAR(variance)}</span>`);
-    setSpan(`pc-variance-pct-${monthKey}`,  `<span style="color:${varColor};">${fmt.decimal(variancePct)}%</span>`);
+    const varColor = costVarianceSAR >= 0 ? 'var(--green)' : 'var(--red)';
+    setSpan(`pc-variance-${monthKey}`,      `<span style="color:${varColor};">${fSAR(costVarianceSAR)}</span>`);
+    setSpan(`pc-variance-pct-${monthKey}`,  `<span style="color:${varColor};">${fmt.decimal(costVariancePct)}%</span>`);
 
     const profColor2 = profitAtComp > 0 ? 'var(--green)' : 'var(--red)';
     setSpan(`pc-profit-comp-${monthKey}`,   `<b style="color:${profColor2};">${fSAR(profitAtComp)}</b>`);
