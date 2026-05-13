@@ -3712,6 +3712,59 @@ def api_effort_all_months(phase_key):
                             break
             return pos
 
+        # KSA position aliases: Odoo returns various formats, normalize to DB keys
+        _KSA_ALIASES = {
+            'ksa-business analyst':              'KSA - Business Analyst',
+            'ksa-senior business analyst':       'KSA - Sr Business Analyst',
+            'ksa-sr business analyst':           'KSA - Sr Business Analyst',
+            'ksa - senior business analyst':     'KSA - Sr Business Analyst',
+            'ksa - ksa-business analyst':        'KSA - Business Analyst',
+            'ksa - ksa-senior business analyst': 'KSA - Sr Business Analyst',
+            'ksa - ksa-sr business analyst':     'KSA - Sr Business Analyst',
+            'ksa - senior project manager':      'KSA - Project Manager',
+            'ksa - technical project manager':   'KSA - Project Manager',
+            'ksa - business analysis team lead': 'KSA - Lead Business Analyst',
+            'ksa - sr. manager, business consulting': 'KSA - Solution Architect / Manager',
+            'ksa - associated business analyst': 'KSA - Business Analyst',
+        }
+
+        def _lookup_pos_fuzzy(pos_str):
+            """Try exact DB lookup, then normalize spaces/dashes, then alias map."""
+            if not pos_str:
+                return None
+            # 0. Check alias map first
+            alias = _KSA_ALIASES.get(pos_str.strip().lower())
+            if alias:
+                pi = get_position_by_name(db, alias)
+                if pi and pi.get('hour_rate'):
+                    return pi
+            # 1. Exact match
+            pi = get_position_by_name(db, pos_str)
+            if pi and pi.get('hour_rate'):
+                return pi
+            # 2. Normalize: collapse spaces around dashes
+            import re as _re_pos
+            def _norm(s):
+                s = _re_pos.sub(r'\s*-\s*', ' - ', s)
+                s = _re_pos.sub(r'\s+', ' ', s).strip()
+                return s.lower()
+            target = _norm(pos_str)
+            all_pos = get_all_positions(db)
+            for p in all_pos:
+                if _norm(p.get('position', '') or p.get('name', '')) == target and p.get('hour_rate'):
+                    return p
+            # 3. Also try normalizing Sr. / Senior / Sr variants
+            def _core(s):
+                s = _re_pos.sub(r'\bsenior\b', 'sr', s, flags=_re_pos.IGNORECASE)
+                s = _re_pos.sub(r'\bsr\.\b', 'sr', s, flags=_re_pos.IGNORECASE)
+                return _norm(s)
+            t_core = _core(pos_str)
+            for p in all_pos:
+                pname = p.get('position', '') or p.get('name', '')
+                if _core(pname) == t_core and p.get('hour_rate'):
+                    return p
+            return None
+
         def _get_rate_for_pos(base_pos_with_country, is_onsite):
             hour_rate = None; rate_source = None
             if country == 'TUN':
@@ -3722,22 +3775,20 @@ def api_effort_all_months(phase_key):
                 raw_pos = (base_pos_with_country or '').replace(f'{country} - ', '')
                 onsite_pos = _resolve_onsite_position(raw_pos, country)
                 if onsite_pos:
-                    pi = get_position_by_name(db, onsite_pos)
-                    if pi and pi.get('hour_rate'):
+                    pi = _lookup_pos_fuzzy(onsite_pos)
+                    if pi:
                         hour_rate = pi['hour_rate']; rate_source = 'positions_db_onsite'
                 if hour_rate is None and sar_rate and sar_rate > 0:
                     hour_rate = round(sar_rate / SAR_TO_USD, 2); rate_source = 'odoo_fallback'
             else:
-                if emp_promos and base_pos_with_country:
-                    pi = get_position_by_name(db, base_pos_with_country)
-                    if pi and pi.get('hour_rate'):
+                # Always try DB first (handles promotions — each segment has different position)
+                if base_pos_with_country:
+                    pi = _lookup_pos_fuzzy(base_pos_with_country)
+                    if pi:
                         hour_rate = pi['hour_rate']; rate_source = 'positions_db'
+                # Fallback to Odoo SAR rate ONLY if no DB match
                 if hour_rate is None and sar_rate and sar_rate > 0:
                     hour_rate = round(sar_rate / SAR_TO_USD, 2); rate_source = 'odoo'
-                if hour_rate is None and base_pos_with_country:
-                    pi = get_position_by_name(db, base_pos_with_country)
-                    if pi and pi.get('hour_rate'):
-                        hour_rate = pi['hour_rate']; rate_source = 'positions_db'
             overtime_rate = round(hour_rate * OVERTIME_MULTIPLIER, 2) if hour_rate else None
             return hour_rate, overtime_rate, rate_source
 
