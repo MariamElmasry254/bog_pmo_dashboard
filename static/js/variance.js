@@ -145,65 +145,66 @@ function renderBudget(data, phaseKey) {
 
     <div class="grid-2">
       <!-- APPROVED -->
-      <div class="card budget-card">
-        <h3 class="card-title">Approved Project Budget</h3>
-        <div class="budget-row">
-          <span class="label">Total Mandays</span>
-          <span class="value" style="font-weight:700;" id="bud-mds-${phaseKey}">
-            ${fmt.num(a.total_mandays || 0)}
-            <span class="muted-text" style="font-size:10px;"> (from Estimated Cost)</span>
-          </span>
-        </div>
-        <div class="budget-row">
-          <span class="label">Total Cost (USD)</span>
-          <span class="value">$<span style="font-weight:700;" id="bud-cost-usd-${phaseKey}">${fmtExact(a.cost_usd || 0)}</span>
-            <span class="muted-text" style="font-size:10px;"> (from Estimated Cost)</span>
-          </span>
-        </div>
-        <div class="budget-row">
-          <span class="label">Total Cost (SAR)</span>
-          <span class="value" style="font-weight:700;" id="bud-cost-sar-${phaseKey}">${fmt.money(a.cost_sar || 0)}</span>
-        </div>
-        <div class="budget-row">
-          <span class="label">Total Revenue (SAR)</span>
-          <span class="value">${editableCell(a.revenue_sar, 'approved.revenue_sar', 'money', `inp-rev-${phaseKey}`)}</span>
-        </div>
-        <div class="budget-row highlight">
-          <span class="label">Profit (SAR)</span>
-          <span class="value" style="font-weight:700; color:var(--green);" id="bud-profit-sar-${phaseKey}">—</span>
-        </div>
-        <div class="budget-row highlight">
-          <span class="label">Profit %</span>
-          <span class="value" style="font-weight:700; color:var(--green);" id="bud-profit-pct-${phaseKey}">—</span>
+      <div class="card budget-card" style="border-top: 3px solid var(--blue);">
+        <h3 class="card-title" style="margin-bottom:20px;">Approved Project Budget</h3>
+
+        <div style="display:flex; flex-direction:column; gap:14px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:10px; border-bottom:1px solid var(--border-light);">
+            <span style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Total Mandays</span>
+            <span style="font-size:16px; font-weight:700; color:var(--navy);" id="bud-mds-${phaseKey}">${fmt.num(a.total_mandays || 0)}</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:10px; border-bottom:1px solid var(--border-light);">
+            <span style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Total Cost (USD)</span>
+            <span style="font-size:16px; font-weight:700; color:var(--navy);" id="bud-cost-usd-${phaseKey}">$${fmtExact(a.cost_usd || 0)}</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:10px; border-bottom:1px solid var(--border-light);">
+            <span style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Total Cost (SAR)</span>
+            <span style="font-size:16px; font-weight:700; color:var(--navy);" id="bud-cost-sar-${phaseKey}">${fmt.money(a.cost_sar || 0)}</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:10px; border-bottom:1px solid var(--border-light);">
+            <span style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Total Revenue (SAR)</span>
+            <span>${editableCell(a.revenue_sar, 'approved.revenue_sar', 'money', `inp-rev-${phaseKey}`)}</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:center; padding:12px; background:var(--bg-subtle); border-radius:8px;">
+            <span style="font-size:13px; font-weight:700; color:var(--navy);">Profit (SAR)</span>
+            <span style="font-size:22px; font-weight:800;" id="bud-profit-sar-${phaseKey}">—</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:center; padding:12px; background:var(--bg-subtle); border-radius:8px;">
+            <span style="font-size:13px; font-weight:700; color:var(--navy);">Profit %</span>
+            <span style="font-size:22px; font-weight:800;" id="bud-profit-pct-${phaseKey}">—</span>
+          </div>
         </div>
       </div>
 
       <!-- FINAL -->
-      <div class="card budget-card budget-final">
-        <h3 class="card-title">Final Budget <span class="badge badge-amber">After Changes</span></h3>
-        <div class="budget-row">
-          <span class="label">Total Cost (SAR)</span>
-          <span class="value" style="font-weight:700;" id="fin-cost-sar-${phaseKey}">—</span>
-        </div>
-        <div class="budget-row">
-          <span class="label">Total Revenue (SAR)</span>
-          <span class="value" style="font-weight:700;" id="fin-rev-sar-${phaseKey}">—</span>
-        </div>
-        <div class="budget-row" id="fin-delta-cost-row-${phaseKey}" style="display:none;">
-          <span class="label">Δ Cost (SAR)</span>
-          <span class="value" id="fin-delta-cost-${phaseKey}">—</span>
-        </div>
-        <div class="budget-row" id="fin-delta-rev-row-${phaseKey}" style="display:none;">
-          <span class="label">Δ Revenue (SAR)</span>
-          <span class="value" id="fin-delta-rev-${phaseKey}">—</span>
-        </div>
-        <div class="budget-row highlight">
-          <span class="label">Profit (SAR)</span>
-          <span class="value" style="font-weight:700;" id="fin-profit-sar-${phaseKey}">—</span>
-        </div>
-        <div class="budget-row highlight">
-          <span class="label">Profit %</span>
-          <span class="value" style="font-weight:700;" id="fin-profit-pct-${phaseKey}">—</span>
+      <div class="card budget-card" style="border-top: 3px solid var(--amber);">
+        <h3 class="card-title" style="margin-bottom:20px;">Final Budget <span class="badge badge-amber">After Changes</span></h3>
+
+        <div style="display:flex; flex-direction:column; gap:14px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:10px; border-bottom:1px solid var(--border-light);">
+            <span style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Total Cost (SAR)</span>
+            <span style="font-size:16px; font-weight:700; color:var(--navy);" id="fin-cost-sar-${phaseKey}">—</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:10px; border-bottom:1px solid var(--border-light);">
+            <span style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Total Revenue (SAR)</span>
+            <span style="font-size:16px; font-weight:700; color:var(--navy);" id="fin-rev-sar-${phaseKey}">—</span>
+          </div>
+          <div id="fin-delta-cost-row-${phaseKey}" style="display:none; justify-content:space-between; align-items:center; padding-bottom:10px; border-bottom:1px solid var(--border-light);">
+            <span style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Δ Cost (SAR)</span>
+            <span style="font-size:16px; font-weight:700;" id="fin-delta-cost-${phaseKey}">—</span>
+          </div>
+          <div id="fin-delta-rev-row-${phaseKey}" style="display:none; justify-content:space-between; align-items:center; padding-bottom:10px; border-bottom:1px solid var(--border-light);">
+            <span style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Δ Revenue (SAR)</span>
+            <span style="font-size:16px; font-weight:700;" id="fin-delta-rev-${phaseKey}">—</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:center; padding:12px; background:var(--bg-subtle); border-radius:8px;">
+            <span style="font-size:13px; font-weight:700; color:var(--navy);">Profit (SAR)</span>
+            <span style="font-size:22px; font-weight:800;" id="fin-profit-sar-${phaseKey}">—</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:center; padding:12px; background:var(--bg-subtle); border-radius:8px;">
+            <span style="font-size:13px; font-weight:700; color:var(--navy);">Profit %</span>
+            <span style="font-size:22px; font-weight:800;" id="fin-profit-pct-${phaseKey}">—</span>
+          </div>
         </div>
       </div>
     </div>
@@ -387,10 +388,12 @@ function budgetAutoCalc(phaseKey) {
   setEl(`fin-rev-sar-${phaseKey}`,    fmt.money(Math.round(finRevSAR))  + ' SAR');
 
   // Show/hide delta rows based on whether there are changes
+  const hasCostChanges = changes.some(c => parseFloat(c.delta_cost) !== 0 && c.delta_cost !== '' && c.delta_cost !== null && c.delta_cost !== undefined);
+  const hasRevChanges  = changes.some(c => parseFloat(c.delta_rev)  !== 0 && c.delta_rev  !== '' && c.delta_rev  !== null && c.delta_rev  !== undefined);
   const showDeltaCostRow = document.getElementById(`fin-delta-cost-row-${phaseKey}`);
   const showDeltaRevRow  = document.getElementById(`fin-delta-rev-row-${phaseKey}`);
-  if (showDeltaCostRow) showDeltaCostRow.style.display = deltaCostTotal !== 0 ? '' : 'none';
-  if (showDeltaRevRow)  showDeltaRevRow.style.display  = deltaRevTotal  !== 0 ? '' : 'none';
+  if (showDeltaCostRow) showDeltaCostRow.style.display = hasCostChanges ? '' : 'none';
+  if (showDeltaRevRow)  showDeltaRevRow.style.display  = hasRevChanges  ? '' : 'none';
 
   if (deltaCostTotal !== 0) {
     setEl(`fin-delta-cost-${phaseKey}`, (deltaCostTotal > 0 ? '+' : '') + fmt.money(Math.abs(deltaCostTotal)) + ' SAR',
