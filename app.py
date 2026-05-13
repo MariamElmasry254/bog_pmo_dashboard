@@ -4554,6 +4554,26 @@ def api_employee_odoo_position():
         'suggested_old_position': suggested_old,
     })
 
+@app.route('/api/budget-changes', methods=['GET'])
+def api_budget_changes_get():
+    phase = request.args.get('phase', 'development')
+    changes = db.get_override('budget_changes', '', phase) or []
+    if isinstance(changes, str):
+        import json as _j
+        try: changes = _j.loads(changes)
+        except: changes = []
+    return jsonify({'phase': phase, 'changes': changes if isinstance(changes, list) else []})
+
+
+@app.route('/api/budget-changes', methods=['POST'])
+def api_budget_changes_save():
+    body = request.json or {}
+    phase = body.get('phase', 'development')
+    changes = body.get('changes', [])
+    db.set_override('budget_changes', '', phase, changes)
+    return jsonify({'ok': True})
+
+
 @app.route('/api/estimated-rows', methods=['GET'])
 def api_estimated_rows_get():
     """Get saved estimated cost rows for a phase."""
