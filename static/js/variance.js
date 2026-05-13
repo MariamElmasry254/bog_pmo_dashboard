@@ -80,6 +80,9 @@ function renderVarianceSubTab(key) {
   wireBudgetInputs(cont);
 
   // Load live effort + estimated tables AFTER DOM is set
+  if (tab.sections.some(s => s.key === 'budget')) {
+    setTimeout(() => loadBudgetChanges(key), 150);
+  }
   if (tab.sections.some(s => s.key === 'effort')) {
     const effortContainerId = `effort-live-${key}`;
     setTimeout(() => loadEffortLive(key, effortContainerId), 100);
@@ -93,143 +96,268 @@ function renderVarianceSubTab(key) {
 }
 
 function renderBudget(data, phaseKey) {
-  let html = '';
-  // KPI cards from approved/final
   const a = data.approved || {};
   const f = data.final || {};
 
-  // Helper to make an editable budget cell
-  // type: 'money' | 'pct' | 'num'
-  function editableCell(value, path, type) {
+  function editableCell(value, path, type, autoId) {
     const v = value === null || value === undefined ? '' : value;
     const step = type === 'pct' ? '0.0001' : '0.01';
     const cls = type === 'pct' ? 'budget-input budget-input-pct' : 'budget-input';
-    return `<input type="number" step="${step}" class="${cls}" data-phase="${phaseKey}" data-path="${path}" value="${v}">`;
+    const id = autoId ? `id="${autoId}"` : '';
+    return `<input type="number" step="${step}" class="${cls}" ${id} data-phase="${phaseKey}" data-path="${path}" value="${v}" oninput="budgetAutoCalc('${phaseKey}')">`;
   }
 
-  // Helper for non-numeric (text) editable cells
-  function editableText(value, path) {
-    const v = value === null || value === undefined ? '' : value;
-    return `<input type="text" class="budget-input budget-input-text" data-phase="${phaseKey}" data-path="${path}" value="${String(v).replace(/"/g, '&quot;')}">`;
-  }
+  const overrideBadge = data._has_overrides
+    ? '<span class="badge badge-blue" style="margin-left:8px;">Has saved overrides</span>' : '';
 
-  // Compute display values for KPI cards (use saved overrides)
-  const profitPctApproved = (a.profit_pct || 0) * 100;
-  const profitPctFinal = (f.profit_pct || 0) * 100;
-
-  html += `
+  // KPI strip
+  let html = `
     <div class="kpi-strip kpi-strip-small">
       <div class="kpi-card kpi-blue compact">
         <div class="kpi-label">TOTAL MANDAYS</div>
-        <div class="kpi-value">${fmt.num(a.total_mandays)}</div>
+        <div class="kpi-value" id="kpi-mds-${phaseKey}">${fmt.num(a.total_mandays || 0)}</div>
+        <div class="kpi-foot">from Estimated Cost</div>
       </div>
       <div class="kpi-card kpi-navy compact">
         <div class="kpi-label">APPROVED COST (SAR)</div>
-        <div class="kpi-value">${fmt.money(a.cost_sar)}</div>
+        <div class="kpi-value" id="kpi-cost-${phaseKey}">${fmt.money(a.cost_sar || 0)}</div>
       </div>
       <div class="kpi-card kpi-green compact">
         <div class="kpi-label">APPROVED PROFIT</div>
-        <div class="kpi-value">${fmt.decimal(profitPctApproved)}<span class="kpi-unit">%</span></div>
-        <div class="kpi-foot">${fmt.money(a.profit_sar)} SAR</div>
+        <div class="kpi-value" id="kpi-profit-pct-${phaseKey}">—</div>
+        <div class="kpi-foot" id="kpi-profit-sar-${phaseKey}">—</div>
       </div>
       <div class="kpi-card kpi-amber compact">
         <div class="kpi-label">FINAL PROFIT</div>
-        <div class="kpi-value">${fmt.decimal(profitPctFinal)}<span class="kpi-unit">%</span></div>
-        <div class="kpi-foot">${fmt.money(f.profit_sar)} SAR</div>
+        <div class="kpi-value" id="kpi-final-pct-${phaseKey}">—</div>
+        <div class="kpi-foot" id="kpi-final-sar-${phaseKey}">—</div>
       </div>
     </div>
-  `;
 
-  // Editable hint
-  const overrideBadge = data._has_overrides
-    ? '<span class="badge badge-blue" style="margin-left:8px;">Has saved overrides</span>'
-    : '';
-
-  // Approved vs Final side-by-side - WITH EDITABLE INPUTS
-  html += `
-    <div class="card" style="margin-bottom: 12px;">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-        <h3 class="card-title" style="margin: 0;">Budget — Editable ${overrideBadge}</h3>
-        <span style="font-size: 11px; color: var(--text-muted);">All fields auto-save on edit · Stored in Railway Volume</span>
+    <div class="card" style="margin-bottom:12px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <h3 class="card-title" style="margin:0;">Budget — Editable ${overrideBadge}</h3>
+        <span style="font-size:11px; color:var(--text-muted);">All fields auto-save on edit · Profit auto-calculated</span>
       </div>
     </div>
+
     <div class="grid-2">
+      <!-- APPROVED -->
       <div class="card budget-card">
         <h3 class="card-title">Approved Project Budget</h3>
         <div class="budget-row">
           <span class="label">Total Mandays</span>
-          <span class="value">${editableCell(a.total_mandays, 'approved.total_mandays', 'num')}</span>
+          <span class="value" style="font-weight:700;" id="bud-mds-${phaseKey}">
+            ${fmt.num(a.total_mandays || 0)}
+            <span class="muted-text" style="font-size:10px;"> (from Estimated Cost)</span>
+          </span>
         </div>
         <div class="budget-row">
           <span class="label">Total Cost (USD)</span>
-          <span class="value">$${editableCell(a.cost_usd, 'approved.cost_usd', 'money')}</span>
+          <span class="value">$<span style="font-weight:700;" id="bud-cost-usd-${phaseKey}">${fmtExact(a.cost_usd || 0)}</span>
+            <span class="muted-text" style="font-size:10px;"> (from Estimated Cost)</span>
+          </span>
         </div>
         <div class="budget-row">
           <span class="label">Total Cost (SAR)</span>
-          <span class="value">${editableCell(a.cost_sar, 'approved.cost_sar', 'money')}</span>
+          <span class="value" style="font-weight:700;" id="bud-cost-sar-${phaseKey}">${fmt.money(a.cost_sar || 0)}</span>
         </div>
         <div class="budget-row">
           <span class="label">Total Revenue (SAR)</span>
-          <span class="value">${editableCell(a.revenue_sar, 'approved.revenue_sar', 'money')}</span>
+          <span class="value">${editableCell(a.revenue_sar, 'approved.revenue_sar', 'money', `inp-rev-${phaseKey}`)}</span>
         </div>
         <div class="budget-row highlight">
           <span class="label">Profit (SAR)</span>
-          <span class="value">${editableCell(a.profit_sar, 'approved.profit_sar', 'money')}</span>
+          <span class="value" style="font-weight:700; color:var(--green);" id="bud-profit-sar-${phaseKey}">—</span>
         </div>
         <div class="budget-row highlight">
           <span class="label">Profit %</span>
-          <span class="value">${editableCell(a.profit_pct, 'approved.profit_pct', 'pct')} <span style="font-size:10px;color:var(--text-muted);">(decimal: 0.4 = 40%)</span></span>
+          <span class="value" style="font-weight:700; color:var(--green);" id="bud-profit-pct-${phaseKey}">—</span>
         </div>
       </div>
+
+      <!-- FINAL -->
       <div class="card budget-card budget-final">
         <h3 class="card-title">Final Budget <span class="badge badge-amber">After Changes</span></h3>
         <div class="budget-row">
           <span class="label">Total Cost (SAR)</span>
-          <span class="value">${editableCell(f.cost_sar, 'final.cost_sar', 'money')}</span>
+          <span class="value" style="font-weight:700;" id="fin-cost-sar-${phaseKey}">—</span>
         </div>
         <div class="budget-row">
           <span class="label">Total Revenue (SAR)</span>
-          <span class="value">${editableCell(f.revenue_sar, 'final.revenue_sar', 'money')}</span>
+          <span class="value" style="font-weight:700;" id="fin-rev-sar-${phaseKey}">—</span>
         </div>
         <div class="budget-row">
-          <span class="label">Δ Cost</span>
-          <span class="value">${editableCell(f.total_change_cost, 'final.total_change_cost', 'money')}</span>
+          <span class="label">Δ Cost (SAR)</span>
+          <span class="value" id="fin-delta-cost-${phaseKey}" style="color:var(--red);">—</span>
         </div>
         <div class="budget-row">
-          <span class="label">Δ Revenue</span>
-          <span class="value">${editableCell(f.total_change_revenue, 'final.total_change_revenue', 'money')}</span>
+          <span class="label">Δ Revenue (SAR)</span>
+          <span class="value" id="fin-delta-rev-${phaseKey}" style="color:var(--red);">—</span>
         </div>
         <div class="budget-row highlight">
           <span class="label">Profit (SAR)</span>
-          <span class="value">${editableCell(f.profit_sar, 'final.profit_sar', 'money')}</span>
+          <span class="value" style="font-weight:700; color:var(--green);" id="fin-profit-sar-${phaseKey}">—</span>
         </div>
         <div class="budget-row highlight">
           <span class="label">Profit %</span>
-          <span class="value">${editableCell(f.profit_pct, 'final.profit_pct', 'pct')} <span style="font-size:10px;color:var(--text-muted);">(decimal: 0.4 = 40%)</span></span>
+          <span class="value" style="font-weight:700; color:var(--green);" id="fin-profit-pct-${phaseKey}">—</span>
         </div>
       </div>
     </div>
+
+    <!-- APPROVED BUDGET CHANGES — editable rows -->
+    <div class="card" id="budget-changes-card-${phaseKey}">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <h3 class="card-title" style="margin:0;">Approved Budget Changes</h3>
+        <button class="btn-outline" style="font-size:11px;" onclick="budgetAddChange('${phaseKey}')">+ Add Row</button>
+      </div>
+      <table class="data-table" id="budget-changes-table-${phaseKey}">
+        <thead><tr>
+          <th>#</th>
+          <th>Reason</th>
+          <th>Plan / CR ID</th>
+          <th class="num">Δ Cost (SAR)</th>
+          <th class="num">Δ Revenue (SAR)</th>
+          <th></th>
+        </tr></thead>
+        <tbody id="budget-changes-body-${phaseKey}"></tbody>
+      </table>
+    </div>
   `;
 
-  // Changes log
-  if (data.changes && data.changes.length) {
-    html += `<div class="card"><h3 class="card-title">Approved Budget Changes</h3>
-      <table class="data-table"><thead><tr>
-        <th>Reason</th><th>Plan / CR ID</th>
-        <th class="num">Δ Cost (SAR)</th><th class="num">Δ Revenue (SAR)</th></tr></thead><tbody>`;
-    data.changes.forEach(c => {
-      const rev = c.changes_revenue || 0;
-      const cost = c.changes_cost || 0;
-      html += `<tr>
-        <td>${c.reason || '—'}</td>
-        <td>${c.plan_id || '—'}</td>
-        <td class="num">${cost ? fmt.money(cost) : '—'}</td>
-        <td class="num" style="color: ${rev < 0 ? 'var(--red)' : 'var(--green)'}">${rev ? (rev < 0 ? '(' + fmt.money(Math.abs(rev)) + ')' : fmt.money(rev)) : '—'}</td>
-      </tr>`;
-    });
-    html += '</tbody></table></div>';
-  }
   return html;
+}
+
+// ── Budget Changes state ──
+const _budgetChanges = {};  // { phaseKey: [{id, reason, plan_id, delta_cost, delta_rev}] }
+
+async function loadBudgetChanges(phaseKey) {
+  try {
+    const r = await fetch(`/api/budget-changes?phase=${phaseKey}`);
+    if (r.ok) {
+      const d = await r.json();
+      _budgetChanges[phaseKey] = d.changes || [];
+    }
+  } catch (e) {}
+  if (!_budgetChanges[phaseKey]) _budgetChanges[phaseKey] = [];
+  renderBudgetChanges(phaseKey);
+  budgetAutoCalc(phaseKey);
+}
+
+function renderBudgetChanges(phaseKey) {
+  const tbody = document.getElementById(`budget-changes-body-${phaseKey}`);
+  if (!tbody) return;
+  const changes = _budgetChanges[phaseKey] || [];
+  if (!changes.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="loading" style="font-size:12px;">No changes yet — click "+ Add Row"</td></tr>';
+    return;
+  }
+  tbody.innerHTML = changes.map((c, i) => `
+    <tr data-chg="${c.id}">
+      <td style="color:var(--text-muted);">${i+1}</td>
+      <td><input type="text" class="svc-input" style="width:100%;padding:4px 6px;font-size:12px;border:1px solid var(--border-strong);border-radius:4px;"
+        placeholder="Reason" value="${c.reason||''}"
+        oninput="_budgetChanges['${phaseKey}'][${i}].reason=this.value; budgetSaveChanges('${phaseKey}'); budgetAutoCalc('${phaseKey}')"></td>
+      <td><input type="text" class="svc-input" style="width:80px;padding:4px 6px;font-size:12px;border:1px solid var(--border-strong);border-radius:4px;"
+        placeholder="CR-001" value="${c.plan_id||''}"
+        oninput="_budgetChanges['${phaseKey}'][${i}].plan_id=this.value; budgetSaveChanges('${phaseKey}')"></td>
+      <td class="num"><input type="number" step="0.01" class="svc-input" style="width:110px;padding:4px 6px;font-size:12px;text-align:right;border:1px solid var(--border-strong);border-radius:4px;"
+        placeholder="0" value="${c.delta_cost||''}"
+        oninput="_budgetChanges['${phaseKey}'][${i}].delta_cost=parseFloat(this.value)||0; budgetSaveChanges('${phaseKey}'); budgetAutoCalc('${phaseKey}')"></td>
+      <td class="num"><input type="number" step="0.01" class="svc-input" style="width:110px;padding:4px 6px;font-size:12px;text-align:right;border:1px solid var(--border-strong);border-radius:4px;"
+        placeholder="0" value="${c.delta_rev||''}"
+        oninput="_budgetChanges['${phaseKey}'][${i}].delta_rev=parseFloat(this.value)||0; budgetSaveChanges('${phaseKey}'); budgetAutoCalc('${phaseKey}')"></td>
+      <td><button style="background:none;border:none;cursor:pointer;color:var(--text-muted);" onclick="budgetDeleteChange('${phaseKey}',${i})">✕</button></td>
+    </tr>
+  `).join('');
+}
+
+async function budgetSaveChanges(phaseKey) {
+  try {
+    await fetch('/api/budget-changes', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ phase: phaseKey, changes: _budgetChanges[phaseKey] || [] })
+    });
+  } catch(e) {}
+}
+
+function budgetAddChange(phaseKey) {
+  if (!_budgetChanges[phaseKey]) _budgetChanges[phaseKey] = [];
+  _budgetChanges[phaseKey].push({ id: Date.now(), reason:'', plan_id:'', delta_cost:0, delta_rev:0 });
+  budgetSaveChanges(phaseKey);
+  renderBudgetChanges(phaseKey);
+  budgetAutoCalc(phaseKey);
+}
+
+function budgetDeleteChange(phaseKey, idx) {
+  if (!_budgetChanges[phaseKey]) return;
+  _budgetChanges[phaseKey].splice(idx, 1);
+  budgetSaveChanges(phaseKey);
+  renderBudgetChanges(phaseKey);
+  budgetAutoCalc(phaseKey);
+}
+
+function budgetAutoCalc(phaseKey) {
+  // Pull values from Estimated Cost globals
+  const estTotalMDs   = typeof totalMDs !== 'undefined' ? totalMDs : 0;
+  const estTotalUSD   = typeof totalUSD !== 'undefined' ? totalUSD : 0;
+  const estTotalSAR   = estTotalUSD * 3.75;
+
+  // Use live estimated values if available
+  let mds = 0, costUSD = 0, costSAR = 0;
+  if (_estPhase === phaseKey && _estRows && _estRows.length) {
+    _estRows.forEach(r => {
+      const hr = parseFloat(r.hourRate)||0, at = parseFloat(r.actualTime)||0, em = parseFloat(r.estMonths)||0;
+      mds    += at * em / 8;
+      costUSD += hr * at * em;
+    });
+    costSAR = costUSD * 3.75;
+  }
+
+  // Update approved section live fields
+  const setEl = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  setEl(`bud-mds-${phaseKey}`, mds > 0 ? fmt.num(Math.round(mds)) : '—');
+  setEl(`bud-cost-usd-${phaseKey}`, costUSD > 0 ? fmtExact(costUSD) : '—');
+  setEl(`bud-cost-sar-${phaseKey}`, costSAR > 0 ? fmt.money(Math.round(costSAR)) : '—');
+
+  // Revenue from input
+  const revEl = document.getElementById(`inp-rev-${phaseKey}`);
+  const revSAR = revEl ? (parseFloat(revEl.value)||0) : 0;
+
+  // Approved profit
+  const profitSAR = revSAR - costSAR;
+  const profitPct = revSAR > 0 ? profitSAR / revSAR * 100 : 0;
+  setEl(`bud-profit-sar-${phaseKey}`, revSAR > 0 ? fmt.money(Math.round(profitSAR)) + ' SAR' : '—');
+  setEl(`bud-profit-pct-${phaseKey}`, revSAR > 0 ? fmt.decimal(profitPct) + '%' : '—');
+
+  // Changes totals
+  const changes = _budgetChanges[phaseKey] || [];
+  const deltaCost = changes.reduce((s,c) => s + (parseFloat(c.delta_cost)||0), 0);
+  const deltaRev  = changes.reduce((s,c) => s + (parseFloat(c.delta_rev)||0), 0);
+
+  // Final budget
+  const finCostSAR = costSAR + deltaCost;
+  const finRevSAR  = revSAR + deltaRev;
+  const finProfit  = finRevSAR - finCostSAR;
+  const finPct     = finRevSAR > 0 ? finProfit / finRevSAR * 100 : 0;
+
+  setEl(`fin-cost-sar-${phaseKey}`, fmt.money(Math.round(finCostSAR)) + ' SAR');
+  setEl(`fin-rev-sar-${phaseKey}`,  fmt.money(Math.round(finRevSAR))  + ' SAR');
+  setEl(`fin-delta-cost-${phaseKey}`, deltaCost ? fmt.money(Math.abs(deltaCost)) + ' SAR' : '—');
+  setEl(`fin-delta-rev-${phaseKey}`,  deltaRev  ? '(' + fmt.money(Math.abs(deltaRev)) + ')' : '—');
+  setEl(`fin-profit-sar-${phaseKey}`, revSAR > 0 ? fmt.money(Math.round(finProfit)) + ' SAR' : '—');
+  setEl(`fin-profit-pct-${phaseKey}`, finRevSAR > 0 ? fmt.decimal(finPct) + '%' : '—');
+
+  // KPI strip
+  setEl(`kpi-mds-${phaseKey}`, mds > 0 ? fmt.num(Math.round(mds)) : '—');
+  setEl(`kpi-cost-${phaseKey}`, costSAR > 0 ? fmt.money(Math.round(costSAR)) : '—');
+  const profitColor = profitPct >= 40 ? 'var(--green)' : profitPct >= 20 ? 'var(--amber)' : 'var(--red)';
+  setEl(`kpi-profit-pct-${phaseKey}`, revSAR > 0 ? fmt.decimal(profitPct)+'%' : '—');
+  setEl(`kpi-profit-sar-${phaseKey}`, revSAR > 0 ? fmt.money(Math.round(profitSAR)) + ' SAR' : '—');
+  setEl(`kpi-final-pct-${phaseKey}`, finRevSAR > 0 ? fmt.decimal(finPct)+'%' : '—');
+  setEl(`kpi-final-sar-${phaseKey}`, finRevSAR > 0 ? fmt.money(Math.round(finProfit)) + ' SAR' : '—');
 }
 
 // Wire up auto-save for budget inputs
