@@ -578,25 +578,43 @@ async function profBuildTable(phaseKey) {
   const wrap = document.getElementById(`prof-table-wrap-${phaseKey}`);
   if (!wrap) return;
 
-  // Get months from effort data (AppState._effortMonths set by loadEffortLive)
   let months = (AppState._effortMonths && AppState._effortMonths[phaseKey]) || [];
 
-  // If no data yet, retry up to 5 times with 1s delay
+  // If no effort data, fetch it silently from API
   if (!months.length) {
-    wrap.innerHTML = '<div class="loading">Waiting for Current Effort data…</div>';
-    let retries = 0;
-    const retry = setInterval(() => {
-      retries++;
-      months = (AppState._effortMonths && AppState._effortMonths[phaseKey]) || [];
-      if (months.length || retries >= 10) {
-        clearInterval(retry);
-        if (months.length) {
-          _doBuildProfTable(phaseKey, wrap, months);
-        } else {
-          wrap.innerHTML = '<div class="loading" style="color:var(--text-muted);">No effort data — click ↻ Recalculate after Current Effort loads</div>';
-        }
+    wrap.innerHTML = '<div class="loading">Loading effort data…</div>';
+    try {
+      const res = await fetch(`/api/effort/${phaseKey}/all-months`);
+      const d = await res.json();
+      if (d.months && d.months.length) {
+        // Store months in AppState
+        if (!AppState._effortMonths)     AppState._effortMonths     = {};
+        if (!AppState._effortMonthMDs)   AppState._effortMonthMDs   = {};
+        if (!AppState._effortMonthCosts) AppState._effortMonthCosts = {};
+        AppState._effortMonths[phaseKey] = d.months;
+
+        // Build MDs and costs per month
+        const monthMDTotals   = {};
+        const monthCostTotals = {};
+        d.months.forEach(m => { monthMDTotals[m.key] = 0; monthCostTotals[m.key] = 0; });
+        (d.employees || []).forEach(emp => {
+          d.months.forEach(m => {
+            const cell = emp.months?.[m.key] || { regular: 0, ramadan: 0, overtime: 0 };
+            monthMDTotals[m.key]   += (cell.regular + cell.overtime) / 8 + cell.ramadan / 6;
+            const hr  = emp.hour_rate || 0;
+            const otr = emp.overtime_rate || hr * 1.5;
+            monthCostTotals[m.key] += (cell.regular + cell.ramadan) * hr + cell.overtime * otr;
+          });
+        });
+        AppState._effortMonthMDs[phaseKey]   = monthMDTotals;
+        AppState._effortMonthCosts[phaseKey] = monthCostTotals;
+        months = d.months;
       }
-    }, 800);
+    } catch(e) {}
+  }
+
+  if (!months.length) {
+    wrap.innerHTML = '<div class="loading" style="color:var(--text-muted);">No effort data found for this phase</div>';
     return;
   }
 
