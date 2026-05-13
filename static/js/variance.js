@@ -860,7 +860,12 @@ async function profRecomputeAll(phaseKey) {
 
   const costPerMD = totalEstMDs > 0 ? totalEstCostSAR / totalEstMDs : 0;
   const finProfitPct = AppState._finalProfitPct?.[phaseKey] || 0;
-  const plannedProfitSAR = finProfitPct * totalRevSAR;
+  const plannedProfitSAR = finProfitPct * totalRevSAR || (totalRevSAR - totalEstCostSAR);
+
+  // Resolve effort data after possible API fetch above
+  const effortMDsFinal   = AppState._effortMonthMDs?.[phaseKey]   || {};
+  const effortCostsFinal = AppState._effortMonthCosts?.[phaseKey] || {};
+  const monthsFinal      = AppState._effortMonths?.[phaseKey]     || [];
 
   const table = document.getElementById(`profit-table-${phaseKey}`);
   if (!table) return;
@@ -869,7 +874,7 @@ async function profRecomputeAll(phaseKey) {
 
   rows.forEach((tr, idx) => {
     const monthKey = tr.dataset.monthKey;
-    const thisMonthMDs = (effortMDs||{})[monthKey] || 0;
+    const thisMonthMDs = effortMDsFinal[monthKey] || 0;
     accActualMDs += thisMonthMDs;
     const actualMDs = accActualMDs;
 
@@ -878,11 +883,10 @@ async function profRecomputeAll(phaseKey) {
     const completionPct = parseFloat(compInp?.value) || 0;
     const remainingMDs  = parseFloat(remInp?.value)  || 0;
 
-    // Current Cost = cumulative cost from effort (real rates per person)
-    const effortCosts = (AppState._effortMonthCosts && AppState._effortMonthCosts[phaseKey]) || {};
+    // Current Cost = cumulative cost from effort
     let accCostUSD = 0;
-    months.forEach(m2 => {
-      if (m2.key <= monthKey) accCostUSD += effortCosts[m2.key] || 0;
+    monthsFinal.forEach(m2 => {
+      if (m2.key <= monthKey) accCostUSD += effortCostsFinal[m2.key] || 0;
     });
     const currentCostSAR = accCostUSD * 3.75;
     // ── All equations per reference sheet ──
@@ -898,8 +902,7 @@ async function profRecomputeAll(phaseKey) {
     const profitAtComp      = totalRevSAR - estAtCompletion;
     const profitAtCompPct   = totalRevSAR > 0 ? profitAtComp / totalRevSAR * 100 : 0;
     // Planned profit from Final Budget profit %
-    const plannedProfitFinal= (AppState._finalProfitPct && AppState._finalProfitPct[phaseKey])
-                              ? AppState._finalProfitPct[phaseKey] * totalRevSAR : plannedProfit;
+    const plannedProfitFinal = plannedProfitSAR;
     const profVar           = profitAtComp - plannedProfitFinal;
     const profVarPct        = totalRevSAR > 0 ? profVar / totalRevSAR * 100 : 0;
     const progressPct       = estAtCompletion > 0 ? currentCostSAR / estAtCompletion * 100 : 0;
