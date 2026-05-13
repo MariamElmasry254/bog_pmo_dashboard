@@ -673,7 +673,7 @@ async function _doBuildProfTable(phaseKey, wrap, months) {
 
   const tableHtml = `
     <div class="table-scroll">
-    <table class="data-table" id="profit-table-${phaseKey}" style="font-size:12px;">
+    <table class="data-table" id="profit-table-${phaseKey}" style="font-size:11px; white-space:nowrap;">
       <thead>
         <tr>
           <th rowspan="2" style="position:sticky;left:0;z-index:3;background:var(--navy);color:white;min-width:70px;">Month</th>
@@ -682,7 +682,7 @@ async function _doBuildProfTable(phaseKey, wrap, months) {
           <th colspan="2" style="text-align:center;background:#1B2A4E;color:#93C5FD;border-left:3px solid #60A5FA;">% Completion & Remaining</th>
           <th colspan="8" style="text-align:center;background:#1B2A4E;color:#6EE7B7;border-left:3px solid #10B981;">Cost Variance</th>
           <th colspan="6" style="text-align:center;background:#1B2A4E;color:#FCA5A5;border-left:3px solid #EF4444;">Profitability</th>
-          <th colspan="3" style="text-align:center;background:#1B2A4E;color:#C4B5FD;border-left:3px solid #8B5CF6;">Virtual Invoice</th>
+          <th colspan="6" style="text-align:center;background:#1B2A4E;color:#C4B5FD;border-left:3px solid #8B5CF6;">Progress &amp; Virtual Invoice</th>
         </tr>
         <tr style="font-size:10px;background:#f8fafc;">
           <th class="num" style="border-left:3px solid #3B82F6;">Revenue SAR</th>
@@ -706,8 +706,11 @@ async function _doBuildProfTable(phaseKey, wrap, months) {
           <th class="num">Prof. Var SAR</th>
           <th class="num">Prof. Var %</th>
           <th class="num" style="border-left:3px solid #8B5CF6;">Revenue to Date</th>
-          <th class="num">This Month VI SAR</th>
+          <th class="num">Progress %</th>
+          <th class="num">Total Recog. Revenue</th>
+          <th class="num">Production</th>
           <th class="num">Acc. VI SAR</th>
+          <th class="num">This Month VI SAR</th>
         </tr>
       </thead>
       <tbody>
@@ -753,8 +756,11 @@ async function _doBuildProfTable(phaseKey, wrap, months) {
             <td class="num"><span class="pc-prof-var-${monthKey}">—</span></td>
             <td class="num"><span class="pc-prof-var-pct-${monthKey}">—</span></td>
             <td class="num" style="border-left:3px solid #8B5CF6;"><span class="pc-rev-todate-${monthKey}">—</span></td>
-            <td class="num"><span class="pc-vi-month-${monthKey}">—</span></td>
+            <td class="num"><span class="pc-progress-${monthKey}">—</span></td>
+            <td class="num"><span class="pc-recog-rev-${monthKey}">—</span></td>
+            <td class="num"><span class="pc-production-${monthKey}">—</span></td>
             <td class="num"><span class="pc-vi-acc-${monthKey}">—</span></td>
+            <td class="num"><span class="pc-vi-month-${monthKey}">—</span></td>
           </tr>`;
         }).join('')}
       </tbody>
@@ -849,9 +855,6 @@ async function profRecomputeAll(phaseKey) {
   let latestData = {};
 
   rows.forEach((tr, idx) => {
-    const monthKey = tr.dataset.monthKey;
-
-    const effortMDs = (AppState._effortMonthMDs && AppState._effortMonthMDs[phaseKey]) || {};
     const thisMonthMDs = effortMDs[monthKey] || 0;
     accActualMDs += thisMonthMDs;
     const actualMDs = accActualMDs;
@@ -911,7 +914,7 @@ async function profRecomputeAll(phaseKey) {
     setSpan(`pc-currcost-${monthKey}`,      currentCostSAR > 0 ? fSAR(currentCostSAR) : '—');
     setSpan(`pc-eac-${monthKey}`,           `<b style="color:var(--blue);">${fNum(eacMDs)}</b>`);
     const ovColor = expectedOverrun > 0 ? 'var(--red)' : 'var(--green)';
-    setSpan(`pc-overrun-${monthKey}`, expectedOverrun !== 0 ? `<span style="color:${ovColor};">${fmt.decimal(expectedOverrun*100)}%</span>` : '—');
+    setSpan(`pc-overrun-${monthKey}`, actualMDs > 0 && completionPct > 0 ? `<span style="color:${ovColor};">${fmt.decimal(expectedOverrun*100)}%</span>` : '—');
     setSpan(`pc-costtocomplete-${monthKey}`, estCostToComplete > 0 ? fSAR(estCostToComplete) : '—');
     setSpan(`pc-eac-cost-${monthKey}`,       estAtCompletion > 0 ? fSAR(estAtCompletion) : '—');
 
@@ -931,9 +934,34 @@ async function profRecomputeAll(phaseKey) {
     setSpan(`pc-prof-var-${monthKey}`,      `<span style="color:${pvColor};">${fSAR(profVar)}</span>`);
     setSpan(`pc-prof-var-pct-${monthKey}`,  `<span style="color:${pvColor};">${fmt.decimal(profVarPct)}%</span>`);
 
-    setSpan(`pc-rev-todate-${monthKey}`,    revToDate > 0 ? fSAR(revToDate) : '—');
-    setSpan(`pc-vi-month-${monthKey}`,      revToDate > 0 ? fSAR(revToDate) : '—');
-    setSpan(`pc-vi-acc-${monthKey}`,        revToDate > 0 ? fSAR(revToDate) : '—');
+    const recognizedRev  = totalRevSAR * (completionPct / 100);  // = Revenue to Date
+    const progressPct2   = estAtCompletion > 0 ? currentCostSAR / estAtCompletion * 100 : 0;
+
+    // Virtual Invoice — needs previous month values
+    const prevMonthKey = months[idx - 1]?.key;
+    const prevRecogRev = prevMonthKey ? (AppState._profRecogRev?.[phaseKey]?.[prevMonthKey] || 0) : 0;
+    const prevAccVI    = prevMonthKey ? (AppState._profAccVI?.[phaseKey]?.[prevMonthKey] || 0) : 0;
+    const totalIssuedInvoices = 0; // TODO: from Odoo
+
+    const production   = recognizedRev - prevRecogRev;
+    const accVI        = recognizedRev - totalIssuedInvoices;
+    const thisMonthVI  = accVI - prevAccVI;
+    const viPlusIssued = accVI + totalIssuedInvoices;
+
+    // Save for next month's calculation
+    if (!AppState._profRecogRev) AppState._profRecogRev = {};
+    if (!AppState._profRecogRev[phaseKey]) AppState._profRecogRev[phaseKey] = {};
+    if (!AppState._profAccVI) AppState._profAccVI = {};
+    if (!AppState._profAccVI[phaseKey]) AppState._profAccVI[phaseKey] = {};
+    AppState._profRecogRev[phaseKey][monthKey] = recognizedRev;
+    AppState._profAccVI[phaseKey][monthKey]    = accVI;
+
+    setSpan(`pc-rev-todate-${monthKey}`,   recognizedRev > 0 ? fSAR(recognizedRev) : '—');
+    setSpan(`pc-progress-${monthKey}`,     progressPct2 > 0 ? `${fmt.decimal(progressPct2)}%` : '—');
+    setSpan(`pc-recog-rev-${monthKey}`,    recognizedRev > 0 ? fSAR(recognizedRev) : '—');
+    setSpan(`pc-production-${monthKey}`,   production !== 0 ? fSAR(production) : '—');
+    setSpan(`pc-vi-acc-${monthKey}`,       accVI !== 0 ? fSAR(accVI) : '—');
+    setSpan(`pc-vi-month-${monthKey}`,     thisMonthVI !== 0 ? fSAR(thisMonthVI) : '—');
 
     latestData = { completionPct, remainingMDs, eacMDs, cpi, profitAtComp, totalRevSAR };
     prevViAcc = viAcc;
