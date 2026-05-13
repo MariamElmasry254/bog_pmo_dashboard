@@ -71,6 +71,18 @@ try:
 except Exception as _e:
     logger.warning(f"Position seeding had issues (continuing): {_e}")
 
+# Always update positions with latest rates from catalog (handles rate changes)
+try:
+    from positions_catalog import POSITIONS_SEED, TUNIS_RATES_SEED
+    for _p in POSITIONS_SEED:
+        upsert_position(db, _p['position'], _p['hour_rate'], _p.get('md_rate'),
+                        _p.get('country'), _p.get('is_onsite', False))
+    for _t in TUNIS_RATES_SEED:
+        upsert_tunis_rate(db, _t['name'], _t['hour_rate'])
+    logger.info(f"Refreshed {len(POSITIONS_SEED)} positions + {len(TUNIS_RATES_SEED)} Tunis rates from catalog")
+except Exception as _e:
+    logger.warning(f"Position refresh had issues (continuing): {_e}")
+
 app = Flask(
     __name__,
     template_folder=os.path.join(BASE_DIR, 'templates'),
