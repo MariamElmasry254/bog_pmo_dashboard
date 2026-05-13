@@ -3298,7 +3298,35 @@ def api_positions():
     })
 
 
-@app.route('/api/positions', methods=['POST'])
+@app.route('/api/positions/reseed', methods=['POST'])
+def api_positions_reseed():
+    """Force re-seed positions catalog with updated rates (overwrites existing)."""
+    from positions_catalog import POSITIONS_SEED, TUNIS_RATES_SEED
+    count = 0
+    for p in POSITIONS_SEED:
+        upsert_position(
+            db,
+            position_name=p['position'],
+            hour_rate=p['hour_rate'],
+            md_rate=p.get('md_rate'),
+            country=p.get('country'),
+            is_onsite=p.get('is_onsite', False),
+        )
+        count += 1
+    for t in TUNIS_RATES_SEED:
+        upsert_tunis_rate(db, t['name'], t['hour_rate'])
+        count += 1
+    return jsonify({'ok': True, 'updated': count})
+
+
+@app.route('/api/positions/reseed', methods=['GET'])
+def api_positions_reseed_check():
+    """Preview current positions from DB."""
+    positions = get_all_positions(db)
+    return jsonify({'positions': positions, 'count': len(positions)})
+
+
+
 def api_positions_save():
     """Add or update a position. Body: { position, hour_rate, md_rate, country, is_onsite }"""
     body = request.json or {}
