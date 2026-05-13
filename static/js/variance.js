@@ -450,141 +450,273 @@ function wireBudgetInputs(container) {
 }
 
 function renderProfitability(data, phaseKey) {
-  if (!data.months || !data.months.length) {
-    return '<div class="loading">No profitability data</div>';
-  }
-
-  // Pre-fetch overrides
+  // Pre-fetch overrides + estimated rows
   fetch('/api/plan-overrides').then(r => r.json()).then(o => {
     AppState.planOverrides = o.plan_overrides || {};
-    setTimeout(() => applyPlanOverrides(phaseKey), 100);
+    setTimeout(() => {
+      applyPlanOverrides(phaseKey);
+      profRecomputeAll(phaseKey);
+    }, 100);
   });
 
-  // Latest month KPIs (using current sheet values for now)
-  const latest = data.months[data.months.length - 1];
-  let kpiHtml = '';
-  if (latest) {
-    const completion = (parseFloat(latest['% Completion from plan']) || 0) * 100;
-    const variance = parseFloat(latest['Variance']) || 0;
-    const remainingMD = parseFloat(latest['Estimated Remaining (MD)']) || 0;
-    kpiHtml = `
-      <div class="kpi-strip kpi-strip-small">
-        <div class="kpi-card kpi-blue compact">
-          <div class="kpi-label">% COMPLETION</div>
-          <div class="kpi-value">${fmt.decimal(completion)}<span class="kpi-unit">%</span></div>
-          <div class="kpi-foot">from plan (latest month)</div>
-        </div>
-        <div class="kpi-card kpi-amber compact">
-          <div class="kpi-label">REMAINING MDs</div>
-          <div class="kpi-value">${fmt.num(remainingMD)}</div>
-        </div>
-        <div class="kpi-card ${variance < 0 ? 'kpi-red' : 'kpi-green'} compact">
-          <div class="kpi-label">COST VARIANCE</div>
-          <div class="kpi-value">${fmt.money(Math.abs(variance))}</div>
-          <div class="kpi-foot" style="color: ${variance < 0 ? 'var(--red)' : 'var(--green)'};">${variance < 0 ? 'Over budget' : 'Under budget'}</div>
-        </div>
-        <div class="kpi-card kpi-navy compact">
-          <div class="kpi-label">CPI</div>
-          <div class="kpi-value">${fmt.decimal(parseFloat(latest['CPI']) || 0)}</div>
-          <div class="kpi-foot">cost performance</div>
-        </div>
+  // Build month rows from saved overrides or sheet data
+  const months = data.months || [];
+
+  const html = `
+    <div class="kpi-strip kpi-strip-small" id="prof-kpi-${phaseKey}">
+      <div class="kpi-card kpi-blue compact">
+        <div class="kpi-label">% COMPLETION</div>
+        <div class="kpi-value" id="prof-kpi-completion-${phaseKey}">—</div>
+        <div class="kpi-foot">latest month</div>
       </div>
-    `;
-  }
+      <div class="kpi-card kpi-amber compact">
+        <div class="kpi-label">REMAINING MDs</div>
+        <div class="kpi-value" id="prof-kpi-remaining-${phaseKey}">—</div>
+      </div>
+      <div class="kpi-card kpi-navy compact">
+        <div class="kpi-label">EAC MDs</div>
+        <div class="kpi-value" id="prof-kpi-eac-${phaseKey}">—</div>
+      </div>
+      <div class="kpi-card kpi-green compact">
+        <div class="kpi-label">CPI</div>
+        <div class="kpi-value" id="prof-kpi-cpi-${phaseKey}">—</div>
+        <div class="kpi-foot">cost performance index</div>
+      </div>
+      <div class="kpi-card kpi-blue compact">
+        <div class="kpi-label">PROFIT AT COMPLETION</div>
+        <div class="kpi-value" id="prof-kpi-profit-${phaseKey}">—</div>
+      </div>
+    </div>
 
-  // Editable: % Completion and Remaining MDs
-  const cols = [
-    { k: 'Month', label: 'Month', type: 'date' },
-    { k: 'Estimated Effort MDs', label: 'Estimated MDs', type: 'num' },
-    { k: 'This month MDs', label: 'This Month', type: 'num' },
-    { k: 'Actual Effort to Date (MD)', label: 'Actual MDs', type: 'num' },
-    { k: '% Completion', label: '% Completion (editable)', type: 'editable-pct' },
-    { k: 'Remaining', label: 'Remaining MDs (editable)', type: 'editable-num' },
-    { k: 'Plan MDs', label: 'Plan MDs (auto)', type: 'computed-plan' },
-    { k: 'EAC MDs', label: 'EAC MDs', type: 'num' },
-    { k: 'Variance', label: 'Variance', type: 'money' },
-    { k: 'CPI', label: 'CPI', type: 'num' },
-    { k: 'Profit at Completion', label: 'Profit @ Comp', type: 'money' },
-    { k: 'Profit at Completion (%)', label: 'Profit %', type: 'pct' },
-  ];
-
-  let html = kpiHtml + `<div class="card">
-    <h3 class="card-title">Monthly Variance
-      <span class="muted-text">— % Completion & Remaining editable; Plan auto-calculated · auto-saved on change</span>
-    </h3>
-    <div class="table-scroll"><table class="data-table" id="profit-table-${phaseKey}">
-    <thead><tr>`;
-  cols.forEach(c => html += `<th class="${c.type !== 'date' ? 'num' : ''}">${c.label}</th>`);
-  html += '</tr></thead><tbody>';
-
-  data.months.forEach((m, idx) => {
-    const monthDate = String(m['Month'] || '').slice(0, 10);
-    const monthKey = monthDate.slice(0, 7);
-    const actual = parseFloat(m['Actual Effort to Date (MD)']) || 0;
-    // Default % Completion from sheet
-    const sheetCompletionPct = (parseFloat(m['% Completion from plan']) || 0) * 100;
-    const sheetRemaining = parseFloat(m['Estimated Remaining (MD)']) || 0;
-
-    html += `<tr data-month-key="${monthKey}" data-actual="${actual}">`;
-    cols.forEach(c => {
-      let cell = '—';
-      if (c.type === 'date') {
-        cell = monthDate;
-      } else if (c.type === 'editable-pct') {
-        cell = `<input type="number" step="0.01" min="0" max="200" class="completion-input" data-phase="${phaseKey}" data-month="${monthKey}" data-field="completion" value="${sheetCompletionPct.toFixed(2)}" style="width: 80px; padding: 4px 8px; font-family: var(--mono); font-size: 12px; text-align: right; border: 1px solid var(--border-strong); border-radius: 4px;"><span style="font-size: 11px; color: var(--text-muted);">%</span>`;
-      } else if (c.type === 'editable-num') {
-        cell = `<input type="number" step="0.01" min="0" class="remaining-input" data-phase="${phaseKey}" data-month="${monthKey}" data-field="remaining" value="${sheetRemaining.toFixed(2)}" style="width: 95px; padding: 4px 8px; font-family: var(--mono); font-size: 12px; text-align: right; border: 1px solid var(--border-strong); border-radius: 4px;">`;
-      } else if (c.type === 'computed-plan') {
-        cell = `<span class="computed-plan-${monthKey}">—</span>`;
-      } else {
-        let v = m[c.k];
-        if (v != null && v !== '') {
-          if (c.type === 'pct') cell = fmt.decimal((parseFloat(v) || 0) * 100) + '%';
-          else if (c.type === 'money') cell = fmt.money(v);
-          else cell = fmt.decimal(v);
-        }
-      }
-      const align = c.type !== 'date' ? 'num' : '';
-      html += `<td class="${align}">${cell}</td>`;
-    });
-    html += '</tr>';
-  });
-  html += '</tbody></table></div></div>';
+    <div class="card" style="margin-top:12px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <div>
+          <h3 class="card-title" style="margin:0;">Monthly Profitability Variance</h3>
+          <span class="muted-text" style="font-size:11px;">% Completion & Remaining MDs are editable · all other columns auto-calculated · auto-saved</span>
+        </div>
+        <button class="btn-outline" style="font-size:11px;" onclick="profRecomputeAll('${phaseKey}')">↻ Recalculate</button>
+      </div>
+      <div class="table-scroll">
+      <table class="data-table" id="profit-table-${phaseKey}" style="font-size:12px;">
+        <thead>
+          <tr style="background:var(--navy); color:white;">
+            <th rowspan="2" style="position:sticky;left:0;background:var(--navy);z-index:3;">Month</th>
+            <th colspan="3" style="text-align:center; border-left:2px solid rgba(255,255,255,0.2);">Presales Budget</th>
+            <th colspan="4" style="text-align:center; border-left:2px solid rgba(255,255,255,0.2);">Current Month</th>
+            <th colspan="4" style="text-align:center; border-left:2px solid rgba(255,255,255,0.2);">Cost Variance</th>
+            <th colspan="4" style="text-align:center; border-left:2px solid rgba(255,255,255,0.2);">Profitability</th>
+            <th colspan="3" style="text-align:center; border-left:2px solid rgba(255,255,255,0.2);">Virtual Invoice</th>
+          </tr>
+          <tr style="background:#1e3a5f; color:white; font-size:10px;">
+            <th class="num" style="border-left:2px solid rgba(255,255,255,0.2);">Revenue SAR</th>
+            <th class="num">Est. Cost SAR</th>
+            <th class="num">Est. MDs</th>
+            <th class="num" style="border-left:2px solid rgba(255,255,255,0.2);">This Month MDs</th>
+            <th class="num">Actual MDs</th>
+            <th class="num" style="background:#1a4a7a;">% Completion<br><small style="font-weight:400;">(editable)</small></th>
+            <th class="num" style="background:#1a4a7a;">Remaining MDs<br><small style="font-weight:400;">(editable)</small></th>
+            <th class="num" style="border-left:2px solid rgba(255,255,255,0.2);">Current Cost SAR</th>
+            <th class="num">EAC MDs</th>
+            <th class="num">Est. Cost to Complete SAR</th>
+            <th class="num">Est. at Completion SAR</th>
+            <th class="num">CPI</th>
+            <th class="num" style="border-left:2px solid rgba(255,255,255,0.2);">Profit at Comp SAR</th>
+            <th class="num">Planned Profit SAR</th>
+            <th class="num">Profit at Comp %</th>
+            <th class="num">Profitability Var SAR</th>
+            <th class="num" style="border-left:2px solid rgba(255,255,255,0.2);">Revenue to Date SAR</th>
+            <th class="num">This Month VI SAR</th>
+            <th class="num">Acc. VI SAR</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${months.map((m, idx) => {
+            const monthDate = String(m['Month'] || '').slice(0, 10);
+            const monthKey  = monthDate.slice(0, 7);
+            const sheetPct  = (parseFloat(m['% Completion from plan']) || 0) * 100;
+            const sheetRem  = parseFloat(m['Estimated Remaining (MD)']) || 0;
+            return `
+            <tr data-month-key="${monthKey}" data-idx="${idx}">
+              <td style="position:sticky;left:0;background:white;z-index:2;font-family:var(--mono);font-size:11px;">${monthDate.slice(0,7)}</td>
+              <!-- Presales Budget — read from budget section -->
+              <td class="num prof-rev-${phaseKey}" style="border-left:2px solid var(--border-strong);">—</td>
+              <td class="num prof-estcost-${phaseKey}">—</td>
+              <td class="num prof-estmds-${phaseKey}">—</td>
+              <!-- Current Month -->
+              <td class="num prof-thismonth-${phaseKey}" style="border-left:2px solid var(--border-strong);">—</td>
+              <td class="num prof-actual-${phaseKey}">—</td>
+              <td class="num" style="background:#f0f7ff;">
+                <input type="number" step="0.01" min="0" max="200"
+                  class="completion-input" data-phase="${phaseKey}" data-month="${monthKey}" data-field="completion"
+                  value="${sheetPct.toFixed(2)}"
+                  style="width:70px;padding:3px 6px;font-size:12px;text-align:right;border:1px solid var(--border-strong);border-radius:4px;font-family:var(--mono);"
+                  oninput="profRecomputeAll('${phaseKey}')" onblur="saveOverride(this)">
+                <span style="font-size:10px;color:var(--text-muted);">%</span>
+              </td>
+              <td class="num" style="background:#f0f7ff;">
+                <input type="number" step="0.01" min="0"
+                  class="remaining-input" data-phase="${phaseKey}" data-month="${monthKey}" data-field="remaining"
+                  value="${sheetRem.toFixed(2)}"
+                  style="width:80px;padding:3px 6px;font-size:12px;text-align:right;border:1px solid var(--border-strong);border-radius:4px;font-family:var(--mono);"
+                  oninput="profRecomputeAll('${phaseKey}')" onblur="saveOverride(this)">
+              </td>
+              <!-- Cost Variance (all computed) -->
+              <td class="num" style="border-left:2px solid var(--border-strong);"><span class="pc-currcost-${monthKey}">—</span></td>
+              <td class="num"><span class="pc-eac-${monthKey}"><b style="color:var(--blue);">—</b></span></td>
+              <td class="num"><span class="pc-costtocomplete-${monthKey}">—</span></td>
+              <td class="num"><span class="pc-eac-cost-${monthKey}">—</span></td>
+              <td class="num"><span class="pc-cpi-${monthKey}">—</span></td>
+              <!-- Profitability -->
+              <td class="num" style="border-left:2px solid var(--border-strong);"><span class="pc-profit-comp-${monthKey}">—</span></td>
+              <td class="num"><span class="pc-planned-profit-${monthKey}">—</span></td>
+              <td class="num"><span class="pc-profit-pct-${monthKey}">—</span></td>
+              <td class="num"><span class="pc-prof-var-${monthKey}">—</span></td>
+              <!-- Virtual Invoice -->
+              <td class="num" style="border-left:2px solid var(--border-strong);"><span class="pc-rev-todate-${monthKey}">—</span></td>
+              <td class="num"><span class="pc-vi-month-${monthKey}">—</span></td>
+              <td class="num"><span class="pc-vi-acc-${monthKey}">—</span></td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+      </div>
+    </div>
+  `;
 
   setTimeout(() => {
-    const table = document.getElementById(`profit-table-${phaseKey}`);
-    if (!table) return;
-    // Initial render of computed Plan
-    table.querySelectorAll('tr[data-month-key]').forEach(tr => recomputePlanRow(tr));
-    // Wire inputs
-    table.querySelectorAll('.completion-input, .remaining-input').forEach(inp => {
-      inp.addEventListener('input', () => recomputePlanRow(inp.closest('tr')));
-      inp.addEventListener('change', () => saveOverride(inp));
-      // Auto-save on blur as well (debounced)
+    applyPlanOverrides(phaseKey);
+    profRecomputeAll(phaseKey);
+    // Wire save on blur
+    document.querySelectorAll(`#profit-table-${phaseKey} .completion-input, #profit-table-${phaseKey} .remaining-input`).forEach(inp => {
       inp.addEventListener('blur', () => saveOverride(inp));
     });
-  }, 50);
+  }, 150);
 
   return html;
 }
 
-function recomputePlanRow(tr) {
-  if (!tr) return;
-  const actual = parseFloat(tr.dataset.actual) || 0;
-  const compInp = tr.querySelector('.completion-input');
-  const remInp = tr.querySelector('.remaining-input');
-  const completionPct = parseFloat(compInp?.value) || 0;
-  const remaining = parseFloat(remInp?.value) || 0;
-  // Plan = Actual + Remaining (this is what the % Completion implies)
-  // Or: Plan = Actual / (completion / 100)
-  // We use Actual + Remaining since both are editable (more direct)
-  const plan = actual + remaining;
-  const planEl = tr.querySelector('span[class*="computed-plan"]');
-  if (planEl) {
-    planEl.textContent = fmt.decimal(plan);
-    planEl.style.fontWeight = '600';
-    planEl.style.color = 'var(--blue)';
+async function profRecomputeAll(phaseKey) {
+  // Get presales budget values from live estimated + budget
+  let totalRevSAR = 0, totalEstCostSAR = 0, totalEstMDs = 0;
+
+  // Try from budget inputs
+  const revEl = document.getElementById(`inp-rev-${phaseKey}`);
+  if (revEl) totalRevSAR = parseFloat(revEl.value) || 0;
+
+  // From estimated rows
+  if (_estPhase === phaseKey && _estRows && _estRows.length) {
+    let costUSD = 0;
+    _estRows.forEach(r => {
+      const hr = parseFloat(r.hourRate)||0, at = parseFloat(r.actualTime)||0, em = parseFloat(r.estMonths)||0;
+      costUSD    += hr * at * em;
+      totalEstMDs += at * em / 8;
+    });
+    totalEstCostSAR = costUSD * 3.75;
   }
+
+  // If no estimated loaded, try budget display values
+  if (!totalEstCostSAR) {
+    const costEl = document.getElementById(`bud-cost-sar-${phaseKey}`);
+    if (costEl) totalEstCostSAR = parseFloat((costEl.textContent||'').replace(/[^0-9.]/g,'')) || 0;
+  }
+  if (!totalEstMDs) {
+    const mdsEl = document.getElementById(`bud-mds-${phaseKey}`);
+    if (mdsEl) totalEstMDs = parseFloat((mdsEl.textContent||'').replace(/[^0-9.]/g,'')) || 0;
+  }
+
+  const costPerMD = totalEstMDs > 0 ? totalEstCostSAR / totalEstMDs : 0; // SAR per MD
+  const plannedProfit = totalRevSAR - totalEstCostSAR;
+
+  const table = document.getElementById(`profit-table-${phaseKey}`);
+  if (!table) return;
+
+  const rows = table.querySelectorAll('tr[data-month-key]');
+  let accActualMDs = 0;
+  let prevViAcc = 0;
+  let latestData = {};
+
+  rows.forEach((tr, idx) => {
+    const monthKey = tr.dataset.monthKey;
+
+    // This Month MDs — try to get from effort table
+    const thisMonthMDEl = tr.querySelector(`.prof-thismonth-${phaseKey}`);
+    let thisMonthMDs = parseFloat(thisMonthMDEl?.dataset?.mds || 0) || 0;
+
+    // Fallback: get from current effort live data if available
+    if (!thisMonthMDs && AppState._effortMonthMDs) {
+      thisMonthMDs = AppState._effortMonthMDs[monthKey] || 0;
+    }
+
+    accActualMDs += thisMonthMDs;
+
+    // Editable inputs
+    const compInp = tr.querySelector('.completion-input');
+    const remInp  = tr.querySelector('.remaining-input');
+    const completionPct = parseFloat(compInp?.value) || 0;  // e.g. 3 = 3%
+    const remainingMDs  = parseFloat(remInp?.value)  || 0;
+
+    // ── Formulas ──
+    const actualMDs     = accActualMDs;
+    const currentCostSAR = actualMDs * costPerMD;                          // Actual MDs × (Total Cost / Total MDs)
+    const eacMDs        = actualMDs + remainingMDs;                         // EAC = Actual + Remaining
+    const estCostToComplete = remainingMDs * costPerMD;                     // Remaining × cost/MD
+    const estAtCompletion   = currentCostSAR + estCostToComplete;           // Current Cost + Cost to Complete
+    const cpi           = eacMDs > 0 ? totalEstMDs / eacMDs : 0;           // Est MDs / EAC MDs
+    const revToDate     = totalRevSAR * (completionPct / 100);              // Revenue × % Completion
+    const profitAtComp  = totalRevSAR - estAtCompletion;                    // Revenue - EAC Cost
+    const profitAtCompPct = totalRevSAR > 0 ? profitAtComp / totalRevSAR * 100 : 0;
+    const profVar       = profitAtComp - plannedProfit;                     // Profit at Comp - Planned Profit
+
+    // Virtual Invoice
+    const viThisMonth = revToDate;                                          // = Revenue to Date this month
+    const viAcc       = revToDate;                                          // = cumulative recognized revenue
+
+    // Helper to format SAR
+    const fSAR = v => fmt.money(Math.round(v));
+    const fNum = v => fmt.decimal(v);
+    const setSpan = (cls, val, color) => {
+      const el = tr.querySelector(`.${cls}`);
+      if (el) { el.innerHTML = val; if (color) el.style.color = color; }
+    };
+
+    // Update presales columns
+    tr.querySelectorAll(`.prof-rev-${phaseKey}`).forEach(el => el.textContent = totalRevSAR > 0 ? fSAR(totalRevSAR) : '—');
+    tr.querySelectorAll(`.prof-estcost-${phaseKey}`).forEach(el => el.textContent = totalEstCostSAR > 0 ? fSAR(totalEstCostSAR) : '—');
+    tr.querySelectorAll(`.prof-estmds-${phaseKey}`).forEach(el => el.textContent = totalEstMDs > 0 ? fNum(totalEstMDs) : '—');
+    tr.querySelectorAll(`.prof-actual-${phaseKey}`).forEach(el => el.textContent = fNum(actualMDs));
+
+    // Computed columns
+    setSpan(`pc-currcost-${monthKey}`,      currentCostSAR > 0 ? fSAR(currentCostSAR) : '—');
+    setSpan(`pc-eac-${monthKey}`,           `<b style="color:var(--blue);">${fNum(eacMDs)}</b>`);
+    setSpan(`pc-costtocomplete-${monthKey}`, estCostToComplete > 0 ? fSAR(estCostToComplete) : '—');
+    setSpan(`pc-eac-cost-${monthKey}`,       estAtCompletion > 0 ? fSAR(estAtCompletion) : '—');
+
+    const cpiColor = cpi >= 1 ? 'var(--green)' : cpi > 0 ? 'var(--amber)' : 'var(--text-muted)';
+    setSpan(`pc-cpi-${monthKey}`,           cpi > 0 ? `<b style="color:${cpiColor};">${fNum(cpi)}</b>` : '—');
+
+    const profColor2 = profitAtComp > 0 ? 'var(--green)' : 'var(--red)';
+    setSpan(`pc-profit-comp-${monthKey}`,   profitAtComp !== 0 ? `<b style="color:${profColor2};">${fSAR(profitAtComp)}</b>` : '—');
+    setSpan(`pc-planned-profit-${monthKey}`, plannedProfit !== 0 ? fSAR(plannedProfit) : '—');
+    setSpan(`pc-profit-pct-${monthKey}`,    profitAtCompPct !== 0 ? `<b style="color:${profColor2};">${fmt.decimal(profitAtCompPct)}%</b>` : '—');
+
+    const varColor = profVar >= 0 ? 'var(--green)' : 'var(--red)';
+    setSpan(`pc-prof-var-${monthKey}`,      profVar !== 0 ? `<span style="color:${varColor};">${fSAR(profVar)}</span>` : '—');
+
+    setSpan(`pc-rev-todate-${monthKey}`,    revToDate > 0 ? fSAR(revToDate) : '—');
+    setSpan(`pc-vi-month-${monthKey}`,      revToDate > 0 ? fSAR(revToDate) : '—');
+    setSpan(`pc-vi-acc-${monthKey}`,        revToDate > 0 ? fSAR(revToDate) : '—');
+
+    latestData = { completionPct, remainingMDs, eacMDs, cpi, profitAtComp, totalRevSAR };
+    prevViAcc = viAcc;
+  });
+
+  // Update KPI strip with latest row
+  const setKPI = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  setKPI(`prof-kpi-completion-${phaseKey}`, latestData.completionPct ? fmt.decimal(latestData.completionPct) + '%' : '—');
+  setKPI(`prof-kpi-remaining-${phaseKey}`,  latestData.remainingMDs  ? fmt.decimal(latestData.remainingMDs) : '—');
+  setKPI(`prof-kpi-eac-${phaseKey}`,        latestData.eacMDs        ? fmt.decimal(latestData.eacMDs) : '—');
+  setKPI(`prof-kpi-cpi-${phaseKey}`,        latestData.cpi           ? fmt.decimal(latestData.cpi) : '—');
+  setKPI(`prof-kpi-profit-${phaseKey}`,     latestData.profitAtComp  ? fmt.money(Math.round(latestData.profitAtComp)) + ' SAR' : '—');
 }
 
 async function saveOverride(inp) {
