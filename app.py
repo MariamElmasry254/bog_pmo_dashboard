@@ -4514,6 +4514,28 @@ def api_employee_odoo_position():
         'suggested_old_position': suggested_old,
     })
 
+@app.route('/api/estimated-rows', methods=['GET'])
+def api_estimated_rows_get():
+    """Get saved estimated cost rows for a phase."""
+    phase = request.args.get('phase', 'development')
+    rows = db.get_override('estimated_rows', '', phase) or []
+    if isinstance(rows, str):
+        import json as _json
+        try: rows = _json.loads(rows)
+        except: rows = []
+    return jsonify({'phase': phase, 'rows': rows if isinstance(rows, list) else []})
+
+
+@app.route('/api/estimated-rows', methods=['POST'])
+def api_estimated_rows_save():
+    """Save estimated cost rows for a phase."""
+    body = request.json or {}
+    phase = body.get('phase', 'development')
+    rows = body.get('rows', [])
+    db.set_override('estimated_rows', '', phase, rows)
+    return jsonify({'ok': True, 'phase': phase, 'count': len(rows)})
+
+
 @app.route('/api/travel', methods=['GET'])
 def api_travel_list():
     records = load_travel()
