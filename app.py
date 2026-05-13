@@ -1,1253 +1,4870 @@
-/* Variance tab — mirrors variance.xlsx with sub-tabs */
+"""
+BOG Digital Transformation - PMO Dashboard v3
+Modular templates + service mapping + filters
+"""
+from flask import Flask, render_template, jsonify, request, Response
+import pandas as pd
+import os
+import sys
+import xmlrpc.client
+import traceback
+import csv
+import io
+from datetime import datetime, timedelta, date
+import logging
+from roadmap_data import ROADMAP, MILESTONES, PROJECT_INFO
+from db import DB, migrate_from_json
+from positions_catalog import (
+    seed_positions_if_empty,
+    get_all_positions, get_position_by_name,
+    get_all_tunis_rates, get_tunis_rate_by_name,
+    upsert_position, upsert_tunis_rate,
+    delete_position, delete_tunis_rate,
+)
 
-window.loadVariance = async function() {
-  if (!AppState.loaded.variance) {
-    AppState.loaded.variance = true;
-    document.getElementById('varianceExport').addEventListener('click', () => {
-      window.location.href = '/api/variance/export';
-    });
-    document.querySelectorAll('.sub-tab').forEach(b => {
-      b.addEventListener('click', () => switchSubTab(b.dataset.subtab));
-    });
-    // Pre-load positions list
-    try {
-      const pres = await fetch('/api/positions');
-      const pd = await pres.json();
-      AppState.positions = pd.positions || [];
-    } catch (e) {
-      AppState.positions = [];
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s', stream=sys.stdout)
+logger = logging.getLogger(__name__)
+
+# Configuration
+ODOO_URL = os.environ.get('ODOO_URL', 'https://erp.envnt.co')
+ODOO_DB = os.environ.get('ODOO_DB', 'envnt')
+ODOO_USERNAME = os.environ.get('ODOO_USERNAME', '')
+ODOO_PASSWORD = os.environ.get('ODOO_PASSWORD', '')
+PROJECT_NAME = os.environ.get('PROJECT_NAME', 'BOG Digital Transformation')
+
+WORK_HOURS_PER_DAY = 8
+WEEKEND_DAYS = [4, 5]  # Friday, Saturday
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Persistent storage path. On Railway, set DATA_PATH env var to mounted volume.
+# Falls back to BASE_DIR/data for local dev.
+PERSIST_DIR = os.environ.get('DATA_PATH', os.path.join(BASE_DIR, 'data'))
+os.makedirs(PERSIST_DIR, exist_ok=True)
+logger.info(f"Persistent storage at: {PERSIST_DIR}")
+DATA_FILE = os.path.join(BASE_DIR, 'data', 'services.xlsx')
+
+# =================================================================
+# DATABASE - PostgreSQL (Railway plugin) or SQLite (fallback)
+# Set DATABASE_URL env var in Railway to use PostgreSQL.
+# Falls back to SQLite at PERSIST_DIR/pmo.db otherwise.
+# =================================================================
+DATABASE_URL = os.environ.get('DATABASE_URL')
+if DATABASE_URL:
+    db = DB(DATABASE_URL)
+else:
+    DB_PATH = os.path.join(PERSIST_DIR, 'pmo.db')
+    db = DB(DB_PATH)
+
+# One-time migration from JSON files (safe to run on every boot - it's idempotent)
+try:
+    migrated = migrate_from_json(db, PERSIST_DIR)
+    if migrated:
+        logger.info(f"Migrated from JSON: {migrated}")
+except Exception as _e:
+    logger.warning(f"Migration step had issues (continuing): {_e}")
+
+# Seed positions catalog on first boot (idempotent - only inserts if empty)
+try:
+    seeded = seed_positions_if_empty(db)
+    if seeded > 0:
+        logger.info(f"Seeded positions catalog: {seeded} rows (positions + Tunis rates)")
+except Exception as _e:
+    logger.warning(f"Position seeding had issues (continuing): {_e}")
+
+app = Flask(
+    __name__,
+    template_folder=os.path.join(BASE_DIR, 'templates'),
+    static_folder=os.path.join(BASE_DIR, 'static')
+)
+
+
+# ============================================================
+# ODOO CLIENT
+# ============================================================
+class OdooClient:
+    def __init__(self):
+        self.uid = None
+        self.models = None
+        self.last_error = None
+
+    def connect(self):
+        if not ODOO_USERNAME or not ODOO_PASSWORD:
+            self.last_error = "Credentials not set"
+            return False
+        try:
+            common = xmlrpc.client.ServerProxy(f'{ODOO_URL}/xmlrpc/2/common')
+            self.uid = common.authenticate(ODOO_DB, ODOO_USERNAME, ODOO_PASSWORD, {})
+            if self.uid:
+                self.models = xmlrpc.client.ServerProxy(f'{ODOO_URL}/xmlrpc/2/object')
+                logger.info(f"Odoo connected: uid={self.uid}")
+                self.last_error = None
+                return True
+            self.last_error = "Authentication failed"
+            return False
+        except Exception as e:
+            self.last_error = f"{type(e).__name__}: {str(e)}"
+            logger.error(f"Odoo connect: {e}")
+            return False
+
+    def get_phases(self, project_name=PROJECT_NAME):
+        """Get list of phases for the project"""
+        if not self.uid and not self.connect():
+            return None
+        try:
+            # First find project ID
+            projects = self.models.execute_kw(
+                ODOO_DB, self.uid, ODOO_PASSWORD,
+                'project.project', 'search_read',
+                [[('name', 'ilike', project_name)]],
+                {'fields': ['id', 'name'], 'limit': 5}
+            )
+            if not projects:
+                return []
+            project_ids = [p['id'] for p in projects]
+
+            # Get phases linked to this project
+            phases = self.models.execute_kw(
+                ODOO_DB, self.uid, ODOO_PASSWORD,
+                'project.phase', 'search_read',
+                [[('project_id', 'in', project_ids)]],
+                {'fields': ['id', 'name', 'project_id']}
+            )
+            return phases
+        except Exception as e:
+            logger.error(f"Odoo phases: {e}")
+            return None
+
+    def get_timesheets(self, project_name=PROJECT_NAME, date_from=None, date_to=None,
+                       phase_filter=None, all_projects=False):
+        """Get timesheets. phase_filter can be a single name or list of names."""
+        if not self.uid:
+            if not self.connect():
+                return None
+        try:
+            domain = []
+            if not all_projects and project_name:
+                domain.append(('project_id.name', 'ilike', project_name))
+            if date_from:
+                domain.append(('date', '>=', date_from))
+            if date_to:
+                domain.append(('date', '<=', date_to))
+
+            # Phase filter — can be string or list
+            if phase_filter:
+                phase_names = phase_filter if isinstance(phase_filter, list) else [phase_filter]
+                phase_names = [p for p in phase_names if p]  # remove empties
+                if phase_names:
+                    try:
+                        phases = self.models.execute_kw(
+                            ODOO_DB, self.uid, ODOO_PASSWORD,
+                            'project.phase', 'search_read',
+                            [[('name', 'in', phase_names)]],
+                            {'fields': ['id'], 'limit': 50}
+                        )
+                        phase_ids = [p['id'] for p in phases]
+                        if phase_ids:
+                            # Get ALL tasks with phase_id in our phases (not just parent tasks)
+                            direct_tasks = self.models.execute_kw(
+                                ODOO_DB, self.uid, ODOO_PASSWORD,
+                                'project.task', 'search_read',
+                                [[('phase_id', 'in', phase_ids)]],
+                                {'fields': ['id'], 'limit': 5000}
+                            )
+                            direct_task_ids = {t['id'] for t in direct_tasks}
+
+                            # Also get ALL sub-tasks of those tasks (walk down)
+                            if direct_task_ids:
+                                all_proj_tasks = self.models.execute_kw(
+                                    ODOO_DB, self.uid, ODOO_PASSWORD,
+                                    'project.task', 'search_read',
+                                    [[('project_id.name', 'ilike', PROJECT_NAME)]],
+                                    {'fields': ['id', 'parent_id', 'phase_id'], 'limit': 10000}
+                                )
+                                task_map = {t['id']: t for t in all_proj_tasks}
+                                relevant_ids = set(direct_task_ids)
+                                # Add tasks whose phase_id is in our phases directly
+                                for t in all_proj_tasks:
+                                    ph = t.get('phase_id')
+                                    if ph and isinstance(ph, list) and ph[0] in phase_ids:
+                                        relevant_ids.add(t['id'])
+                                # Walk up parent chains to include sub-tasks
+                                for t in all_proj_tasks:
+                                    if t['id'] in relevant_ids:
+                                        continue
+                                    cur = t
+                                    visited = set()
+                                    while cur and cur['id'] not in visited:
+                                        visited.add(cur['id'])
+                                        if cur['id'] in direct_task_ids:
+                                            relevant_ids.add(t['id'])
+                                            break
+                                        if not cur.get('parent_id'):
+                                            break
+                                        pid = cur['parent_id'][0] if isinstance(cur['parent_id'], list) else cur['parent_id']
+                                        cur = task_map.get(pid)
+
+                                domain.append(('task_id', 'in', list(relevant_ids)))
+                            else:
+                                return []
+                        else:
+                            return []
+                    except Exception as e:
+                        logger.warning(f"Phase filter failed: {e}")
+
+            result = self.models.execute_kw(
+                ODOO_DB, self.uid, ODOO_PASSWORD,
+                'account.analytic.line', 'search_read', [domain],
+                {'fields': ['date', 'employee_id', 'project_id', 'task_id',
+                            'name', 'unit_amount'], 'limit': 5000}
+            )
+            logger.info(f"Odoo timesheets fetched: {len(result)} entries (filter: {domain})")
+
+            # Enrich with parent task info (Odoo v14 doesn't have parent_task_id on timesheet)
+            # We need to fetch task records to get their parent_id and phase
+            task_ids = list(set(e['task_id'][0] for e in result if e.get('task_id')))
+            parent_map = {}  # task_id -> parent_task_name
+            phase_map = {}   # task_id -> phase_name
+            if task_ids:
+                try:
+                    tasks = self.models.execute_kw(
+                        ODOO_DB, self.uid, ODOO_PASSWORD,
+                        'project.task', 'read',
+                        [task_ids],
+                        {'fields': ['id', 'name', 'parent_id', 'phase_id']}
+                    )
+                    for t in tasks:
+                        parent = t.get('parent_id')
+                        if parent and isinstance(parent, list) and len(parent) > 1:
+                            parent_map[t['id']] = parent[1]
+                        else:
+                            parent_map[t['id']] = t.get('name')
+                        ph = t.get('phase_id')
+                        if ph and isinstance(ph, list) and len(ph) > 1:
+                            phase_map[t['id']] = ph[1]
+                    logger.info(f"Loaded mapping for {len(tasks)} tasks")
+                except Exception as e:
+                    logger.warning(f"Could not load tasks: {e}")
+
+            # Attach parent task name + phase to each entry
+            for entry in result:
+                task = entry.get('task_id')
+                if task and task[0] in parent_map:
+                    entry['_parent_name'] = parent_map[task[0]]
+                else:
+                    entry['_parent_name'] = task[1] if task else ''
+                entry['_phase_name'] = phase_map.get(task[0] if task else None, '')
+
+            return result
+        except Exception as e:
+            self.last_error = f"{type(e).__name__}: {str(e)}"
+            logger.error(f"Odoo timesheets: {e}")
+            self.uid = None
+            self.models = None
+            return None
+
+odoo = OdooClient()
+
+# ============================================================
+# SERVICE MAPPING
+# ============================================================
+DEPT_COLUMNS = ['Dev MDs', 'Analysis MD', 'UI/UX', 'QC', 'UAT', 'PM']
+DEPT_LABELS = {'Dev MDs': 'Dev', 'Analysis MD': 'Analysis', 'UI/UX': 'UI/UX',
+               'QC': 'QC', 'UAT': 'UAT', 'PM': 'PM'}
+
+_services_cache = None
+
+def load_services():
+    """Load services from Excel and merge with roadmap data"""
+    global _services_cache
+    if _services_cache is not None:
+        return _services_cache
+    try:
+        if not os.path.exists(DATA_FILE):
+            _services_cache = []
+            return _services_cache
+        df = pd.read_excel(DATA_FILE)
+        services = []
+
+        # Map roadmap by name (fuzzy)
+        roadmap_by_name = {item['name']: item for item in ROADMAP}
+
+        for record in df.to_dict(orient='records'):
+            clean = {}
+            for k, v in record.items():
+                if pd.isna(v):
+                    clean[k] = None
+                elif isinstance(v, (pd.Timestamp, datetime)):
+                    clean[k] = v.isoformat()
+                else:
+                    clean[k] = v
+
+            # Map roadmap
+            name = clean.get('اسم الخدمة المستقبلي', '') or ''
+            rm = roadmap_by_name.get(name)
+            if not rm and name:
+                for rm_name, rm_data in roadmap_by_name.items():
+                    if name in rm_name or (rm_name in name and len(rm_name) > 4):
+                        rm = rm_data
+                        break
+
+            clean['planned_team'] = rm['team'] if rm else None
+            clean['planned_start'] = rm['start'] if rm else None
+            clean['planned_end'] = rm['end'] if rm else None
+            clean['planned_wd_roadmap'] = rm['wd'] if rm else None
+
+            # Department-wise baseline (from presales)
+            baseline_by_dept = {}
+            for col in DEPT_COLUMNS:
+                val = clean.get(col)
+                if val is not None and not (isinstance(val, float) and pd.isna(val)):
+                    try:
+                        baseline_by_dept[DEPT_LABELS[col]] = float(val)
+                    except (ValueError, TypeError):
+                        pass  # skip non-numeric values like "Total"
+            clean['baseline_by_dept'] = baseline_by_dept
+
+            # Placeholder for planned/actual/assignation (to be filled from Odoo or WBD)
+            clean['planned_by_dept'] = {k: None for k in DEPT_LABELS.values()}
+            clean['actuals_hours'] = 0  # will be computed dynamically
+            clean['actuals_days'] = 0
+            clean['remaining_baseline'] = clean.get('ALL') or 0
+            clean['status'] = 'Not Started'  # auto, but overridable
+            clean['status_manual'] = None  # if PM overrides
+            clean['expected_end'] = None  # computed: today + remaining/8
+
+            services.append(clean)
+
+        _services_cache = services
+        return services
+    except Exception as e:
+        logger.error(f"load_services: {e}\n{traceback.format_exc()}")
+        return []
+
+def normalize_timesheet(entry):
+    """Convert Odoo timesheet entry to flat dict.
+    'service' = parent task name (the umbrella service the task belongs to).
+    'phase' = phase name (project.phase).
+    For Odoo v14, both are computed via task lookup.
+    """
+    project = entry.get('project_id', [None, ''])
+    task = entry.get('task_id', [None, ''])
+    task_name = task[1] if task and task[1] else (entry.get('name') or '')
+
+    # SERVICE = parent task name (computed in get_timesheets), fallback to task name itself
+    service_name = entry.get('_parent_name') or task_name
+    phase_name = entry.get('_phase_name') or ''
+
+    return {
+        'date': entry.get('date'),
+        'employee': entry.get('employee_id', [None, 'Unknown'])[1] if entry.get('employee_id') else 'Unknown',
+        'project': project[1] if project else '',
+        'task': task_name,
+        'service': service_name,  # umbrella/parent — used to group actuals per service
+        'phase': phase_name,
+        'description': entry.get('name', ''),
+        'hours': float(entry.get('unit_amount', 0)),
     }
-  }
-  const cont = document.getElementById('varianceContent');
-  cont.innerHTML = '<div class="loading">Loading variance data…</div>';
-  const res = await fetch('/api/variance');
-  const d = await res.json();
-  if (!d.available) {
-    cont.innerHTML = '<div class="banner banner-warn"><strong>Not configured:</strong> variance.xlsx not found in /data folder.</div>';
-    return;
-  }
-  AppState.varianceData = d;
-  switchSubTab('development');
-};
 
-function switchSubTab(key) {
-  document.querySelectorAll('.sub-tab').forEach(b => {
-    b.classList.toggle('active', b.dataset.subtab === key);
-  });
-  if (key === 'travel') {
-    renderTravelSubTab();
-  } else if (key === 'promotions') {
-    renderPromotionsSubTab();
-  } else {
-    renderVarianceSubTab(key);
-  }
-}
+def get_demo_timesheets():
+    """Demo data with phase + parent service grouping"""
+    return [
+        # Service: إدارة الصلاحيات (Development Phase)
+        {'date': '2026-04-26', 'employee': 'Ahmed Hassan', 'project': PROJECT_NAME, 'task': 'JWT Setup', 'service': 'إدارة الصلاحيات', 'phase': 'Development Phase', 'description': 'Auth flow', 'hours': 7.5},
+        {'date': '2026-04-27', 'employee': 'Ahmed Hassan', 'project': PROJECT_NAME, 'task': 'Token refresh', 'service': 'إدارة الصلاحيات', 'phase': 'Development Phase', 'description': '', 'hours': 8.0},
+        {'date': '2026-05-03', 'employee': 'Ahmed Hassan', 'project': PROJECT_NAME, 'task': 'Bug fix', 'service': 'إدارة الصلاحيات', 'phase': 'Development Phase', 'description': '', 'hours': 6.5},
+        {'date': '2026-05-02', 'employee': 'Omar Khaled', 'project': PROJECT_NAME, 'task': 'Frontend auth', 'service': 'إدارة الصلاحيات', 'phase': 'Development Phase', 'description': '', 'hours': 7.0},
+        # Service: قيد دعوى إدارية (Development Phase)
+        {'date': '2026-04-28', 'employee': 'Ahmed Hassan', 'project': PROJECT_NAME, 'task': 'Cases schema', 'service': 'قيد دعوى إدارية', 'phase': 'Development Phase', 'description': '', 'hours': 6.0},
+        {'date': '2026-04-29', 'employee': 'Ahmed Hassan', 'project': PROJECT_NAME, 'task': 'Cases schema', 'service': 'قيد دعوى إدارية', 'phase': 'Development Phase', 'description': '', 'hours': 8.0},
+        {'date': '2026-04-28', 'employee': 'Sara Ali', 'project': PROJECT_NAME, 'task': 'Wireframes', 'service': 'قيد دعوى إدارية', 'phase': 'Development Phase', 'description': '', 'hours': 7.5},
+        {'date': '2026-04-29', 'employee': 'Sara Ali', 'project': PROJECT_NAME, 'task': 'Wireframes', 'service': 'قيد دعوى إدارية', 'phase': 'Development Phase', 'description': '', 'hours': 8.0},
+        # Consultation phases
+        {'date': '2026-04-27', 'employee': 'Sara Ali', 'project': PROJECT_NAME, 'task': 'Stakeholder Interviews', 'service': 'الفهارس العامة', 'phase': 'Consultation phase - Analysis', 'description': '', 'hours': 7.0},
+        {'date': '2026-04-29', 'employee': 'Omar Khaled', 'project': PROJECT_NAME, 'task': 'UX Research', 'service': 'الفهارس العامة', 'phase': 'Consultation phase - UX', 'description': '', 'hours': 7.5},
+        {'date': '2026-04-28', 'employee': 'Omar Khaled', 'project': PROJECT_NAME, 'task': 'Initiation Meeting', 'service': 'تسجيل الدخول', 'phase': 'Consultation phase - Initiation', 'description': '', 'hours': 8.0},
+        # PM activities
+        {'date': '2026-04-26', 'employee': 'Mariam Elmasry', 'project': PROJECT_NAME, 'task': 'PM Review', 'service': '', 'phase': 'Development Phase', 'description': '', 'hours': 6.0},
+        {'date': '2026-04-27', 'employee': 'Mariam Elmasry', 'project': PROJECT_NAME, 'task': 'Stakeholder Meeting', 'service': '', 'phase': 'Development Phase', 'description': '', 'hours': 4.5},
+        {'date': '2026-04-28', 'employee': 'Mariam Elmasry', 'project': PROJECT_NAME, 'task': 'Sprint Planning', 'service': '', 'phase': 'Development Phase', 'description': '', 'hours': 5.5},
+        {'date': '2026-04-29', 'employee': 'Mariam Elmasry', 'project': PROJECT_NAME, 'task': 'Documentation', 'service': '', 'phase': 'Development Phase', 'description': '', 'hours': 7.0},
+        {'date': '2026-04-30', 'employee': 'Mariam Elmasry', 'project': PROJECT_NAME, 'task': 'Sprint Review', 'service': '', 'phase': 'Development Phase', 'description': '', 'hours': 4.0},
+        # Cross-project (no phase)
+        {'date': '2026-05-03', 'employee': 'Mariam Elmasry', 'project': 'Other Project X', 'task': 'External work', 'service': '', 'phase': '', 'description': '', 'hours': 8.0},
+        {'date': '2026-05-04', 'employee': 'Omar Khaled', 'project': 'Other Project X', 'task': 'External', 'service': '', 'phase': '', 'description': '', 'hours': 8.0},
+    ]
 
-function renderVarianceSubTab(key) {
-  const cont = document.getElementById('varianceContent');
-  const tab = AppState.varianceData?.tabs?.[key];
-  if (!tab) {
-    cont.innerHTML = '<div class="loading">No data for this tab</div>';
-    return;
-  }
+def get_all_timesheets(date_from=None, date_to=None, phases=None, all_projects=False):
+    """Unified getter — Odoo if available, else demo. phases = list or None."""
+    ts = odoo.get_timesheets(date_from=date_from, date_to=date_to,
+                             phase_filter=phases, all_projects=all_projects)
+    if ts is None:
+        data = get_demo_timesheets()
+        if not all_projects:
+            data = [d for d in data if d['project'] == PROJECT_NAME]
+        if date_from:
+            data = [d for d in data if d.get('date', '') >= date_from]
+        if date_to:
+            data = [d for d in data if d.get('date', '') <= date_to]
+        if phases:
+            phase_list = phases if isinstance(phases, list) else [phases]
+            data = [d for d in data if d.get('phase', '') in phase_list]
+        return data, False
+    return [normalize_timesheet(e) for e in ts], True
 
-  let html = '';
-  // Section nav within sub-tab
-  html += '<div class="section-nav-pills">';
-  tab.sections.forEach((s, i) => {
-    html += `<a href="#section-${key}-${s.key}" class="section-pill">${s.label}</a>`;
-  });
-  html += '</div>';
+def is_working_day(d):
+    if isinstance(d, str):
+        d = datetime.strptime(d, '%Y-%m-%d').date()
+    return d.weekday() not in WEEKEND_DAYS
 
-  tab.sections.forEach(sect => {
-    html += `<div class="variance-section" id="section-${key}-${sect.key}">`;
-    html += `<div class="section-bar"><span class="section-num">${sect.label.charAt(0)}</span><h2>${sect.label}</h2><span class="section-source">${sect.sheet || ''}</span></div>`;
+def get_working_days_between(start_date, end_date):
+    if isinstance(start_date, str):
+        start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+    if isinstance(end_date, str):
+        end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+    days = []
+    current = start_date
+    while current <= end_date:
+        if is_working_day(current):
+            days.append(current.isoformat())
+        current += timedelta(days=1)
+    return days
 
-    if (sect.error) {
-      html += `<div class="banner banner-warn"><strong>Parse error:</strong> ${sect.error}</div>`;
-    } else if (sect.data) {
-      if (sect.key === 'budget') html += renderBudget(sect.data, key);
-      else if (sect.key === 'profitability') html += renderProfitability(sect.data, key);
-      else if (sect.key === 'effort') html += renderEffort(sect.data, key);
-      else if (sect.key === 'estimated') html += renderEstimated(sect.data, key);
-    }
-    html += '</div>';
-  });
+# ============================================================
+# ROUTES
+# ============================================================
+@app.errorhandler(Exception)
+def handle_error(e):
+    logger.error(f"Error: {e}\n{traceback.format_exc()}")
+    return jsonify({'error': str(e)}), 500
 
-  cont.innerHTML = html;
+@app.route('/')
+def index():
+    return render_template('index.html', project_name=PROJECT_NAME)
 
-  // Wire up auto-save for any budget inputs
-  wireBudgetInputs(cont);
+@app.route('/api/overview')
+def api_overview():
+    """KPIs from Roadmap (PPT) only"""
+    roadmap_services = ROADMAP or []
+    total_services_roadmap = len(roadmap_services)
+    total_wd_roadmap = sum(s.get('wd') or 0 for s in roadmap_services)
 
-  // Load live effort + estimated tables AFTER DOM is set
-  if (data.sections.some(s => s.key === 'effort')) {
-    const effortContainerId = `effort-live-${key}`;
-    setTimeout(() => loadEffortLive(key, effortContainerId), 100);
-  }
-  if (data.sections.some(s => s.key === 'estimated')) {
-    setTimeout(() => {
-      const wrap = document.getElementById('estimatedLiveWrap');
-      if (wrap) loadEstimatedLive(key, 'estimatedLiveWrap');
-      else console.warn('estimatedLiveWrap still not found after 200ms');
-    }, 200);
-  }
-}
+    # Distinct teams in roadmap
+    teams = set()
+    for s in roadmap_services:
+        if s.get('team'):
+            teams.add(s['team'])
 
-function renderBudget(data, phaseKey) {
-  let html = '';
-  // KPI cards from approved/final
-  const a = data.approved || {};
-  const f = data.final || {};
+    proj_start = PROJECT_INFO.get('start_date')
+    proj_end = PROJECT_INFO.get('end_date')
+    duration_months = PROJECT_INFO.get('duration_months')
+    milestones_count = len(MILESTONES) if MILESTONES else 0
 
-  // Helper to make an editable budget cell
-  // type: 'money' | 'pct' | 'num'
-  function editableCell(value, path, type) {
-    const v = value === null || value === undefined ? '' : value;
-    const step = type === 'pct' ? '0.0001' : '0.01';
-    const cls = type === 'pct' ? 'budget-input budget-input-pct' : 'budget-input';
-    return `<input type="number" step="${step}" class="${cls}" data-phase="${phaseKey}" data-path="${path}" value="${v}">`;
-  }
+    # Time progress (timeline-based)
+    time_progress_pct = 0
+    days_elapsed = 0
+    days_remaining = 0
+    try:
+        if proj_start and proj_end:
+            ps = datetime.strptime(proj_start, '%Y-%m-%d').date()
+            pe = datetime.strptime(proj_end, '%Y-%m-%d').date()
+            today = date.today()
+            total = (pe - ps).days
+            elapsed = max(0, (today - ps).days)
+            days_elapsed = elapsed
+            days_remaining = max(0, (pe - today).days)
+            if total > 0:
+                time_progress_pct = round(min(100, elapsed / total * 100), 1)
+    except Exception:
+        pass
 
-  // Helper for non-numeric (text) editable cells
-  function editableText(value, path) {
-    const v = value === null || value === undefined ? '' : value;
-    return `<input type="text" class="budget-input budget-input-text" data-phase="${phaseKey}" data-path="${path}" value="${String(v).replace(/"/g, '&quot;')}">`;
-  }
+    # PROJECT PROGRESS = % Completion from Variance (Development phase)
+    # Read latest entry from plan_overrides.json
+    project_progress = 0
+    project_remaining = 0
+    try:
+        overrides = load_plan_overrides()
+        plan_overrides = overrides.get('plan_overrides', {}) or {}
+        # Try development phase first, then any phase if not found
+        phase_data = plan_overrides.get('development', {}) or {}
+        if not phase_data:
+            # Take any phase that has data
+            for phase_key, phase_val in plan_overrides.items():
+                if isinstance(phase_val, dict) and phase_val:
+                    phase_data = phase_val
+                    break
 
-  // Compute display values for KPI cards (use saved overrides)
-  const profitPctApproved = (a.profit_pct || 0) * 100;
-  const profitPctFinal = (f.profit_pct || 0) * 100;
+        if phase_data:
+            # Get the latest month_key (sorted)
+            sorted_months = sorted(phase_data.keys(), reverse=True)
+            for month_key in sorted_months:
+                month_data = phase_data.get(month_key, {}) or {}
+                # Take % completion if present
+                if 'completion' in month_data and project_progress == 0:
+                    project_progress = float(month_data['completion'])
+                # Take remaining if present
+                if 'remaining' in month_data and project_remaining == 0:
+                    project_remaining = float(month_data['remaining'])
+                # Stop once we have both
+                if project_progress and project_remaining:
+                    break
+    except Exception as e:
+        logger.warning(f"Could not read variance overrides for overview: {e}")
 
-  html += `
-    <div class="kpi-strip kpi-strip-small">
-      <div class="kpi-card kpi-blue compact">
-        <div class="kpi-label">TOTAL MANDAYS</div>
-        <div class="kpi-value">${fmt.num(a.total_mandays)}</div>
-      </div>
-      <div class="kpi-card kpi-navy compact">
-        <div class="kpi-label">APPROVED COST (SAR)</div>
-        <div class="kpi-value">${fmt.money(a.cost_sar)}</div>
-      </div>
-      <div class="kpi-card kpi-green compact">
-        <div class="kpi-label">APPROVED PROFIT</div>
-        <div class="kpi-value">${fmt.decimal(profitPctApproved)}<span class="kpi-unit">%</span></div>
-        <div class="kpi-foot">${fmt.money(a.profit_sar)} SAR</div>
-      </div>
-      <div class="kpi-card kpi-amber compact">
-        <div class="kpi-label">FINAL PROFIT</div>
-        <div class="kpi-value">${fmt.decimal(profitPctFinal)}<span class="kpi-unit">%</span></div>
-        <div class="kpi-foot">${fmt.money(f.profit_sar)} SAR</div>
-      </div>
-    </div>
-  `;
+    return jsonify({
+        'project_name': PROJECT_NAME,
+        'phase': PROJECT_INFO.get('phase'),
+        'roadmap_start': proj_start,
+        'roadmap_end': proj_end,
+        'duration_months': duration_months,
+        'total_services': total_services_roadmap,
+        'total_mandays': total_wd_roadmap,
+        'teams_count': len(teams),
+        'teams': sorted(teams),
+        'milestones_count': milestones_count,
+        # Project Progress now from Variance (% Completion)
+        'progress_pct': round(project_progress, 1),
+        'remaining_mds': round(project_remaining, 1),
+        # Timeline metrics (kept for reference)
+        'time_progress_pct': time_progress_pct,
+        'days_elapsed': days_elapsed,
+        'days_remaining': days_remaining,
+    })
 
-  // Editable hint
-  const overrideBadge = data._has_overrides
-    ? '<span class="badge badge-blue" style="margin-left:8px;">Has saved overrides</span>'
-    : '';
 
-  // Approved vs Final side-by-side - WITH EDITABLE INPUTS
-  html += `
-    <div class="card" style="margin-bottom: 12px;">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-        <h3 class="card-title" style="margin: 0;">Budget — Editable ${overrideBadge}</h3>
-        <span style="font-size: 11px; color: var(--text-muted);">All fields auto-save on edit · Stored in Railway Volume</span>
-      </div>
-    </div>
-    <div class="grid-2">
-      <div class="card budget-card">
-        <h3 class="card-title">Approved Project Budget</h3>
-        <div class="budget-row">
-          <span class="label">Total Mandays</span>
-          <span class="value">${editableCell(a.total_mandays, 'approved.total_mandays', 'num')}</span>
-        </div>
-        <div class="budget-row">
-          <span class="label">Total Cost (USD)</span>
-          <span class="value">$${editableCell(a.cost_usd, 'approved.cost_usd', 'money')}</span>
-        </div>
-        <div class="budget-row">
-          <span class="label">Total Cost (SAR)</span>
-          <span class="value">${editableCell(a.cost_sar, 'approved.cost_sar', 'money')}</span>
-        </div>
-        <div class="budget-row">
-          <span class="label">Total Revenue (SAR)</span>
-          <span class="value">${editableCell(a.revenue_sar, 'approved.revenue_sar', 'money')}</span>
-        </div>
-        <div class="budget-row highlight">
-          <span class="label">Profit (SAR)</span>
-          <span class="value">${editableCell(a.profit_sar, 'approved.profit_sar', 'money')}</span>
-        </div>
-        <div class="budget-row highlight">
-          <span class="label">Profit %</span>
-          <span class="value">${editableCell(a.profit_pct, 'approved.profit_pct', 'pct')} <span style="font-size:10px;color:var(--text-muted);">(decimal: 0.4 = 40%)</span></span>
-        </div>
-      </div>
-      <div class="card budget-card budget-final">
-        <h3 class="card-title">Final Budget <span class="badge badge-amber">After Changes</span></h3>
-        <div class="budget-row">
-          <span class="label">Total Cost (SAR)</span>
-          <span class="value">${editableCell(f.cost_sar, 'final.cost_sar', 'money')}</span>
-        </div>
-        <div class="budget-row">
-          <span class="label">Total Revenue (SAR)</span>
-          <span class="value">${editableCell(f.revenue_sar, 'final.revenue_sar', 'money')}</span>
-        </div>
-        <div class="budget-row">
-          <span class="label">Δ Cost</span>
-          <span class="value">${editableCell(f.total_change_cost, 'final.total_change_cost', 'money')}</span>
-        </div>
-        <div class="budget-row">
-          <span class="label">Δ Revenue</span>
-          <span class="value">${editableCell(f.total_change_revenue, 'final.total_change_revenue', 'money')}</span>
-        </div>
-        <div class="budget-row highlight">
-          <span class="label">Profit (SAR)</span>
-          <span class="value">${editableCell(f.profit_sar, 'final.profit_sar', 'money')}</span>
-        </div>
-        <div class="budget-row highlight">
-          <span class="label">Profit %</span>
-          <span class="value">${editableCell(f.profit_pct, 'final.profit_pct', 'pct')} <span style="font-size:10px;color:var(--text-muted);">(decimal: 0.4 = 40%)</span></span>
-        </div>
-      </div>
-    </div>
-  `;
+@app.route('/api/overview/tags-analysis')
+def api_overview_tags_analysis():
+    """Group tasks by their Odoo tags. Filtered by phase_group + phases."""
+    if not odoo.uid:
+        if not odoo.connect():
+            return jsonify({'tags': [], 'connected': False, 'error': 'Odoo unreachable'})
 
-  // Changes log
-  if (data.changes && data.changes.length) {
-    html += `<div class="card"><h3 class="card-title">Approved Budget Changes</h3>
-      <table class="data-table"><thead><tr>
-        <th>Reason</th><th>Plan / CR ID</th>
-        <th class="num">Δ Cost (SAR)</th><th class="num">Δ Revenue (SAR)</th></tr></thead><tbody>`;
-    data.changes.forEach(c => {
-      const rev = c.changes_revenue || 0;
-      const cost = c.changes_cost || 0;
-      html += `<tr>
-        <td>${c.reason || '—'}</td>
-        <td>${c.plan_id || '—'}</td>
-        <td class="num">${cost ? fmt.money(cost) : '—'}</td>
-        <td class="num" style="color: ${rev < 0 ? 'var(--red)' : 'var(--green)'}">${rev ? (rev < 0 ? '(' + fmt.money(Math.abs(rev)) + ')' : fmt.money(rev)) : '—'}</td>
-      </tr>`;
-    });
-    html += '</tbody></table></div>';
-  }
-  return html;
-}
+    # Phase filter
+    phase_group = request.args.get('phase_group', 'development')
+    phases_param = request.args.get('phases')
+    if phases_param:
+        phase_names = [p.strip() for p in phases_param.split(',') if p.strip()]
+    else:
+        phase_names = PHASE_MAPPING.get(phase_group, [])
 
-// Wire up auto-save for budget inputs
-function wireBudgetInputs(container) {
-  if (!container) return;
-  container.querySelectorAll('.budget-input').forEach(inp => {
-    inp.addEventListener('blur', async () => {
-      const phase = inp.dataset.phase;
-      const path = inp.dataset.path;
-      const isText = inp.classList.contains('budget-input-text');
-      let value = isText ? inp.value : (parseFloat(inp.value) || 0);
-      // Empty value → null (delete override)
-      if (inp.value === '' || inp.value === null) value = null;
+    try:
+        # Resolve phase IDs
+        phase_id_to_name = {}
+        if phase_names:
+            phases = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.phase', 'search_read',
+                [[('name', 'in', phase_names)]],
+                {'fields': ['id', 'name'], 'limit': 50}
+            )
+            phase_id_to_name = {p['id']: p['name'] for p in phases}
 
-      try {
-        const res = await fetch('/api/variance/budget-override', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ phase, path, value })
-        });
-        if (res.ok) {
-          inp.style.borderColor = 'var(--green)';
-          setTimeout(() => { inp.style.borderColor = ''; }, 1200);
-        } else {
-          inp.style.borderColor = 'var(--red)';
+        # Build base domain - tasks in this project
+        project_domain = []
+        if PROJECT_NAME:
+            project_domain.append(('project_id.name', 'ilike', PROJECT_NAME))
+
+        # Get parent tasks under requested phases
+        parent_domain = list(project_domain)
+        if phase_id_to_name:
+            parent_domain.append(('phase_id', 'in', list(phase_id_to_name.keys())))
+
+        parent_tasks = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [parent_domain],
+            {'fields': ['id', 'name', 'phase_id', 'project_id'], 'limit': 5000}
+        )
+        parent_task_ids = {t['id'] for t in parent_tasks}
+        parent_phase_map = {}  # parent_id -> phase name
+        for pt in parent_tasks:
+            if pt.get('phase_id'):
+                parent_phase_map[pt['id']] = pt['phase_id'][1] if isinstance(pt['phase_id'], list) else ''
+
+        # Get ALL project tasks (so we can walk parent chain)
+        project_ids = set()
+        for pt in parent_tasks:
+            if pt.get('project_id') and isinstance(pt['project_id'], list):
+                project_ids.add(pt['project_id'][0])
+
+        all_domain = list(project_domain)
+        if project_ids:
+            all_domain = [('project_id', 'in', list(project_ids))]
+
+        all_tasks = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [all_domain],
+            {'fields': ['id', 'name', 'planned_hours', 'effective_hours',
+                        'progress', 'parent_id', 'tag_ids', 'stage_id',
+                        'phase_id', 'project_id'],
+             'limit': 10000}
+        )
+
+        # Build lookup
+        task_by_id = {t['id']: t for t in all_tasks}
+
+        # Filter tasks: must descend from a parent_task (under our phases)
+        filtered_tasks = []
+        for t in all_tasks:
+            cur = t
+            visited = set()
+            depth = 0
+            found_root = None
+            while cur and cur['id'] not in visited and depth < 10:
+                visited.add(cur['id'])
+                depth += 1
+                if cur['id'] in parent_task_ids:
+                    found_root = cur['id']
+                    break
+                if not cur.get('parent_id'):
+                    break
+                pid = cur['parent_id'][0] if isinstance(cur['parent_id'], list) else cur['parent_id']
+                cur = task_by_id.get(pid)
+            if found_root:
+                t['_root_id'] = found_root
+                filtered_tasks.append(t)
+
+        # Get all tag definitions
+        all_tag_ids = set()
+        for t in filtered_tasks:
+            for tid in t.get('tag_ids', []) or []:
+                all_tag_ids.add(tid)
+
+        tag_id_to_info = {}
+        if all_tag_ids:
+            tags = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.tags', 'search_read',
+                [[('id', 'in', list(all_tag_ids))]],
+                {'fields': ['id', 'name', 'color']}
+            )
+            tag_id_to_info = {t['id']: {'name': t['name'], 'color': t.get('color', 0)} for t in tags}
+
+        # Get timesheets for these tasks
+        task_ids = [t['id'] for t in filtered_tasks]
+        timesheets = []
+        if task_ids:
+            timesheets = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'account.analytic.line', 'search_read',
+                [[('task_id', 'in', task_ids)]],
+                {'fields': ['task_id', 'employee_id', 'unit_amount'], 'limit': 50000}
+            )
+
+        # Aggregate hours per task
+        task_hours = {}
+        task_employees = {}
+        for ts in timesheets:
+            tid = ts['task_id'][0] if ts.get('task_id') else None
+            if not tid:
+                continue
+            h = float(ts.get('unit_amount', 0) or 0)
+            task_hours[tid] = task_hours.get(tid, 0) + h
+            emp = ts.get('employee_id', [None, 'Unknown'])[1] if ts.get('employee_id') else 'Unknown'
+            if tid not in task_employees:
+                task_employees[tid] = {}
+            task_employees[tid][emp] = task_employees[tid].get(emp, 0) + h
+
+        # Aggregate by tag (with per-task breakdown)
+        tag_data = {}
+        UNTAGGED = -1
+
+        for t in filtered_tasks:
+            tid = t['id']
+            planned = float(t.get('planned_hours') or 0)
+            actual = task_hours.get(tid, 0)
+            task_emps = task_employees.get(tid, {})
+
+            # Skip tasks with no tags AND no work AND no planning (noise)
+            tag_ids_for_task = t.get('tag_ids', []) or []
+            if not tag_ids_for_task:
+                if planned == 0 and actual == 0:
+                    continue
+                tag_ids_for_task = [UNTAGGED]
+
+            for tag_id in tag_ids_for_task:
+                if tag_id not in tag_data:
+                    tag_data[tag_id] = {
+                        'tag_id': tag_id,
+                        'name': tag_id_to_info.get(tag_id, {}).get('name', 'Untagged') if tag_id != UNTAGGED else 'Untagged',
+                        'color': tag_id_to_info.get(tag_id, {}).get('color', 0) if tag_id != UNTAGGED else 0,
+                        'planned': 0,
+                        'actual': 0,
+                        'tasks_count': 0,
+                        'employees': {},
+                        'tasks': [],  # per-task breakdown
+                    }
+                tag_data[tag_id]['planned'] += planned
+                tag_data[tag_id]['actual'] += actual
+                tag_data[tag_id]['tasks_count'] += 1
+                tag_data[tag_id]['tasks'].append({
+                    'id': tid,
+                    'name': t.get('name', ''),
+                    'planned_hours': round(planned, 1),
+                    'actual_hours': round(actual, 1),
+                    'employees': sorted([{'name': e[0], 'hours': round(e[1], 1)} for e in task_emps.items()],
+                                        key=lambda x: -x['hours'])[:5],
+                })
+                for emp, eh in task_emps.items():
+                    tag_data[tag_id]['employees'][emp] = tag_data[tag_id]['employees'].get(emp, 0) + eh
+
+        # Build result
+        result = []
+        for tag_id, td in tag_data.items():
+            planned = td['planned']
+            actual = td['actual']
+            remaining = max(0, planned - actual)
+            progress = round(min(100, actual / planned * 100), 1) if planned > 0 else 0
+            sorted_emps = sorted(td['employees'].items(), key=lambda x: -x[1])
+            # Sort tasks by actual hours desc
+            td['tasks'].sort(key=lambda x: -x['actual_hours'])
+            result.append({
+                'tag_id': td['tag_id'],
+                'name': td['name'],
+                'color': td['color'],
+                'planned_hours': round(planned, 1),
+                'actual_hours': round(actual, 1),
+                'remaining_hours': round(remaining, 1),
+                'planned_days': round(planned / WORK_HOURS_PER_DAY, 1),
+                'actual_days': round(actual / WORK_HOURS_PER_DAY, 1),
+                'progress_pct': progress,
+                'tasks_count': td['tasks_count'],
+                'top_employees': [{'name': e[0], 'hours': round(e[1], 1)} for e in sorted_emps[:5]],
+                'employees_count': len(td['employees']),
+                'tasks': td['tasks'],
+            })
+
+        result.sort(key=lambda x: -x['actual_hours'])
+
+        return jsonify({
+            'tags': result,
+            'connected': True,
+            'phases_active': phase_names,
+            'phases_available': list(phase_id_to_name.values()),
+            'phase_group': phase_group,
+            'summary': {
+                'total_tags': len(result),
+                'total_planned': round(sum(t['planned_hours'] for t in result), 1),
+                'total_actual': round(sum(t['actual_hours'] for t in result), 1),
+                'total_remaining': round(sum(t['remaining_hours'] for t in result), 1),
+            }
+        })
+    except Exception as e:
+        logger.error(f"api_overview_tags_analysis: {e}\n{traceback.format_exc()}")
+        return jsonify({'tags': [], 'connected': False, 'error': str(e)})
+
+
+@app.route('/api/overview/analysis/<phase_group>')
+def api_overview_analysis(phase_group):
+    """Per-task analysis from Odoo with multi-phase + employee filter support.
+    phase_group: 'development' or 'consultation' — defines default phase set.
+    Query params:
+      - phases: comma-separated list of phase names (overrides default)
+      - employees: comma-separated employee names to filter by
+    """
+    if phase_group not in ('development', 'consultation'):
+        return jsonify({'error': 'phase_group must be development or consultation'}), 400
+
+    # Parse query params
+    phases_param = request.args.get('phases')
+    if phases_param:
+        phase_names = [p.strip() for p in phases_param.split(',') if p.strip()]
+    else:
+        phase_names = PHASE_MAPPING.get(phase_group, [])
+
+    employees_param = request.args.get('employees')
+    employees_filter = []
+    if employees_param:
+        employees_filter = [e.strip() for e in employees_param.split(',') if e.strip()]
+
+    if not phase_names:
+        return jsonify({'tasks': [], 'error': f'No phases for {phase_group}'})
+
+    # Connect to Odoo
+    if not odoo.uid:
+        if not odoo.connect():
+            return jsonify({'tasks': [], 'connected': False, 'error': 'Odoo unreachable'})
+
+    try:
+        # Get phase IDs by name
+        phases = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.phase', 'search_read',
+            [[('name', 'in', phase_names)]],
+            {'fields': ['id', 'name'], 'limit': 50}
+        )
+        phase_ids = [p['id'] for p in phases]
+        phase_id_to_name = {p['id']: p['name'] for p in phases}
+        if not phase_ids:
+            return jsonify({'tasks': [], 'connected': True, 'error': 'No matching phases in Odoo'})
+
+        # Step 1: Get parent tasks (those with phase_id set directly)
+        project_domain = [('phase_id', 'in', phase_ids)]
+        if PROJECT_NAME:
+            project_domain.append(('project_id.name', 'ilike', PROJECT_NAME))
+
+        # Try to detect available assignment fields in this Odoo version.
+        # Common multi-assignee field names:
+        #   user_ids       (Odoo standard - newer)
+        #   project_user_ids (Custom v14 - this codebase)
+        #   users_list     (string with comma-separated names - this codebase)
+        TASK_FIELDS_BASE = ['id', 'name', 'planned_hours', 'effective_hours',
+                            'progress', 'parent_id', 'user_id', 'project_id',
+                            'date_deadline', 'stage_id', 'kanban_state',
+                            'phase_id', 'date_start', 'date_end', 'child_ids',
+                            'project_user_ids', 'users_list']
+        # Set to true if extra fields were accepted
+        use_multi_assignee = True
+        try:
+            parent_tasks = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.task', 'search_read',
+                [project_domain],
+                {'fields': TASK_FIELDS_BASE, 'limit': 5000}
+            )
+        except Exception as e:
+            if 'Invalid field' in str(e):
+                # Drop the multi-assignee fields if not available
+                FALLBACK_FIELDS = ['id', 'name', 'planned_hours', 'effective_hours',
+                                   'progress', 'parent_id', 'user_id', 'project_id',
+                                   'date_deadline', 'stage_id', 'kanban_state',
+                                   'phase_id', 'date_start', 'date_end', 'child_ids']
+                use_multi_assignee = False
+                logger.info(f"Multi-assignee fields not available: {e}, falling back to user_id only")
+                parent_tasks = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'project.task', 'search_read',
+                    [project_domain],
+                    {'fields': FALLBACK_FIELDS, 'limit': 5000}
+                )
+                TASK_FIELDS_BASE = FALLBACK_FIELDS
+            else:
+                raise
+
+        if not parent_tasks:
+            return jsonify({'tasks': [], 'connected': True, 'phases_available': phase_names})
+
+        # Diagnostic: log parent tasks with their child_ids count
+        for pt in parent_tasks:
+            logger.info(f"  Parent task: id={pt['id']} name='{pt.get('name')}' child_ids={len(pt.get('child_ids') or [])}")
+
+        # Step 2: Fetch ALL tasks belonging to the same project as parent tasks
+        # (use project_id from parent_tasks, not name match — more reliable)
+        project_ids = set()
+        for pt in parent_tasks:
+            if pt.get('project_id') and isinstance(pt['project_id'], list) and len(pt['project_id']) > 0:
+                project_ids.add(pt['project_id'][0])
+
+        if project_ids:
+            all_project_domain = [('project_id', 'in', list(project_ids))]
+        elif PROJECT_NAME:
+            all_project_domain = [('project_id.name', 'ilike', PROJECT_NAME)]
+        else:
+            all_project_domain = []
+
+        all_project_tasks = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [all_project_domain],
+            {'fields': TASK_FIELDS_BASE, 'limit': 10000}
+        )
+        logger.info(f"Total project tasks fetched: {len(all_project_tasks)} (multi_assignee={use_multi_assignee})")
+
+        # Build lookup: id -> task
+        task_by_id = {t['id']: t for t in all_project_tasks}
+        parent_task_ids = {t['id'] for t in parent_tasks}
+
+        # For each task, walk up parent chain to see if it descends from a parent_task
+        all_tasks_by_id = {}
+        for t in all_project_tasks:
+            cur = t
+            visited = set()
+            depth = 0
+            while cur and cur['id'] not in visited and depth < 10:
+                visited.add(cur['id'])
+                depth += 1
+                if cur['id'] in parent_task_ids:
+                    # this task descends from one of our parents (or IS a parent)
+                    # add the original task t (not cur)
+                    all_tasks_by_id[t['id']] = t
+                    break
+                # Move up
+                if not cur.get('parent_id'):
+                    break
+                parent_id = cur['parent_id'][0] if isinstance(cur['parent_id'], list) else cur['parent_id']
+                cur = task_by_id.get(parent_id)
+                if not cur:
+                    break
+
+        tasks = list(all_tasks_by_id.values())
+        logger.info(f"Tasks in scope: {len(parent_tasks)} parents → {len(tasks)} total (after walking parent chains)")
+
+        # Get all timesheet entries for these tasks
+        task_ids = [t['id'] for t in tasks]
+        timesheets = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'account.analytic.line', 'search_read',
+            [[('task_id', 'in', task_ids)]],
+            {'fields': ['task_id', 'employee_id', 'unit_amount', 'date'], 'limit': 50000}
+        )
+
+        # Group timesheets by task → employee
+        ts_by_task = {}
+        all_employees_set = set()
+        for ts in timesheets:
+            tid = ts['task_id'][0] if ts.get('task_id') else None
+            if not tid:
+                continue
+            emp = ts.get('employee_id', [None, 'Unknown'])[1] if ts.get('employee_id') else 'Unknown'
+            all_employees_set.add(emp)
+            h = float(ts.get('unit_amount', 0) or 0)
+            d = ts.get('date')
+            if tid not in ts_by_task:
+                ts_by_task[tid] = {'employees': {}, 'first_date': None, 'last_date': None}
+            ts_by_task[tid]['employees'][emp] = ts_by_task[tid]['employees'].get(emp, 0) + h
+            if d:
+                if not ts_by_task[tid]['first_date'] or d < ts_by_task[tid]['first_date']:
+                    ts_by_task[tid]['first_date'] = d
+                if not ts_by_task[tid]['last_date'] or d > ts_by_task[tid]['last_date']:
+                    ts_by_task[tid]['last_date'] = d
+
+        # Collect all stages used (for visualization)
+        stages_used = {}  # id -> name
+        for t in tasks:
+            if t.get('stage_id') and isinstance(t['stage_id'], list) and len(t['stage_id']) > 1:
+                stages_used[t['stage_id'][0]] = t['stage_id'][1]
+
+        # Pre-batch: collect ALL project_user_ids from all tasks → resolve in single query
+        all_user_ids_to_resolve = set()
+        tasks_with_assignees = 0
+        if use_multi_assignee:
+            for t in tasks:
+                # project_user_ids is the multi-assignee field in this Odoo
+                if t.get('project_user_ids') and isinstance(t['project_user_ids'], list) and t['project_user_ids']:
+                    tasks_with_assignees += 1
+                    for uid in t['project_user_ids']:
+                        all_user_ids_to_resolve.add(uid)
+
+        logger.info(f"Tasks with assignees: {tasks_with_assignees}, total user_ids to resolve: {len(all_user_ids_to_resolve)}")
+
+        user_id_to_name = {}
+        if all_user_ids_to_resolve:
+            try:
+                users_data = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'res.users', 'read',
+                    [list(all_user_ids_to_resolve)], {'fields': ['name']}
+                )
+                user_id_to_name = {u['id']: u['name'] for u in users_data if u.get('name')}
+                logger.info(f"Resolved {len(user_id_to_name)} assignees")
+            except Exception as ue:
+                logger.warning(f"Batch user resolution failed: {ue}")
+
+        # Build task list
+        task_id_to_obj = {}
+        for t in tasks:
+            tid = t['id']
+            ts_info = ts_by_task.get(tid, {'employees': {}, 'first_date': None, 'last_date': None})
+            actual_hours = sum(ts_info['employees'].values())
+            planned_hours = float(t.get('planned_hours') or 0)
+            progress_pct = float(t.get('progress') or 0)
+            if progress_pct == 0 and planned_hours > 0:
+                progress_pct = min(150, round(actual_hours / planned_hours * 100, 1))
+
+            sorted_emps = sorted(ts_info['employees'].items(), key=lambda x: -x[1])
+            allocation = [{'name': e[0], 'hours': round(e[1], 1)} for e in sorted_emps]
+
+            # Collect ALL assignee names
+            # Priority: project_user_ids (resolved IDs) > users_list (string) > user_id (single)
+            assignee_names = []
+
+            # 1. Multi-user field (project_user_ids) - list of integer IDs
+            if use_multi_assignee and t.get('project_user_ids') and isinstance(t['project_user_ids'], list):
+                for uid in t['project_user_ids']:
+                    name = user_id_to_name.get(uid)
+                    if name and name not in assignee_names:
+                        assignee_names.append(name)
+
+            # 2. users_list (comma-separated string of names) - fallback if IDs didn't resolve
+            if not assignee_names and use_multi_assignee and t.get('users_list'):
+                ulist_str = str(t['users_list']).strip()
+                if ulist_str:
+                    # Split by common separators
+                    for n in ulist_str.replace(';', ',').split(','):
+                        n = n.strip()
+                        if n and n not in assignee_names:
+                            assignee_names.append(n)
+
+            # 3. Single user field (user_id) - returns [id, name] tuple
+            assignee_name = None
+            if t.get('user_id') and isinstance(t['user_id'], list) and len(t['user_id']) > 1:
+                assignee_name = t['user_id'][1]
+                if assignee_name and assignee_name not in assignee_names:
+                    assignee_names.append(assignee_name)
+
+            # Add all assignees to all_employees_set + allocation
+            for aname in assignee_names:
+                all_employees_set.add(aname)
+                if aname not in ts_info['employees']:
+                    allocation.append({'name': aname, 'hours': 0})
+
+            stage = ''
+            stage_id = None
+            if t.get('stage_id') and isinstance(t['stage_id'], list) and len(t['stage_id']) > 1:
+                stage_id = t['stage_id'][0]
+                stage = t['stage_id'][1]
+
+            phase_label = phase_id_to_name.get(t.get('phase_id', [None, ''])[0]) if t.get('phase_id') else ''
+
+            parent_id = None
+            parent_name = ''
+            if t.get('parent_id') and isinstance(t['parent_id'], list) and len(t['parent_id']) > 1:
+                parent_id = t['parent_id'][0]
+                parent_name = t['parent_id'][1]
+
+            child_count = len(t.get('child_ids') or [])
+
+            task_id_to_obj[tid] = {
+                'id': tid,
+                'name': t.get('name'),
+                'parent_id': parent_id,
+                'parent_name': parent_name,
+                'is_parent': not bool(parent_id),
+                'child_count': child_count,
+                'phase': phase_label,
+                'stage': stage,
+                'stage_id': stage_id,
+                'kanban_state': t.get('kanban_state') or 'normal',
+                'assignee': assignee_name,
+                'planned_hours': round(planned_hours, 1),
+                'actual_hours': round(actual_hours, 1),
+                'planned_days': round(planned_hours / WORK_HOURS_PER_DAY, 1) if planned_hours else 0,
+                'actual_days': round(actual_hours / WORK_HOURS_PER_DAY, 1),
+                'progress_pct': progress_pct,
+                'deadline': t.get('date_deadline'),
+                'date_start': t.get('date_start'),
+                'date_end': t.get('date_end'),
+                'allocation': allocation,
+                'inherited_allocation': [],  # filled below if task has no direct allocation
+                'first_log': ts_info['first_date'],
+                'last_log': ts_info['last_date'],
+                # Roll-up totals (filled below)
+                'subtask_planned_hours': 0,
+                'subtask_actual_hours': 0,
+                'subtask_count_total': 0,  # all descendants count
+                # Allocations from descendants (for parent display)
+                'rollup_allocation': {},
+            }
+
+        # Build parent->children index for roll-up
+        children_by_parent = {}
+        for tid, obj in task_id_to_obj.items():
+            if obj['parent_id'] and obj['parent_id'] in task_id_to_obj:
+                children_by_parent.setdefault(obj['parent_id'], []).append(tid)
+
+        def rollup(tid):
+            """Recursively sum planned + actual from all descendants."""
+            obj = task_id_to_obj.get(tid)
+            if not obj:
+                return 0, 0, 0, {}
+            child_ids = children_by_parent.get(tid, [])
+            sub_planned = 0
+            sub_actual = 0
+            sub_count = 0
+            sub_alloc = {}  # emp -> hours
+            # Add this task's own allocation to rollup
+            for a in obj.get('allocation', []):
+                sub_alloc[a['name']] = sub_alloc.get(a['name'], 0) + a['hours']
+            for cid in child_ids:
+                # Recurse
+                cp, ca, cn, calloc = rollup(cid)
+                # Direct child contributes itself + its descendants
+                child_obj = task_id_to_obj[cid]
+                sub_planned += child_obj['planned_hours'] + cp
+                sub_actual += child_obj['actual_hours'] + ca
+                sub_count += 1 + cn
+                for emp, h in calloc.items():
+                    sub_alloc[emp] = sub_alloc.get(emp, 0) + h
+            obj['subtask_planned_hours'] = round(sub_planned, 1)
+            obj['subtask_actual_hours'] = round(sub_actual, 1)
+            obj['subtask_count_total'] = sub_count
+            # For parent display: total includes own + sub
+            obj['total_planned_hours'] = round(obj['planned_hours'] + sub_planned, 1)
+            obj['total_actual_hours'] = round(obj['actual_hours'] + sub_actual, 1)
+            # Compute roll-up progress (uses total)
+            if obj['total_planned_hours'] > 0:
+                obj['rollup_progress_pct'] = min(150, round(obj['total_actual_hours'] / obj['total_planned_hours'] * 100, 1))
+            else:
+                obj['rollup_progress_pct'] = obj['progress_pct']
+            # Remaining = total_planned - total_actual
+            obj['total_remaining_hours'] = max(0, round(obj['total_planned_hours'] - obj['total_actual_hours'], 1))
+            # Per-task remaining = planned - actual (own only)
+            obj['remaining_hours'] = max(0, round(obj['planned_hours'] - obj['actual_hours'], 1))
+            obj['rollup_allocation'] = sub_alloc
+            return sub_planned, sub_actual, sub_count, sub_alloc
+
+        # Run rollup for every task
+        for tid in list(task_id_to_obj.keys()):
+            rollup(tid)
+
+        # Inheritance: if a task has no allocation, look at parent's allocation
+        # This handles new tasks where assignee hasn't been set yet (e.g. new resources)
+        for tid, t in task_id_to_obj.items():
+            if not t['allocation'] and t.get('parent_id'):
+                # Walk up to find first ancestor with allocation
+                cur_pid = t['parent_id']
+                visited = set()
+                while cur_pid and cur_pid not in visited:
+                    visited.add(cur_pid)
+                    parent = task_id_to_obj.get(cur_pid)
+                    if not parent:
+                        break
+                    if parent.get('allocation'):
+                        # Inherit allocation as "context" (lower hours = 0 to indicate inherited)
+                        t['inherited_allocation'] = parent['allocation'][:3]  # top 3 from parent
+                        t['allocation_source'] = f"inherited from: {parent['name']}"
+                        break
+                    cur_pid = parent.get('parent_id')
+
+        # Apply employee filter (matches allocation OR assignee)
+        # Walk UP entire parent chain to keep ancestors visible (for context)
+        if employees_filter:
+            matching_task_ids = set()
+            for tid, t in task_id_to_obj.items():
+                emp_names = {a['name'] for a in t.get('allocation', [])}
+                if t.get('assignee'):
+                    emp_names.add(t['assignee'])
+                if any(e in emp_names for e in employees_filter):
+                    matching_task_ids.add(tid)
+                    cur = t
+                    visited = {tid}
+                    while cur and cur.get('parent_id') and cur['parent_id'] not in visited:
+                        pid = cur['parent_id']
+                        if pid in task_id_to_obj:
+                            matching_task_ids.add(pid)
+                            visited.add(pid)
+                            cur = task_id_to_obj[pid]
+                        else:
+                            break
+            task_id_to_obj = {k: v for k, v in task_id_to_obj.items() if k in matching_task_ids}
+
+        result = list(task_id_to_obj.values())
+
+        # Sort: parents first by name, then their children grouped
+        # Build hierarchical order
+        parents = [t for t in result if t['is_parent']]
+        parents.sort(key=lambda x: (x['name'] or '').lower())
+
+        ordered = []
+        seen = set()
+        for p in parents:
+            ordered.append(p)
+            seen.add(p['id'])
+            # Append children of this parent
+            children = [t for t in result if t['parent_id'] == p['id']]
+            children.sort(key=lambda x: (-x['progress_pct'], x['name'] or ''))
+            for c in children:
+                ordered.append(c)
+                seen.add(c['id'])
+        # Append orphans (children without parent in current set)
+        for t in result:
+            if t['id'] not in seen:
+                ordered.append(t)
+
+        # Summary
+        total_planned = sum(t['planned_hours'] for t in ordered)
+        total_actual = sum(t['actual_hours'] for t in ordered)
+        overall_progress = round(min(150, total_actual / total_planned * 100), 1) if total_planned > 0 else 0
+
+        return jsonify({
+            'tasks': ordered,
+            'connected': True,
+            'phases_available': [p['name'] for p in phases],
+            'phases_active': phase_names,
+            'employees_available': sorted(all_employees_set),
+            'employees_filter': employees_filter,
+            'stages_used': [{'id': sid, 'name': name} for sid, name in stages_used.items()],
+            'summary': {
+                'total_tasks': len(ordered),
+                'parent_tasks': sum(1 for t in ordered if t['is_parent']),
+                'sub_tasks': sum(1 for t in ordered if not t['is_parent']),
+                'total_planned_hours': round(total_planned, 1),
+                'total_actual_hours': round(total_actual, 1),
+                'total_planned_days': round(total_planned / WORK_HOURS_PER_DAY, 1),
+                'total_actual_days': round(total_actual / WORK_HOURS_PER_DAY, 1),
+                'overall_progress_pct': overall_progress,
+                'tasks_with_planning': sum(1 for t in ordered if t['planned_hours'] > 0),
+                'tasks_in_progress': sum(1 for t in ordered if 0 < t['progress_pct'] < 100),
+                'tasks_completed': sum(1 for t in ordered if t['progress_pct'] >= 100),
+            },
+            'phase_group': phase_group,
+        })
+    except Exception as e:
+        logger.error(f"api_overview_analysis: {e}\n{traceback.format_exc()}")
+        return jsonify({'tasks': [], 'connected': False, 'error': str(e)})
+
+
+
+SERVICES_OVERRIDES_FILE = os.path.join(PERSIST_DIR, 'services_overrides.json')
+RISKS_FILE = os.path.join(PERSIST_DIR, 'risks_issues.json')
+
+# Google Sheet for team members
+TEAM_SHEET_ID = os.environ.get('TEAM_SHEET_ID', '1MtpNyBKnoayhdgpDbe2WacjZgJOLCSeMjhDuOhabo0Y')
+TEAM_SHEET_GID = os.environ.get('TEAM_SHEET_GID', '0')
+
+def fetch_team_members_from_sheet():
+    """Fetch team members from public Google Sheet (CSV export).
+    Returns: {success: bool, members: [...], error: str, columns: [...]}
+    """
+    if not TEAM_SHEET_ID:
+        return {'success': False, 'error': 'TEAM_SHEET_ID not configured', 'members': []}
+
+    csv_url = f'https://docs.google.com/spreadsheets/d/{TEAM_SHEET_ID}/export?format=csv&gid={TEAM_SHEET_GID}'
+    try:
+        import urllib.request
+        req = urllib.request.Request(csv_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            content = resp.read().decode('utf-8', errors='replace')
+
+        import csv
+        from io import StringIO
+        reader = csv.reader(StringIO(content))
+        rows = list(reader)
+        if not rows:
+            return {'success': False, 'error': 'Sheet is empty', 'members': []}
+
+        # First row = headers
+        headers = [h.strip() for h in rows[0]]
+
+        # Detect department column (first column, usually called "Department")
+        dept_col_idx = 0
+        for i, h in enumerate(headers):
+            if h.lower() in ('department', 'team', 'group'):
+                dept_col_idx = i
+                break
+
+        members = []
+        last_dept = ''  # track last seen department for merged-cell forward-fill
+        for r in rows[1:]:
+            if not r:
+                continue
+
+            # Forward-fill department column (handles merged cells in sheet)
+            dept_value = (r[dept_col_idx] if dept_col_idx < len(r) else '').strip()
+            if dept_value:
+                last_dept = dept_value
+
+            # Build row dict using current values
+            row_dict = {}
+            for i, h in enumerate(headers):
+                if not h:
+                    continue
+                val = (r[i] if i < len(r) else '').strip()
+                row_dict[h] = val
+
+            # Override department with forward-filled value
+            if dept_col_idx < len(headers):
+                row_dict[headers[dept_col_idx]] = last_dept
+
+            # Skip empty/separator rows: must have at least a member name
+            # Find the "Members" column (usually 2nd col)
+            member_value = ''
+            for h_key in row_dict:
+                if h_key.lower() in ('members', 'member', 'name', 'full name'):
+                    member_value = row_dict[h_key]
+                    break
+            # Fallback: use 2nd column if no Members header found
+            if not member_value and len(r) > 1:
+                member_value = (r[1] if 1 < len(r) else '').strip()
+
+            if not member_value:
+                continue  # skip separator rows
+
+            members.append(row_dict)
+
+        return {
+            'success': True,
+            'members': members,
+            'columns': headers,
+            'total': len(members),
+            'sheet_url': f'https://docs.google.com/spreadsheets/d/{TEAM_SHEET_ID}/edit'
         }
-      } catch (e) {
-        inp.style.borderColor = 'var(--red)';
-        console.error('Budget save failed:', e);
-      }
-    });
-  });
-}
-
-function renderProfitability(data, phaseKey) {
-  if (!data.months || !data.months.length) {
-    return '<div class="loading">No profitability data</div>';
-  }
-
-  // Pre-fetch overrides
-  fetch('/api/plan-overrides').then(r => r.json()).then(o => {
-    AppState.planOverrides = o.plan_overrides || {};
-    setTimeout(() => applyPlanOverrides(phaseKey), 100);
-  });
-
-  // Latest month KPIs (using current sheet values for now)
-  const latest = data.months[data.months.length - 1];
-  let kpiHtml = '';
-  if (latest) {
-    const completion = (parseFloat(latest['% Completion from plan']) || 0) * 100;
-    const variance = parseFloat(latest['Variance']) || 0;
-    const remainingMD = parseFloat(latest['Estimated Remaining (MD)']) || 0;
-    kpiHtml = `
-      <div class="kpi-strip kpi-strip-small">
-        <div class="kpi-card kpi-blue compact">
-          <div class="kpi-label">% COMPLETION</div>
-          <div class="kpi-value">${fmt.decimal(completion)}<span class="kpi-unit">%</span></div>
-          <div class="kpi-foot">from plan (latest month)</div>
-        </div>
-        <div class="kpi-card kpi-amber compact">
-          <div class="kpi-label">REMAINING MDs</div>
-          <div class="kpi-value">${fmt.num(remainingMD)}</div>
-        </div>
-        <div class="kpi-card ${variance < 0 ? 'kpi-red' : 'kpi-green'} compact">
-          <div class="kpi-label">COST VARIANCE</div>
-          <div class="kpi-value">${fmt.money(Math.abs(variance))}</div>
-          <div class="kpi-foot" style="color: ${variance < 0 ? 'var(--red)' : 'var(--green)'};">${variance < 0 ? 'Over budget' : 'Under budget'}</div>
-        </div>
-        <div class="kpi-card kpi-navy compact">
-          <div class="kpi-label">CPI</div>
-          <div class="kpi-value">${fmt.decimal(parseFloat(latest['CPI']) || 0)}</div>
-          <div class="kpi-foot">cost performance</div>
-        </div>
-      </div>
-    `;
-  }
-
-  // Editable: % Completion and Remaining MDs
-  const cols = [
-    { k: 'Month', label: 'Month', type: 'date' },
-    { k: 'Estimated Effort MDs', label: 'Estimated MDs', type: 'num' },
-    { k: 'This month MDs', label: 'This Month', type: 'num' },
-    { k: 'Actual Effort to Date (MD)', label: 'Actual MDs', type: 'num' },
-    { k: '% Completion', label: '% Completion (editable)', type: 'editable-pct' },
-    { k: 'Remaining', label: 'Remaining MDs (editable)', type: 'editable-num' },
-    { k: 'Plan MDs', label: 'Plan MDs (auto)', type: 'computed-plan' },
-    { k: 'EAC MDs', label: 'EAC MDs', type: 'num' },
-    { k: 'Variance', label: 'Variance', type: 'money' },
-    { k: 'CPI', label: 'CPI', type: 'num' },
-    { k: 'Profit at Completion', label: 'Profit @ Comp', type: 'money' },
-    { k: 'Profit at Completion (%)', label: 'Profit %', type: 'pct' },
-  ];
-
-  let html = kpiHtml + `<div class="card">
-    <h3 class="card-title">Monthly Variance
-      <span class="muted-text">— % Completion & Remaining editable; Plan auto-calculated · auto-saved on change</span>
-    </h3>
-    <div class="table-scroll"><table class="data-table" id="profit-table-${phaseKey}">
-    <thead><tr>`;
-  cols.forEach(c => html += `<th class="${c.type !== 'date' ? 'num' : ''}">${c.label}</th>`);
-  html += '</tr></thead><tbody>';
-
-  data.months.forEach((m, idx) => {
-    const monthDate = String(m['Month'] || '').slice(0, 10);
-    const monthKey = monthDate.slice(0, 7);
-    const actual = parseFloat(m['Actual Effort to Date (MD)']) || 0;
-    // Default % Completion from sheet
-    const sheetCompletionPct = (parseFloat(m['% Completion from plan']) || 0) * 100;
-    const sheetRemaining = parseFloat(m['Estimated Remaining (MD)']) || 0;
-
-    html += `<tr data-month-key="${monthKey}" data-actual="${actual}">`;
-    cols.forEach(c => {
-      let cell = '—';
-      if (c.type === 'date') {
-        cell = monthDate;
-      } else if (c.type === 'editable-pct') {
-        cell = `<input type="number" step="0.01" min="0" max="200" class="completion-input" data-phase="${phaseKey}" data-month="${monthKey}" data-field="completion" value="${sheetCompletionPct.toFixed(2)}" style="width: 80px; padding: 4px 8px; font-family: var(--mono); font-size: 12px; text-align: right; border: 1px solid var(--border-strong); border-radius: 4px;"><span style="font-size: 11px; color: var(--text-muted);">%</span>`;
-      } else if (c.type === 'editable-num') {
-        cell = `<input type="number" step="0.01" min="0" class="remaining-input" data-phase="${phaseKey}" data-month="${monthKey}" data-field="remaining" value="${sheetRemaining.toFixed(2)}" style="width: 95px; padding: 4px 8px; font-family: var(--mono); font-size: 12px; text-align: right; border: 1px solid var(--border-strong); border-radius: 4px;">`;
-      } else if (c.type === 'computed-plan') {
-        cell = `<span class="computed-plan-${monthKey}">—</span>`;
-      } else {
-        let v = m[c.k];
-        if (v != null && v !== '') {
-          if (c.type === 'pct') cell = fmt.decimal((parseFloat(v) || 0) * 100) + '%';
-          else if (c.type === 'money') cell = fmt.money(v);
-          else cell = fmt.decimal(v);
+    except Exception as e:
+        return {
+            'success': False,
+            'error': f'Could not fetch sheet: {e}. Make sure sheet is shared "Anyone with link can view".',
+            'members': [],
+            'sheet_url': f'https://docs.google.com/spreadsheets/d/{TEAM_SHEET_ID}/edit'
         }
-      }
-      const align = c.type !== 'date' ? 'num' : '';
-      html += `<td class="${align}">${cell}</td>`;
-    });
-    html += '</tr>';
-  });
-  html += '</tbody></table></div></div>';
 
-  setTimeout(() => {
-    const table = document.getElementById(`profit-table-${phaseKey}`);
-    if (!table) return;
-    // Initial render of computed Plan
-    table.querySelectorAll('tr[data-month-key]').forEach(tr => recomputePlanRow(tr));
-    // Wire inputs
-    table.querySelectorAll('.completion-input, .remaining-input').forEach(inp => {
-      inp.addEventListener('input', () => recomputePlanRow(inp.closest('tr')));
-      inp.addEventListener('change', () => saveOverride(inp));
-      // Auto-save on blur as well (debounced)
-      inp.addEventListener('blur', () => saveOverride(inp));
-    });
-  }, 50);
 
-  return html;
+@app.route('/api/team/summary')
+def api_team_summary():
+    """Returns count of ACTIVE members (Active=Yes) for the overview KPI card.
+    Inactive members and unassigned slots are excluded from this count."""
+    result = fetch_team_members_from_sheet()
+    if not result['success']:
+        return jsonify({'success': False, 'total': 0, 'error': result.get('error')})
+
+    members = result.get('members', [])
+    columns = result.get('columns', [])
+    cols_lower = {c.lower(): c for c in columns}
+
+    # Find columns
+    active_col = None
+    member_col = None
+    site_col = None
+    for c_lower, c_orig in cols_lower.items():
+        if 'active' in c_lower and not active_col:
+            active_col = c_orig
+        if c_lower in ('members', 'member', 'name', 'full name') and not member_col:
+            member_col = c_orig
+        if ('onsite' in c_lower or 'offshore' in c_lower or 'on-site' in c_lower) and not site_col:
+            site_col = c_orig
+
+    active_count = 0
+    onsite_count = 0
+    offshore_count = 0
+    for m in members:
+        # Skip unassigned
+        name = (m.get(member_col, '') if member_col else '').strip().lower()
+        if not name or 'not assigned' in name or 'unassigned' in name:
+            continue
+        # Check active flag
+        if active_col:
+            active_val = (m.get(active_col, '') or '').strip().lower()
+            if active_val in ('no', 'n', 'false', '0', 'inactive'):
+                continue
+        active_count += 1
+
+        # Read onsite/offshore from dedicated column in sheet
+        if site_col:
+            sv = (m.get(site_col, '') or '').strip().lower()
+            if sv in ('onsite', 'on-site', 'on site'):
+                onsite_count += 1
+            elif sv in ('offshore', 'off-shore', 'off shore', 'remote'):
+                offshore_count += 1
+
+    return jsonify({
+        'success': True,
+        'total': active_count,
+        'total_raw': len(members),
+        'onsite': onsite_count,
+        'offshore': offshore_count,
+    })
+
+
+@app.route('/api/team/members')
+def api_team_members():
+    """Returns full team list with auto-detected hierarchy"""
+    result = fetch_team_members_from_sheet()
+    if not result['success']:
+        return jsonify(result)
+
+    members = result['members']
+    columns = result['columns']
+
+    # Auto-detect column intent (case-insensitive matching)
+    col_map = {}
+    cols_lower = {c.lower(): c for c in columns}
+    for keyword, key in [
+        ('member', 'name'), ('full name', 'name'), ('name', 'name'),
+        ('title', 'title'),  # job title (PM, Lead BA, etc.)
+        ('position', 'position'),  # full position string (KSA - Project Manager)
+        ('postion', 'position'),  # typo handling
+        ('role', 'role'),
+        ('department', 'department'), ('team', 'team'), ('squad', 'team'), ('group', 'team'),
+        ('manager', 'manager'), ('reports to', 'manager'), ('reporting', 'manager'),
+        ('hour rate', 'hour_rate'), ('rate', 'hour_rate'),
+        ('overtime', 'overtime_rate'),
+        ('active', 'active'),
+        ('allocation', 'allocation'),
+        ('onsite/offshore', 'onsite_offshore'),  # explicit column from sheet
+        ('on-site', 'onsite_offshore'),
+        ('onsite', 'onsite_offshore'),
+        ('offshore', 'onsite_offshore'),
+        ('site', 'onsite_offshore'),
+        ('email', 'email'), ('mail', 'email'),
+        ('phone', 'phone'), ('mobile', 'phone'),
+        ('country', 'country'), ('location', 'country'),
+        ('start date', 'start_date'), ('joined', 'start_date'),
+        ('status', 'status'),
+    ]:
+        for c_lower, c_orig in cols_lower.items():
+            if keyword in c_lower and key not in col_map:
+                col_map[key] = c_orig
+                break
+
+    # Normalize each member
+    normalized = []
+    for m in members:
+        # Get name
+        name = m.get(col_map.get('name', ''), '') or m.get(columns[0] if columns else '', '')
+        if not name or name.lower().startswith('not assigned'):
+            # Mark unassigned slots
+            name = name or '(Unassigned)'
+
+        # Get position string
+        position_str = m.get(col_map.get('position', ''), '')
+
+        # Read onsite/offshore directly from sheet column (case-insensitive)
+        onsite_offshore = ''
+        site_val = (m.get(col_map.get('onsite_offshore', ''), '') or '').strip().lower()
+        if site_val in ('onsite', 'on-site', 'on site'):
+            onsite_offshore = 'Onsite'
+        elif site_val in ('offshore', 'off-shore', 'off shore', 'remote'):
+            onsite_offshore = 'Offshore'
+
+        # Active flag - default Yes if column missing. Unassigned slots are NOT active.
+        active_val = (m.get(col_map.get('active', ''), '') or '').strip().lower()
+        is_unassigned = name == '(Unassigned)' or 'not assigned' in (name or '').lower()
+        is_active = (active_val not in ('no', 'n', 'false', '0', 'inactive')) and not is_unassigned
+
+        # Title is the simple title (PM, Lead BA), use as role if no role column
+        title = m.get(col_map.get('title', ''), '')
+        role = m.get(col_map.get('role', ''), '') or title
+
+        normalized.append({
+            'name': name,
+            'role': role,
+            'title': title,
+            'position': position_str,
+            'team': m.get(col_map.get('team', ''), ''),
+            'manager': m.get(col_map.get('manager', ''), ''),
+            'department': m.get(col_map.get('department', ''), ''),
+            'email': m.get(col_map.get('email', ''), ''),
+            'phone': m.get(col_map.get('phone', ''), ''),
+            'country': m.get(col_map.get('country', ''), ''),
+            'status': m.get(col_map.get('status', ''), ''),
+            'hour_rate': m.get(col_map.get('hour_rate', ''), ''),
+            'allocation': m.get(col_map.get('allocation', ''), ''),
+            'active': is_active,
+            'onsite_offshore': onsite_offshore,
+            'is_unassigned': is_unassigned,
+            'raw': m,
+        })
+
+    # Build hierarchy: Use Department column from sheet directly
+    # Position rank from Title field (Manager > Lead > Senior > Junior > Unassigned)
+
+    def position_rank(title, role):
+        """Return rank: 0 = highest, higher = lower"""
+        text = ((title or '') + ' ' + (role or '')).lower()
+        # Manager / Director / PM
+        if any(k in text for k in ['director', 'head of', 'chief', 'cto', 'cio', 'ceo']):
+            return 0
+        if any(k in text for k in ['manager', 'pm', 'project coordinator', 'coordinator']):
+            return 1
+        if 'pmo' in text:
+            return 2
+        # Lead / Principal
+        if any(k in text for k in ['lead', 'principal']):
+            return 3
+        # Senior
+        if any(k in text for k in ['senior', 'sr.', 'sr ', 'lead ba', 'manager ba']):
+            return 4
+        # Mid (default for engineers without prefix)
+        if any(k in text for k in ['engineer', 'analyst', 'designer', 'developer', 'consultant', 'specialist',
+                                    'sw', 'ba ', 'ux ', 'qc']):
+            if 'junior' in text or 'jr' in text:
+                return 6
+            return 5
+        # Junior
+        if any(k in text for k in ['junior', 'jr', 'intern', 'trainee']):
+            return 6
+        return 7
+
+    # Group by Department directly
+    # RULE: Hide inactive members from hierarchy
+    # EXCEPTION: Mariam (PMO) is always shown in Management even if inactive
+    dept_groups = {}
+    for m in normalized:
+        # Skip inactive members EXCEPT Mariam (PMO is always shown)
+        if not m.get('active'):
+            name_lower = (m.get('name') or '').lower()
+            title_lower = (m.get('title') or '').lower()
+            is_mariam_pmo = 'mariam' in name_lower and 'pmo' in title_lower
+            if not is_mariam_pmo:
+                continue  # skip this inactive member
+
+        # Skip unassigned slots
+        if m.get('is_unassigned'):
+            continue
+
+        dept = (m.get('department') or '').strip() or 'Other'
+        if dept not in dept_groups:
+            dept_groups[dept] = []
+        dept_groups[dept].append(m)
+
+    # Sort within each department by position rank, then by name
+    def sort_key(m):
+        return (
+            position_rank(m.get('title'), m.get('role')),
+            (m.get('name') or '').lower()
+        )
+
+    for d in dept_groups:
+        dept_groups[d].sort(key=sort_key)
+
+    # Build final ordered groups list
+    grouped_list = []
+
+    # Define preferred order for departments
+    DEPT_ORDER = [
+        'Management',
+        'Business Team', 'Bussines Team',  # support both spellings
+        'Development Team', 'Development',
+        'AI Team', 'AI',
+        'UX Team', 'UI/UX', 'UX',
+        'QC Team', 'QC',
+        'UAT Team', 'UAT',
+        'Infrastructure Team', 'InfraStructure Team', 'InfraStrcture Team', 'Infrastructure',
+        'DevOps',
+    ]
+
+    def dept_order_key(name):
+        # Find the first matching pattern in DEPT_ORDER
+        n = name.lower().strip()
+        for i, dn in enumerate(DEPT_ORDER):
+            if dn.lower() == n:
+                return i
+        # Partial match
+        for i, dn in enumerate(DEPT_ORDER):
+            if dn.lower() in n or n in dn.lower():
+                return i
+        return 999
+
+    sorted_depts = sorted(dept_groups.items(), key=lambda x: (dept_order_key(x[0]), x[0]))
+
+    for dept_name, dept_members in sorted_depts:
+        # Add icon for Management
+        display_name = dept_name
+        is_mgmt = 'management' in dept_name.lower()
+        if is_mgmt and not display_name.startswith('👑'):
+            display_name = '👑 ' + display_name
+
+        # Counts (only members shown in this group - inactive already excluded above)
+        # Mariam (PMO) is the only inactive shown - count her separately
+        shown_count = len(dept_members)
+        onsite_count = sum(1 for m in dept_members if m.get('onsite_offshore') == 'Onsite')
+        offshore_count = sum(1 for m in dept_members if m.get('onsite_offshore') == 'Offshore')
+
+        grouped_list.append({
+            'name': display_name,
+            'members': dept_members,
+            'count': shown_count,
+            'active_count': shown_count,  # all shown members are "in scope"
+            'onsite_count': onsite_count,
+            'offshore_count': offshore_count,
+            'is_management': is_mgmt,
+        })
+
+    # Compute totals from ALL normalized (active count = excludes inactive + unassigned)
+    total_active = sum(1 for m in normalized if m.get('active'))
+    total_onsite = sum(1 for m in normalized if m.get('onsite_offshore') == 'Onsite' and m.get('active'))
+    total_offshore = sum(1 for m in normalized if m.get('onsite_offshore') == 'Offshore' and m.get('active'))
+
+    return jsonify({
+        'success': True,
+        'total': len(normalized),
+        'total_active': total_active,
+        'total_onsite': total_onsite,
+        'total_offshore': total_offshore,
+        'columns': columns,
+        'col_map': col_map,
+        'hierarchy_key': 'department',
+        'groups': grouped_list,
+        'all_members': normalized,
+        'sheet_url': result['sheet_url'],
+    })
+
+
+def load_risks():
+    """Load risks from DB (replaces JSON file)."""
+    return db.list_risks()
+
+
+def save_risks(data):
+    """Backward-compat: bulk save a list of risks. Used by restore endpoint."""
+    if isinstance(data, list):
+        for r in data:
+            if isinstance(r, dict) and r.get('id'):
+                db.upsert_risk(r['id'], r)
+
+
+@app.route('/api/risks')
+def api_risks_list():
+    """List all risks/issues, optionally filtered by phase_group"""
+    phase_group = request.args.get('phase_group')
+    risks = load_risks()
+    if phase_group:
+        risks = [r for r in risks if r.get('phase_group') == phase_group]
+    risks.sort(key=lambda x: (
+        {'Critical': 0, 'High': 1, 'Medium': 2, 'Low': 3}.get(x.get('severity'), 4),
+        -int(str(x.get('updated_at', '')).replace('-', '').replace(':', '').replace('T', '').replace('.', '')[:14] or 0)
+    ))
+    return jsonify({'risks': risks, 'count': len(risks)})
+
+
+@app.route('/api/risks', methods=['POST'])
+def api_risks_save():
+    """Create or update a risk/issue. Body should include id (or new uuid), and fields."""
+    body = request.json or {}
+    rid = body.get('id')
+    now_iso = datetime.now().isoformat()
+
+    if not rid:
+        # Create new
+        import uuid
+        rid = str(uuid.uuid4())[:8]
+        new_risk = {
+            'id': rid,
+            'created_at': now_iso,
+            'updated_at': now_iso,
+            'phase_group': body.get('phase_group', 'development'),
+            'type': body.get('type', 'Risk'),
+            'title': body.get('title', ''),
+            'description': body.get('description', ''),
+            'mitigation': body.get('mitigation', ''),
+            'severity': body.get('severity', 'Medium'),
+            'status': body.get('status', 'Open'),
+            'owner': body.get('owner', ''),
+            'date_identified': body.get('date_identified', date.today().isoformat()),
+            'target_date': body.get('target_date', ''),
+        }
+        db.upsert_risk(rid, new_risk)
+        return jsonify({'ok': True, 'risk': new_risk})
+
+    # Update existing - read current, merge body, upsert
+    risks = load_risks()
+    existing = next((r for r in risks if r.get('id') == rid), None)
+    if not existing:
+        return jsonify({'error': 'Risk not found'}), 404
+    for k in ['phase_group', 'type', 'title', 'description', 'mitigation',
+              'severity', 'status', 'owner', 'date_identified', 'target_date']:
+        if k in body:
+            existing[k] = body[k]
+    existing['updated_at'] = now_iso
+    db.upsert_risk(rid, existing)
+    return jsonify({'ok': True, 'risk': existing})
+
+
+@app.route('/api/risks/<rid>', methods=['DELETE'])
+def api_risks_delete(rid):
+    db.delete_risk(rid)
+    return jsonify({'ok': True})
+
+def load_services_overrides():
+    """Load services overrides from DB.
+    Returns: {service_key: {dept: {field: value}}}
+    """
+    # Stored as namespace='services', phase=<service_key>, key='<dept>.<field>'
+    raw = db.get_namespace_overrides('services')
+    out = {}
+    for service_key, items in raw.items():
+        if not service_key:
+            continue
+        out[service_key] = {}
+        for combined, val in items.items():
+            if '.' in combined:
+                dept, field = combined.rsplit('.', 1)
+                if dept not in out[service_key]:
+                    out[service_key][dept] = {}
+                out[service_key][dept][field] = val
+    return out
+
+
+def save_services_overrides(data):
+    """Bulk save (used by restore endpoint).
+    Format: {service_key: {dept: {field: value}}}
+    """
+    for service_key, dept_data in data.items():
+        if not isinstance(dept_data, dict):
+            continue
+        for dept, fields in dept_data.items():
+            if isinstance(fields, dict):
+                for field, value in fields.items():
+                    db.set_override('services', service_key, f"{dept}.{field}", value)
+
+
+def get_odoo_parent_task_metadata(service_name):
+    """For a given service name, find the matching parent task in Odoo and return:
+    - earliest entry date (actual_start)
+    - assignee (from task user_ids/user_id)
+    - top contributor (most hours)
+    """
+    if not odoo.uid:
+        if not odoo.connect():
+            return {}
+    try:
+        # Search for task by name
+        tasks = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [[('name', '=', service_name), ('parent_id', '=', False)]],
+            {'fields': ['id', 'name', 'user_id', 'date_start', 'date_end',
+                        'date_deadline', 'stage_id', 'kanban_state'], 'limit': 5}
+        )
+        if not tasks:
+            # Try ilike
+            tasks = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.task', 'search_read',
+                [[('name', 'ilike', service_name), ('parent_id', '=', False)]],
+                {'fields': ['id', 'name', 'user_id', 'date_start', 'date_end',
+                            'date_deadline', 'stage_id', 'kanban_state'], 'limit': 5}
+            )
+        if not tasks:
+            return {}
+        task = tasks[0]
+        meta = {
+            'task_id': task['id'],
+            'task_name': task['name'],
+        }
+        if task.get('user_id') and isinstance(task['user_id'], list) and len(task['user_id']) > 1:
+            meta['assignee'] = task['user_id'][1]
+        if task.get('date_start'):
+            meta['actual_start'] = str(task['date_start'])[:10]
+        if task.get('date_end'):
+            meta['actual_end'] = str(task['date_end'])[:10]
+        if task.get('stage_id') and isinstance(task['stage_id'], list) and len(task['stage_id']) > 1:
+            meta['odoo_stage'] = task['stage_id'][1]
+        return meta
+    except Exception as e:
+        logger.warning(f"Odoo task lookup for {service_name}: {e}")
+        return {}
+
+
+@app.route('/api/services')
+def api_services():
+    """Services with department-level breakdown: baseline / planned / actuals / status per dept.
+    Returns one row per (service, department) combination.
+    """
+    services = load_services()
+    overrides = load_services_overrides()
+
+    # Compute actuals from Odoo timesheets grouped by service (parent_task)
+    data, _ = get_all_timesheets()
+    actuals_by_service = {}
+    for entry in data:
+        s = entry.get('service', '')
+        if not s:
+            continue
+        emp = entry.get('employee', 'Unknown')
+        d = entry.get('date', '')
+        h = entry.get('hours', 0)
+        if s not in actuals_by_service:
+            actuals_by_service[s] = {
+                'hours': 0,
+                'first_date': None,
+                'last_date': None,
+                'employees_hours': {},  # emp -> total hours
+                'employees_dates': {},  # emp -> {first_date, last_date}
+            }
+        actuals_by_service[s]['hours'] += h
+        if d:
+            if not actuals_by_service[s]['first_date'] or d < actuals_by_service[s]['first_date']:
+                actuals_by_service[s]['first_date'] = d
+            if not actuals_by_service[s]['last_date'] or d > actuals_by_service[s]['last_date']:
+                actuals_by_service[s]['last_date'] = d
+        actuals_by_service[s]['employees_hours'][emp] = actuals_by_service[s]['employees_hours'].get(emp, 0) + h
+        # Track each employee's first and last log date for this service
+        if emp not in actuals_by_service[s]['employees_dates']:
+            actuals_by_service[s]['employees_dates'][emp] = {'first': d, 'last': d}
+        else:
+            ed = actuals_by_service[s]['employees_dates'][emp]
+            if d and (not ed['first'] or d < ed['first']):
+                ed['first'] = d
+            if d and (not ed['last'] or d > ed['last']):
+                ed['last'] = d
+
+    today = date.today().isoformat()
+
+    # Build response: list of services with all dept data merged + odoo metadata
+    result = []
+    for s in services:
+        name = s.get('اسم الخدمة المستقبلي', '') or ''
+        if not name:
+            continue
+
+        # Match service name to actuals (exact or fuzzy)
+        actual_entry = actuals_by_service.get(name)
+        if not actual_entry and name:
+            for k, v in actuals_by_service.items():
+                if k and (name in k or k in name):
+                    actual_entry = v
+                    break
+
+        actual_hours = actual_entry['hours'] if actual_entry else 0
+        actual_days = round(actual_hours / WORK_HOURS_PER_DAY, 1)
+
+        # Top contributor (fallback)
+        top_contributor = None
+        if actual_entry and actual_entry.get('employees_hours'):
+            top_contributor = max(actual_entry['employees_hours'].items(), key=lambda x: x[1])[0]
+
+        # Date-based assignation: list of people who logged time within planned date range
+        # (or all contributors if dates are missing). Sorted by total hours descending.
+        assignation_list = []
+        if actual_entry and actual_entry.get('employees_hours'):
+            planned_start = s.get('planned_start')
+            planned_end = s.get('planned_end')
+            emps_in_range = {}
+            emps_outside = {}
+            for emp, ed in actual_entry.get('employees_dates', {}).items():
+                emp_first = ed.get('first')
+                emp_last = ed.get('last')
+                hours = actual_entry['employees_hours'].get(emp, 0)
+                # Check if their work overlaps with planned window
+                in_range = True
+                if planned_start and emp_last and emp_last < planned_start:
+                    in_range = False
+                if planned_end and emp_first and emp_first > planned_end:
+                    in_range = False
+                if in_range:
+                    emps_in_range[emp] = hours
+                else:
+                    emps_outside[emp] = hours
+            # Prefer in-range, sorted by hours desc; fall back to outside
+            sorted_in = sorted(emps_in_range.items(), key=lambda x: -x[1])
+            sorted_out = sorted(emps_outside.items(), key=lambda x: -x[1])
+            assignation_list = [e[0] for e in sorted_in] + [e[0] for e in sorted_out]
+
+        auto_assignation = ', '.join(assignation_list[:3]) if assignation_list else ''
+
+        # Try Odoo task metadata (assignee, dates, stage)
+        odoo_meta = {}  # disabled by default — only fetch if needed (slow)
+        # Uncomment to enable: odoo_meta = get_odoo_parent_task_metadata(name)
+
+        # Override key — service ID is the Arabic name (stable)
+        override_key = name
+        sov = overrides.get(override_key, {})
+
+        # Build per-dept rows
+        baseline_by_dept = s.get('baseline_by_dept', {}) or {}
+
+        # Prepare base service data
+        service_obj = {
+            'name': name,
+            'planned_team': s.get('planned_team'),
+            'planned_start': s.get('planned_start'),
+            'planned_end': s.get('planned_end'),
+            'planned_wd_roadmap': s.get('planned_wd_roadmap'),
+            # Odoo-derived
+            'actual_start': (actual_entry or {}).get('first_date') or odoo_meta.get('actual_start'),
+            'actual_end_from_logs': (actual_entry or {}).get('last_date'),
+            'odoo_assignee': odoo_meta.get('assignee'),
+            'odoo_stage': odoo_meta.get('odoo_stage'),
+            'top_contributor': top_contributor,
+            'actuals_total_hours': actual_hours,
+            'actuals_total_days': actual_days,
+            # Departments breakdown
+            'departments': {},
+        }
+
+        # For each department with non-zero baseline, build a row
+        for dept_label in DEPT_LABELS.values():
+            base_v = baseline_by_dept.get(dept_label)
+            # New DB format: sov is already {dept: {field: val}}
+            dept_override = sov.get(dept_label, {}) if isinstance(sov, dict) else {}
+
+            # Read overrides
+            planned = dept_override.get('planned')
+            remaining = dept_override.get('remaining')
+            status = dept_override.get('status')
+            assignation = dept_override.get('assignation')
+
+            # Auto-defaults if not overridden
+            if status is None:
+                # Compute auto status using actuals
+                if base_v and actual_days >= base_v:
+                    status = 'Done'
+                elif s.get('planned_end') and s['planned_end'] < today and base_v and actual_days < base_v:
+                    status = 'Overdue'
+                elif s.get('planned_start') and s['planned_start'] <= today and base_v:
+                    status = 'In Progress' if actual_days > 0 else 'Not Started'
+                else:
+                    status = 'Not Started'
+
+            # Auto-default assignation: date-aware list (in-range contributors first)
+            if not assignation:
+                assignation = odoo_meta.get('assignee') or auto_assignation or top_contributor or ''
+
+            # Auto-default remaining
+            if remaining is None and base_v is not None:
+                remaining = max(0, base_v - actual_days)
+
+            service_obj['departments'][dept_label] = {
+                'baseline': base_v,
+                'planned': planned,
+                'actuals_days': actual_days if base_v else None,
+                'assignation': assignation,
+                'remaining': remaining,
+                'status': status,
+                'has_baseline': base_v is not None and base_v > 0,
+            }
+
+        # Actual end: latest log date if all departments are 'Done'
+        all_done = all(
+            d['status'] == 'Done'
+            for d in service_obj['departments'].values()
+            if d['has_baseline']
+        )
+        service_obj['actual_end'] = service_obj['actual_end_from_logs'] if all_done else None
+
+        result.append(service_obj)
+
+    # Default sort by planned_start (roadmap order). Frontend will re-sort to push Done to bottom per-dept.
+    result.sort(key=lambda x: (x.get('planned_start') or '9999-12-31', x.get('name') or ''))
+
+    return jsonify({
+        'services': result,
+        'departments': list(DEPT_LABELS.values()),
+        'today': today,
+    })
+
+
+@app.route('/api/services/override', methods=['POST'])
+def api_services_override():
+    """Save manual override for a (service, dept, field).
+    Body: { service_name, department, field, value }
+    Fields: planned, remaining, status, assignation
+    """
+    body = request.json or {}
+    service_name = body.get('service_name')
+    dept = body.get('department')
+    field = body.get('field')
+    value = body.get('value')
+
+    if not service_name or not dept or not field:
+        return jsonify({'error': 'service_name, department, and field required'}), 400
+
+    valid_fields = {'planned', 'remaining', 'status', 'assignation'}
+    if field not in valid_fields:
+        return jsonify({'error': f'field must be one of {valid_fields}'}), 400
+
+    # Cast value to correct type
+    if value is not None and value != '':
+        if field in ('planned', 'remaining'):
+            try:
+                value = float(value)
+            except (ValueError, TypeError):
+                value = None
+        else:
+            value = str(value)
+    else:
+        value = None
+
+    # Save to DB: namespace='services', phase=<service_name>, key='<dept>.<field>'
+    db.set_override('services', service_name, f"{dept}.{field}", value)
+    return jsonify({'ok': True})
+
+
+@app.route('/api/services/overrides', methods=['GET'])
+def api_services_overrides_get():
+    # Return in old format with 'departments' wrapper for backward compat
+    raw = load_services_overrides()
+    out = {}
+    for service_key, dept_data in raw.items():
+        out[service_key] = {'departments': dept_data}
+    return jsonify(out)
+
+@app.route('/api/phases')
+def api_phases():
+    """List of phases for the project (from Odoo or fallback)"""
+    phases = odoo.get_phases()
+    if phases is None:
+        # Fallback list (the 5 phases we know exist)
+        return jsonify({
+            'connected': False,
+            'phases': [
+                {'name': 'Consultation phase - Initiation'},
+                {'name': 'Consultation phase - Analysis'},
+                {'name': 'Consultation phase - General'},
+                {'name': 'Consultation phase - UX'},
+                {'name': 'Development Phase'},
+            ],
+            'default': 'Development Phase',
+        })
+    return jsonify({
+        'connected': True,
+        'phases': [{'id': p['id'], 'name': p['name']} for p in phases],
+        'default': 'Development Phase',
+    })
+
+def parse_phases_param(args):
+    """Parse phases query param. Accepts 'phases=A,B,C' or 'phases=A&phases=B'."""
+    phases_csv = args.get('phases')
+    if phases_csv:
+        return [p.strip() for p in phases_csv.split(',') if p.strip()]
+    # Multi-value
+    multi = args.getlist('phases')
+    return [p for p in multi if p] if multi else None
+
+@app.route('/api/timesheets/employees')
+def api_ts_employees():
+    """Aggregated by employee with optional phase filter"""
+    date_from = request.args.get('from')
+    date_to = request.args.get('to')
+    phases = parse_phases_param(request.args)
+
+    data, connected = get_all_timesheets(date_from=date_from, date_to=date_to, phases=phases)
+
+    df = pd.DataFrame(data) if data else pd.DataFrame()
+    if df.empty:
+        return jsonify({'connected': connected, 'employees': [], 'total_hours': 0,
+                        'phases_filter': phases, 'date_from': date_from, 'date_to': date_to})
+
+    by_emp = df.groupby('employee').agg(
+        total_hours=('hours', 'sum'),
+        days_logged=('date', 'nunique'),
+        entries=('hours', 'count')
+    ).reset_index().sort_values('total_hours', ascending=False)
+
+    return jsonify({
+        'connected': connected,
+        'phases_filter': phases,
+        'employees': [{
+            'name': r['employee'],
+            'total_hours': float(r['total_hours']),
+            'days_logged': int(r['days_logged']),
+            'entries': int(r['entries']),
+        } for _, r in by_emp.iterrows()],
+        'total_hours': float(df['hours'].sum()),
+        'date_from': date_from,
+        'date_to': date_to,
+    })
+
+@app.route('/api/timesheets/employee/<name>')
+def api_ts_employee_detail(name):
+    """Drill-down: days only by default, tasks via expand"""
+    date_from = request.args.get('from')
+    date_to = request.args.get('to')
+    phases = parse_phases_param(request.args)
+
+    data, _ = get_all_timesheets(date_from=date_from, date_to=date_to, phases=phases)
+    data = [d for d in data if d.get('employee') == name]
+
+    by_date = {}
+    for entry in data:
+        d = entry.get('date')
+        if d not in by_date:
+            by_date[d] = {'date': d, 'total_hours': 0, 'tasks': []}
+        by_date[d]['total_hours'] += entry.get('hours', 0)
+        by_date[d]['tasks'].append({
+            'task': entry.get('task'),
+            'description': entry.get('description'),
+            'hours': entry.get('hours'),
+            'service': entry.get('service', ''),
+            'phase': entry.get('phase', ''),
+        })
+    days = sorted(by_date.values(), key=lambda x: x['date'], reverse=True)
+
+    return jsonify({
+        'employee': name,
+        'total_hours': sum(e.get('hours', 0) for e in data),
+        'total_days': len(by_date),
+        'days': days,
+    })
+
+@app.route('/api/timesheets/export')
+def api_ts_export():
+    """CSV export of timesheets"""
+    date_from = request.args.get('from')
+    date_to = request.args.get('to')
+    phases = parse_phases_param(request.args)
+
+    data, _ = get_all_timesheets(date_from=date_from, date_to=date_to, phases=phases)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(['Date', 'Employee', 'Project', 'Phase', 'Service', 'Task', 'Description', 'Hours'])
+    for d in data:
+        writer.writerow([
+            d.get('date', ''), d.get('employee', ''), d.get('project', ''),
+            d.get('phase', ''), d.get('service', ''), d.get('task', ''),
+            d.get('description', ''), d.get('hours', 0)
+        ])
+
+    csv_content = output.getvalue()
+    output.close()
+    filename = f"timesheets_{date.today().isoformat()}.csv"
+    return Response(
+        '\ufeff' + csv_content,
+        mimetype='text/csv',
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'}
+    )
+
+@app.route('/api/missing-hours')
+def api_missing_hours():
+    """Missing hours: last 30 days default, skip if logged on other projects"""
+    date_to = request.args.get('to') or date.today().isoformat()
+    date_from = request.args.get('from')
+
+    if not date_from:
+        # Default: 30 days back
+        from_date = (date.today() - timedelta(days=30))
+        date_from = from_date.isoformat()
+
+    # Get THIS project entries
+    project_data, connected = get_all_timesheets(date_from=date_from, date_to=date_to, all_projects=False)
+    # Get ALL projects entries (for cross-project check)
+    all_data, _ = get_all_timesheets(date_from=date_from, date_to=date_to, all_projects=True)
+
+    if not project_data and not all_data:
+        return jsonify({'connected': connected, 'employees': [], 'date_from': date_from, 'date_to': date_to})
+
+    # Hours per employee per date — across ALL projects
+    all_hours_by_emp_date = {}  # {emp: {date: hours}}
+    for e in all_data:
+        emp = e.get('employee')
+        d = e.get('date')
+        all_hours_by_emp_date.setdefault(emp, {})
+        all_hours_by_emp_date[emp][d] = all_hours_by_emp_date[emp].get(d, 0) + e.get('hours', 0)
+
+    # Hours per employee per date — THIS project only
+    proj_hours_by_emp_date = {}
+    for e in project_data:
+        emp = e.get('employee')
+        d = e.get('date')
+        proj_hours_by_emp_date.setdefault(emp, {})
+        proj_hours_by_emp_date[emp][d] = proj_hours_by_emp_date[emp].get(d, 0) + e.get('hours', 0)
+
+    # Working days in range
+    working_days = get_working_days_between(date_from, date_to)
+
+    employees_summary = []
+    # Only employees who appeared in THIS project at least once
+    employees_in_project = set(proj_hours_by_emp_date.keys())
+
+    for emp_name in employees_in_project:
+        proj_hours = proj_hours_by_emp_date.get(emp_name, {})
+        all_hours = all_hours_by_emp_date.get(emp_name, {})
+
+        missing_dates_detail = []
+        underlogged_dates_detail = []
+        total_missing = 0
+
+        for d in working_days:
+            proj_h = proj_hours.get(d, 0)
+            all_h = all_hours.get(d, 0)
+
+            if all_h >= WORK_HOURS_PER_DAY:
+                # full day logged somewhere — not missing
+                continue
+            elif proj_h == 0 and all_h == 0:
+                # nothing logged at all
+                missing_dates_detail.append({'date': d, 'logged_hrs': 0, 'missing_hrs': WORK_HOURS_PER_DAY,
+                                             'reason': 'No entries'})
+                total_missing += WORK_HOURS_PER_DAY
+            elif all_h < WORK_HOURS_PER_DAY:
+                # partial day
+                missing = WORK_HOURS_PER_DAY - all_h
+                underlogged_dates_detail.append({'date': d, 'logged_hrs': all_h, 'missing_hrs': missing,
+                                                 'reason': f'Only {all_h}h logged total'})
+                total_missing += missing
+
+        total_logged = sum(proj_hours.values())
+        total_logged_all = sum(all_hours.values())
+        expected_total = len(working_days) * WORK_HOURS_PER_DAY
+
+        employees_summary.append({
+            'name': emp_name,
+            'expected_days': len(working_days),
+            'logged_days_project': len(proj_hours),
+            'logged_days_total': len(all_hours),
+            'missing_days_count': len(missing_dates_detail),
+            'underlogged_days_count': len(underlogged_dates_detail),
+            'logged_hours_project': float(total_logged),
+            'logged_hours_total': float(total_logged_all),
+            'expected_hours': float(expected_total),
+            'missing_hours': float(total_missing),
+            'compliance_pct': float((expected_total - total_missing) / expected_total * 100) if expected_total else 100,
+            'missing_dates_detail': missing_dates_detail,
+            'underlogged_dates_detail': underlogged_dates_detail,
+        })
+
+    employees_summary.sort(key=lambda x: x['missing_hours'], reverse=True)
+
+    return jsonify({
+        'connected': connected,
+        'date_from': date_from,
+        'date_to': date_to,
+        'work_hours_per_day': WORK_HOURS_PER_DAY,
+        'employees': employees_summary,
+    })
+
+@app.route('/api/roadmap')
+def api_roadmap():
+    team1 = [s for s in ROADMAP if s['team'] == 'الفريق 1']
+    team2 = [s for s in ROADMAP if s['team'] == 'الفريق 2']
+    admin = [s for s in ROADMAP if s['team'] == 'الإدارة']
+    return jsonify({
+        'project_info': PROJECT_INFO,
+        'milestones': MILESTONES,
+        'services': ROADMAP,
+        'team_breakdown': {
+            'team_1': {'name': 'الفريق الأول', 'count': len(team1), 'total_wd': sum(s.get('wd') or 0 for s in team1)},
+            'team_2': {'name': 'الفريق الثاني', 'count': len(team2), 'total_wd': sum(s.get('wd') or 0 for s in team2)},
+            'admin': {'name': 'نقل البيانات', 'count': len(admin)},
+        }
+    })
+
+@app.route('/api/budget')
+def api_budget():
+    return jsonify({
+        'project_name': PROJECT_NAME,
+        'pm': 'Abdelrahman Doghish',
+        'support_start': '2027-05-18',
+        'support_end': '2028-05-17',
+        'total_mandays': 6556,
+        'approved': {'cost_usd': 2735436.00, 'cost_sar': 10257885.00, 'revenue_sar': 20570344.00,
+                     'profit_sar': 10312459.00, 'profit_pct': 50},
+        'final': {'cost_sar': 10257885.00, 'revenue_sar': 20150344.00, 'profit_sar': 9892459.00, 'profit_pct': 49},
+        'changes': [{'reason': 'Third party license', 'plan_id': '', 'changes_cost': 0, 'changes_revenue': -420000.00}],
+        'total_change_cost': 0,
+        'total_change_revenue': -420000.00
+    })
+
+# ============================================================
+# VARIANCE — reads variance.xlsx
+# ============================================================
+VARIANCE_FILE = os.path.join(BASE_DIR, 'data', 'variance.xlsx')  # Read-only Excel from repo
+TRAVEL_FILE = os.path.join(PERSIST_DIR, 'travel.json')
+BUDGET_OVERRIDES_FILE = os.path.join(PERSIST_DIR, 'budget_overrides.json')
+
+def load_budget_overrides():
+    """Load all budget overrides from DB.
+    Returns: {phase: {field_path: value}}
+    """
+    return db.get_namespace_overrides('budget')
+
+
+def save_budget_override(phase, path, value):
+    """Save (or delete if value is None) a single budget override."""
+    db.set_override('budget', phase, path, value)
+
+
+def apply_budget_overrides(budget_info, phase_key):
+    """Apply saved overrides on top of the parsed budget data."""
+    overrides = db.get_namespace_overrides('budget', phase_key)
+    if not overrides:
+        return budget_info
+    for path, value in overrides.items():
+        # Path format: "section.field" e.g. "approved.cost_sar"
+        parts = path.split('.')
+        if len(parts) != 2:
+            continue
+        section, field = parts
+        if section in budget_info and isinstance(budget_info[section], dict):
+            budget_info[section][field] = value
+        elif section == 'contract' and 'contract' in budget_info:
+            for k in budget_info['contract']:
+                if k == field:
+                    if isinstance(budget_info['contract'][k], dict):
+                        budget_info['contract'][k]['value'] = value
+                    else:
+                        budget_info['contract'][k] = value
+                    break
+    budget_info['_has_overrides'] = bool(overrides)
+    budget_info['_override_keys'] = list(overrides.keys())
+    return budget_info
+
+
+@app.route('/api/variance/budget-override', methods=['POST'])
+def api_budget_override_save():
+    """Save a single budget field override.
+    Body: { phase: 'development', path: 'approved.cost_sar', value: 12000000 }
+    """
+    body = request.json or {}
+    phase = body.get('phase')
+    path = body.get('path')
+    value = body.get('value')
+
+    if not phase or not path:
+        return jsonify({'error': 'phase and path required'}), 400
+
+    # Try to convert to float for numeric values
+    if value is not None and value != '':
+        try:
+            value = float(value)
+        except (ValueError, TypeError):
+            pass  # keep as string
+
+    save_budget_override(phase, path, value)
+    return jsonify({'ok': True, 'phase': phase, 'path': path, 'value': value})
+
+
+@app.route('/api/variance/budget-override/<phase>')
+def api_budget_overrides_get(phase):
+    """Get all overrides for a phase."""
+    overrides = db.get_namespace_overrides('budget', phase)
+    return jsonify({'phase': phase, 'overrides': overrides})
+
+
+@app.route('/api/variance/budget-override/<phase>/<path:path>', methods=['DELETE'])
+def api_budget_override_delete(phase, path):
+    """Delete a specific override."""
+    db.set_override('budget', phase, path, None)
+    return jsonify({'ok': True})
+
+# Sub-tab definitions: which sheets feed which tab
+VARIANCE_TABS = {
+    'development': {
+        'label': 'Development',
+        'sections': [
+            {'key': 'budget', 'label': 'Budget', 'sheet': 'Budget - Development', 'parser': 'budget'},
+            {'key': 'profitability', 'label': 'Profitability', 'sheet': 'Profitability - Development', 'parser': 'profitability'},
+            {'key': 'effort', 'label': 'Current Effort', 'sheet': 'Current Effort - Development', 'parser': 'effort'},
+            {'key': 'estimated', 'label': 'Estimated Cost', 'sheet': 'Estimated Cost - Development', 'parser': 'estimated'},
+        ]
+    },
+    'consultation': {
+        'label': 'Consultation',
+        'sections': [
+            {'key': 'budget', 'label': 'Budget', 'sheet': 'Budget - Consultation', 'parser': 'budget'},
+            {'key': 'profitability', 'label': 'Profitability', 'sheet': 'Profitability - Consultation', 'parser': 'profitability'},
+            {'key': 'effort', 'label': 'Current Effort', 'sheet': 'Current Effort - Consultation', 'parser': 'effort'},
+            {'key': 'estimated', 'label': 'Estimated Cost', 'sheet': 'Estimated Cost - Consultation', 'parser': 'estimated'},
+        ]
+    },
+    'support': {
+        'label': 'Support',
+        'sections': [
+            {'key': 'budget', 'label': 'Budget', 'sheet': 'Budget - Support', 'parser': 'budget'},
+            {'key': 'estimated', 'label': 'Estimated Cost', 'sheet': 'Estimated Cost - Support', 'parser': 'estimated'},
+        ]
+    },
+    'travel': {
+        'label': 'Travel & Onsite',
+        'sections': [
+            {'key': 'travel', 'label': 'Travel Records', 'parser': 'travel'},
+        ]
+    },
 }
 
-function recomputePlanRow(tr) {
-  if (!tr) return;
-  const actual = parseFloat(tr.dataset.actual) || 0;
-  const compInp = tr.querySelector('.completion-input');
-  const remInp = tr.querySelector('.remaining-input');
-  const completionPct = parseFloat(compInp?.value) || 0;
-  const remaining = parseFloat(remInp?.value) || 0;
-  // Plan = Actual + Remaining (this is what the % Completion implies)
-  // Or: Plan = Actual / (completion / 100)
-  // We use Actual + Remaining since both are editable (more direct)
-  const plan = actual + remaining;
-  const planEl = tr.querySelector('span[class*="computed-plan"]');
-  if (planEl) {
-    planEl.textContent = fmt.decimal(plan);
-    planEl.style.fontWeight = '600';
-    planEl.style.color = 'var(--blue)';
-  }
+def safe_val(v):
+    """Convert pandas value to JSON-safe value"""
+    if v is None:
+        return None
+    if isinstance(v, float) and pd.isna(v):
+        return None
+    if isinstance(v, (pd.Timestamp, datetime)):
+        return v.isoformat()
+    if isinstance(v, (int, float)):
+        return v
+    return str(v)
+
+def parse_budget_sheet(df):
+    """Parse a Budget sheet (Development/Consultation/Support)"""
+    info = {}
+    # Column 2 = label, column 3-4 = values
+    label_col, val_col, val_col2 = 2, 3, 4
+    rows = df.values.tolist()
+    info['contract'] = {}
+    contract_keys = ['Project Name', 'Client', 'Contract start date', 'Contract end date',
+                     'Contract duration', 'Contract Type', 'Scope', 'Support start and end dates', 'Progress']
+    for r in rows:
+        if len(r) > val_col and pd.notna(r[label_col]) and r[label_col] in contract_keys:
+            v1 = safe_val(r[val_col]) if len(r) > val_col else None
+            v2 = safe_val(r[val_col2]) if len(r) > val_col2 else None
+            info['contract'][r[label_col]] = {'value': v1, 'value2': v2}
+
+    # Approved budget block (rows 11-18)
+    info['approved'] = {}
+    info['final'] = {}
+    for r in rows:
+        if not r or len(r) < 5:
+            continue
+        lbl = r[label_col] if pd.notna(r[label_col]) else None
+        if lbl == 'Total Mandays':
+            info['approved']['total_mandays'] = safe_val(r[4])
+        elif lbl == 'Total Estimated Cost ($)':
+            info['approved']['cost_usd'] = safe_val(r[4])
+        elif lbl == 'Total Estimated Cost (SAR)':
+            info['approved']['cost_sar'] = safe_val(r[4])
+        elif lbl == 'Total Revenue':
+            info['approved']['revenue_sar'] = safe_val(r[4])
+        elif lbl == 'Budget Profit (SAR)' and 'profit_sar' not in info['approved']:
+            info['approved']['profit_sar'] = safe_val(r[4])
+        elif lbl == 'Budget Profit (%)' and 'profit_pct' not in info['approved']:
+            info['approved']['profit_pct'] = safe_val(r[4])
+        # Final budget on right side (col 6 label, col 8 value)
+        if len(r) > 8 and pd.notna(r[6]):
+            rlabel = r[6]
+            rval = safe_val(r[8])
+            if rlabel == 'Total Cost after changes':
+                info['final']['cost_sar'] = rval
+            elif rlabel == 'Total Revenue after changes':
+                info['final']['revenue_sar'] = rval
+            elif rlabel == 'Budget Profit (SAR)':
+                info['final']['profit_sar'] = rval
+            elif rlabel == 'Budget Profit (%)':
+                info['final']['profit_pct'] = rval
+            elif rlabel == 'Total Changes on Budget':
+                info['final']['total_change_cost'] = safe_val(r[8])
+                if len(r) > 9:
+                    info['final']['total_change_revenue'] = safe_val(r[9])
+
+    # Changes log (rows 3-10ish, cols 6,7,8,9)
+    changes = []
+    for r in rows[3:11]:
+        if len(r) > 9 and pd.notna(r[6]) and r[6] != 'Reason':
+            changes.append({
+                'reason': safe_val(r[6]),
+                'plan_id': safe_val(r[7]) if len(r) > 7 else None,
+                'changes_cost': safe_val(r[8]) if len(r) > 8 else None,
+                'changes_revenue': safe_val(r[9]) if len(r) > 9 else None,
+            })
+    info['changes'] = changes
+
+    return info
+
+def parse_profitability_sheet(df):
+    """Parse Profitability sheet — month-by-month variance metrics"""
+    rows = df.values.tolist()
+    # Header at row 5 (0-indexed)
+    if len(rows) < 6:
+        return {'months': [], 'columns': []}
+
+    headers = []
+    for v in rows[5]:
+        h = str(v) if pd.notna(v) else ''
+        headers.append(h.strip())
+
+    months = []
+    for r in rows[7:]:  # data starts at row 7
+        if not r or len(r) == 0:
+            continue
+        if pd.isna(r[0]):
+            continue
+        row_data = {}
+        for i, h in enumerate(headers):
+            if h and i < len(r):
+                row_data[h] = safe_val(r[i])
+        months.append(row_data)
+
+    return {'columns': headers, 'months': months}
+
+def parse_effort_sheet(df):
+    """Parse Current Effort sheet — team monthly hours"""
+    rows = df.values.tolist()
+    if len(rows) < 5:
+        return {'team': [], 'months': [], 'totals': {}}
+
+    # Row 3: month names; Row 4: column headers
+    months_row = rows[3] if len(rows) > 3 else []
+    headers = rows[4] if len(rows) > 4 else []
+
+    # Find month columns (skip first 6 cols which are #, Name, Position, Hour Rate, Overtime Rate)
+    month_blocks = []
+    cur_month = None
+    for i, m in enumerate(months_row):
+        if pd.notna(m):
+            cur_month = str(m).strip()
+        if cur_month and i >= 6:
+            month_blocks.append({'month': cur_month, 'col': i})
+
+    # Group by month (every 3 cols = Regular, Ramadan, Overtime)
+    seen_months = []
+    last_month = None
+    for b in month_blocks:
+        if b['month'] != last_month:
+            seen_months.append(b['month'])
+            last_month = b['month']
+
+    team = []
+    for r in rows[5:]:
+        if len(r) < 4 or pd.isna(r[1]):
+            continue
+        # Stop at totals row
+        if isinstance(r[1], str) and 'total' in str(r[1]).lower():
+            continue
+        if pd.isna(r[0]):
+            # could be totals/summary row
+            if len(r) > 5 and pd.notna(r[5]) and isinstance(r[5], str) and 'cost' in r[5].lower():
+                continue
+            if pd.isna(r[1]):
+                continue
+        member = {
+            'num': safe_val(r[0]) if len(r) > 0 else None,
+            'name': safe_val(r[1]) if len(r) > 1 else None,
+            'position': safe_val(r[3]) if len(r) > 3 else None,
+            'hour_rate': safe_val(r[4]) if len(r) > 4 else None,
+            'overtime_rate': safe_val(r[5]) if len(r) > 5 else None,
+            'monthly': [],
+            'total_cost': safe_val(r[39]) if len(r) > 39 else None,
+            'current_mds': safe_val(r[40]) if len(r) > 40 else None,
+        }
+        # 11 months × 3 cols starting at col 6
+        for m_idx, month in enumerate(seen_months):
+            base = 6 + m_idx * 3
+            if base + 2 < len(r):
+                member['monthly'].append({
+                    'month': month,
+                    'regular': safe_val(r[base]),
+                    'ramadan': safe_val(r[base + 1]),
+                    'overtime': safe_val(r[base + 2]),
+                })
+        team.append(member)
+
+    return {'team': team, 'months': seen_months}
+
+def parse_estimated_sheet(df):
+    """Parse Estimated Cost sheet"""
+    rows = df.values.tolist()
+    # Header typically at row 5
+    if len(rows) < 6:
+        return {'positions': [], 'columns': []}
+
+    # Find header row
+    header_row = None
+    for i, r in enumerate(rows[:10]):
+        if r and pd.notna(r[0]) and 'Position' in str(r[0]):
+            header_row = i
+            break
+    if header_row is None:
+        header_row = 5
+
+    headers = [str(h) if pd.notna(h) else f'col_{i}' for i, h in enumerate(rows[header_row])]
+    positions = []
+    for r in rows[header_row + 1:]:
+        if not r or pd.isna(r[0]):
+            continue
+        row_data = {}
+        for i, h in enumerate(headers):
+            if i < len(r):
+                row_data[h] = safe_val(r[i])
+        if row_data.get(headers[0]):
+            positions.append(row_data)
+    return {'columns': headers, 'positions': positions}
+
+# ============================================================
+# COMPUTED EFFORT FROM ODOO TIMESHEETS
+# ============================================================
+
+# Phase mapping: variance tab → list of Odoo phases
+PHASE_MAPPING = {
+    'development': ['Development Phase'],
+    'consultation': ['Consultation phase - Initiation', 'Consultation phase -  Analysis',
+                     'Consultation phase - General', 'Consultation phase -  UX'],
+    'support': [],  # Support phase doesn't exist as Odoo phase yet
 }
 
-async function saveOverride(inp) {
-  const phase = inp.dataset.phase;
-  const monthKey = inp.dataset.month;
-  const field = inp.dataset.field;
-  const value = parseFloat(inp.value) || 0;
-  await fetch('/api/plan-overrides', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ phase, month_key: monthKey, field, value })
-  });
-  inp.style.borderColor = 'var(--green)';
-  setTimeout(() => { inp.style.borderColor = 'var(--border-strong)'; }, 1200);
+# Ramadan dates (current year). Update annually.
+RAMADAN_RANGES = {
+    'KSA': {'start': '2026-02-18', 'end': '2026-03-19'},  # Saudi
+    'EGY': {'start': '2026-02-19', 'end': '2026-03-20'},  # Egypt
 }
 
-function applyPlanOverrides(phaseKey) {
-  const overrides = (AppState.planOverrides || {})[phaseKey] || {};
-  document.querySelectorAll(`#profit-table-${phaseKey} tr[data-month-key]`).forEach(tr => {
-    const monthKey = tr.dataset.monthKey;
-    const monthOverrides = overrides[monthKey] || {};
-    if (monthOverrides.completion !== undefined) {
-      const inp = tr.querySelector('.completion-input');
-      if (inp) inp.value = parseFloat(monthOverrides.completion).toFixed(2);
+# Tunisia weekend exception
+TUNIS_WEEKEND = [5, 6]  # Saturday, Sunday (Mon=0)
+DEFAULT_WEEKEND = [4, 5]  # Friday, Saturday
+RAMADAN_HOURS = 6
+NORMAL_HOURS = 8
+
+# ── Public Holidays (overtime if logged on these days) ──
+# Update annually or via env/DB in the future
+PUBLIC_HOLIDAYS = {
+    'EGY': {
+        "2026-01-07", "2026-01-29", "2026-03-19", "2026-03-20", "2026-03-21",
+        "2026-03-22", "2026-03-23", "2026-04-13", "2026-04-25", "2026-05-01",
+        "2026-06-30", "2026-07-23", "2026-10-06",
+    },
+    'KSA': {
+        "2026-02-22", "2026-03-19", "2026-03-20", "2026-03-21", "2026-03-22",
+        "2026-03-23", "2026-03-24", "2026-05-26", "2026-05-27", "2026-05-28",
+        "2026-05-29", "2026-09-23",
+    },
+    'TUN': {
+        "2026-01-01", "2026-03-20", "2026-03-21", "2026-03-22", "2026-05-01",
+        "2026-05-27", "2026-05-28", "2026-06-16", "2026-07-25", "2026-08-13",
+        "2026-08-25", "2026-10-15", "2026-12-17",
+    },
+}
+
+def is_public_holiday(date_str, country):
+    """Returns True if the date is a public holiday for the given country."""
+    return date_str in PUBLIC_HOLIDAYS.get(country, set())
+
+def get_country_from_employee_name(name):
+    """Detect country from Odoo employee code prefix.
+    Format: '[E109] Basem Mohamed' → EGY
+            '[R323] Talal Abdulwahed' → KSA
+            '[T...] Name' → TUN (verify by name as well)
+    """
+    if not name:
+        return 'EGY'
+    import re
+    # Match [X###] or [X## ] at the start (allow optional trailing space inside brackets)
+    m = re.match(r'^\s*\[([A-Z])(\d+)\s*\]', str(name).strip())
+    if m:
+        letter = m.group(1).upper()
+        if letter == 'E':
+            return 'EGY'
+        elif letter == 'R':
+            return 'KSA'
+        elif letter == 'T':
+            return 'TUN'
+    # Fallback: check name for hints
+    n = str(name).upper()
+    if 'TUNIS' in n or 'TUN ' in n:
+        return 'TUN'
+    if 'SAUDI' in n or 'KSA' in n:
+        return 'KSA'
+    return 'EGY'  # default
+
+def get_country_from_position(position_name):
+    """Backward compat: detect country from position string"""
+    if not position_name:
+        return 'EGY'
+    pn = str(position_name).upper()
+    if 'KSA' in pn or 'SAUDI' in pn:
+        return 'KSA'
+    if 'TUN' in pn or 'TUNIS' in pn:
+        return 'TUN'
+    return 'EGY'
+
+def is_in_ramadan(date_str, country):
+    """Check if a date falls within Ramadan for the given country"""
+    rng = RAMADAN_RANGES.get(country, RAMADAN_RANGES['EGY'])
+    return rng['start'] <= date_str <= rng['end']
+
+def get_weekend_for_country(country):
+    """Tunis: Sat+Sun. Others: Fri+Sat"""
+    if country == 'TUN':
+        return TUNIS_WEEKEND
+    return DEFAULT_WEEKEND
+
+def get_travel_periods_for_employee(name):
+    """Returns list of (start_date, end_date_or_None) tuples for an employee's travel periods"""
+    records = load_travel()
+    periods = []
+    for r in records:
+        if r.get('name', '').strip().lower() == name.strip().lower():
+            periods.append((r.get('start_date'), r.get('end_date')))
+    return periods
+
+def is_onsite_on_date(name, date_str):
+    """Check if employee was onsite on a given date"""
+    periods = get_travel_periods_for_employee(name)
+    for start, end in periods:
+        if not start:
+            continue
+        if date_str < start:
+            continue
+        if end is None or date_str <= end:
+            return True
+    return False
+
+def get_position_rates(positions_list):
+    """Build dict {position_name: {hour_rate, md_rate}} from positions list"""
+    rate_map = {}
+    for p in positions_list:
+        if p.get('name'):
+            rate_map[p['name'].strip()] = {
+                'hour_rate': p.get('hour_rate'),
+                'md_rate': p.get('md_rate'),
+            }
+    return rate_map
+
+def compute_effort_from_odoo(phase_key, year, month, position_lookup=None):
+    """Compute Regular / Ramadan / Overtime hours per person for a specific month.
+    Now also tracks onsite days based on travel records and computes effective rate.
+    """
+    phases = PHASE_MAPPING.get(phase_key, [])
+    if not phases and phase_key != 'support':
+        return {'team': [], 'months': [], 'error': f'No phases mapped for {phase_key}'}
+
+    month_start = date(year, month, 1).isoformat()
+    if month == 12:
+        next_month_start = date(year + 1, 1, 1)
+    else:
+        next_month_start = date(year, month + 1, 1)
+    month_end = (next_month_start - timedelta(days=1)).isoformat()
+
+    raw = odoo.get_timesheets(
+        date_from=month_start,
+        date_to=month_end,
+        phase_filter=phases if phases else None
+    )
+    if raw is None:
+        return {'team': [], 'months': [date(year, month, 1).strftime('%B')], 'error': 'Odoo unreachable'}
+
+    entries = [normalize_timesheet(e) for e in raw]
+
+    # Load positions + rates from Excel
+    positions_list = get_positions_from_excel()
+    rate_map = get_position_rates(positions_list)
+    tunis_rates = get_tunis_rates_from_excel()
+
+    # Group by employee, then by date
+    by_emp = {}
+    for entry in entries:
+        emp = entry['employee']
+        d = entry['date']
+        h = entry['hours']
+        if emp not in by_emp:
+            by_emp[emp] = {}
+        if d not in by_emp[emp]:
+            by_emp[emp][d] = 0
+        by_emp[emp][d] += h
+
+    team = []
+    for emp_name, day_hours in by_emp.items():
+        # Country from Odoo employee code prefix [E###], [R###], [T###]
+        country = get_country_from_employee_name(emp_name)
+        weekend_days = get_weekend_for_country(country)
+
+        # Base role from Odoo position lookup (e.g. "Senior Business Analyst")
+        # We strip any country prefix or onsite suffix to get the bare role
+        odoo_role = (position_lookup or {}).get(emp_name) or ''
+
+        regular_mh = 0
+        ramadan_mh = 0
+        overtime_mh = 0
+        onsite_hours = 0
+        non_onsite_hours = 0
+        onsite_days = 0
+        total_days = 0
+
+        for day_str, total_h in day_hours.items():
+            try:
+                d_obj = datetime.strptime(day_str, '%Y-%m-%d').date()
+            except Exception:
+                continue
+            wd = d_obj.weekday()
+            is_weekend = wd in weekend_days
+            in_ramadan = is_in_ramadan(day_str, country)
+            is_onsite = is_onsite_on_date(emp_name, day_str)
+            is_holiday = is_public_holiday(day_str, country)
+
+            total_days += 1
+            if is_onsite:
+                onsite_days += 1
+                onsite_hours += total_h
+            else:
+                non_onsite_hours += total_h
+
+            if is_weekend or is_holiday:
+                overtime_mh += total_h
+            else:
+                expected = RAMADAN_HOURS if in_ramadan else NORMAL_HOURS
+                if total_h <= expected:
+                    if in_ramadan:
+                        ramadan_mh += total_h
+                    else:
+                        regular_mh += total_h
+                else:
+                    if in_ramadan:
+                        ramadan_mh += expected
+                    else:
+                        regular_mh += expected
+                    overtime_mh += (total_h - expected)
+
+        total_h = regular_mh + ramadan_mh + overtime_mh
+        total_md = round(total_h / NORMAL_HOURS, 2)
+
+        # Position resolution depends on country:
+        # - For TUN: rate is per-name from "Tunis Rates" sheet (no position concept)
+        # - For EGY/KSA: position = "{COUNTRY} - {role}" or "+ - onsite" if any onsite hours
+        if country == 'TUN':
+            tunis_match = find_tunis_rate(emp_name, tunis_rates)
+            if tunis_match:
+                base_position = f"TUN - {odoo_role}".strip(' -') if odoo_role else 'TUN'
+                base_rate_info = {
+                    'hour_rate': tunis_match['hour_rate'],
+                    'md_rate': tunis_match['md_rate'],
+                }
+                onsite_rate_info = None  # Tunis has no onsite variants
+                country_position = base_position
+                onsite_position = ''
+            else:
+                base_position = f"TUN - {odoo_role}".strip(' -') if odoo_role else 'TUN'
+                base_rate_info = None
+                onsite_rate_info = None
+                country_position = base_position
+                onsite_position = ''
+        else:
+            country_position = f"{country} - {odoo_role}".strip(' -') if odoo_role else ''
+            onsite_position = f"{country} - {odoo_role} - onsite".strip(' -') if odoo_role else ''
+
+            def _find_position_match(target):
+                if not target:
+                    return None
+                if target in rate_map:
+                    return target, rate_map[target]
+                target_lower = target.lower()
+                for k, v in rate_map.items():
+                    if k.lower() == target_lower:
+                        return k, v
+                target_clean = target_lower.replace('.', '').replace('-', ' ').replace('  ', ' ').strip()
+                for k, v in rate_map.items():
+                    k_clean = k.lower().replace('.', '').replace('-', ' ').replace('  ', ' ').strip()
+                    if k_clean == target_clean:
+                        return k, v
+                return None
+
+            base_match = _find_position_match(country_position)
+            onsite_match = _find_position_match(onsite_position)
+
+            base_position = base_match[0] if base_match else country_position
+            base_rate_info = base_match[1] if base_match else None
+            onsite_rate_info = onsite_match[1] if onsite_match else None
+
+        effective_hour_rate = None
+        if total_h > 0:
+            base_hr = (base_rate_info or {}).get('hour_rate') or 0
+            onsite_hr = (onsite_rate_info or {}).get('hour_rate') or base_hr
+            if base_hr or onsite_hr:
+                effective_hour_rate = round(
+                    (onsite_hours * (onsite_hr or 0) + non_onsite_hours * (base_hr or 0)) / total_h, 2
+                ) if total_h else 0
+
+        team.append({
+            'name': emp_name,
+            'odoo_role': odoo_role,
+            'position': base_position,
+            'has_base_rate': bool(base_rate_info),
+            'has_onsite_rate': bool(onsite_rate_info),
+            'country': country,
+            'regular_mh': round(regular_mh, 2),
+            'ramadan_mh': round(ramadan_mh, 2),
+            'overtime_mh': round(overtime_mh, 2),
+            'total_hours': round(total_h, 2),
+            'mds': total_md,
+            'onsite_days': onsite_days,
+            'onsite_hours': round(onsite_hours, 2),
+            'base_hour_rate': (base_rate_info or {}).get('hour_rate'),
+            'onsite_hour_rate': (onsite_rate_info or {}).get('hour_rate'),
+            'effective_hour_rate': effective_hour_rate,
+        })
+
+    # Sort alphabetically
+    team.sort(key=lambda x: (x['name'] or '').lower())
+
+    return {
+        'team': team,
+        'month_label': date(year, month, 1).strftime('%B %Y'),
+        'year': year,
+        'month': month,
+        'date_from': month_start,
+        'date_to': month_end,
+        'phases_used': phases,
     }
-    if (monthOverrides.remaining !== undefined) {
-      const inp = tr.querySelector('.remaining-input');
-      if (inp) inp.value = parseFloat(monthOverrides.remaining).toFixed(2);
+
+
+def get_positions_from_excel():
+    """Read Positions sheet and return list of {position, hour_rate, md_rate}"""
+    if not os.path.exists(VARIANCE_FILE):
+        return []
+    try:
+        df = pd.read_excel(VARIANCE_FILE, sheet_name='Positions', header=None)
+        rows = df.values.tolist()
+        positions = []
+        for r in rows[1:]:  # skip header row
+            if not r or pd.isna(r[0]):
+                continue
+            positions.append({
+                'name': str(r[0]).strip(),
+                'hour_rate': safe_val(r[1]) if len(r) > 1 else None,
+                'md_rate': safe_val(r[2]) if len(r) > 2 else None,
+            })
+        return positions
+    except Exception as e:
+        logger.error(f"Positions parse: {e}")
+        return []
+
+
+def get_tunis_rates_from_excel():
+    """Read 'Tunis Rates' sheet — Tunis people are paid per name, not per position"""
+    if not os.path.exists(VARIANCE_FILE):
+        return {}
+    try:
+        df = pd.read_excel(VARIANCE_FILE, sheet_name='Tunis Rates', header=None)
+        rows = df.values.tolist()
+        tunis = {}
+        for r in rows[1:]:
+            if not r or pd.isna(r[0]):
+                continue
+            name = str(r[0]).strip()
+            hr = safe_val(r[1]) if len(r) > 1 else None
+            if hr is not None:
+                # Store by lowercase name for case-insensitive lookup
+                tunis[name.lower()] = {
+                    'name': name,
+                    'hour_rate': float(hr),
+                    'md_rate': float(hr) * 8,  # 8 hours per MD
+                }
+        return tunis
+    except Exception as e:
+        logger.warning(f"Tunis Rates parse: {e}")
+        return {}
+
+
+def find_tunis_rate(emp_name, tunis_rates):
+    """Match Tunis employee by partial name (handles case + extra prefix like '[T###]')"""
+    if not emp_name or not tunis_rates:
+        return None
+    # Strip [code] prefix
+    import re
+    clean = re.sub(r'^\s*\[[A-Z]\d+\s*\]\s*', '', str(emp_name)).strip().lower()
+    # Direct match
+    if clean in tunis_rates:
+        return tunis_rates[clean]
+    # Partial — match if all words from tunis name appear in clean (or vice versa)
+    for tname, tinfo in tunis_rates.items():
+        tparts = set(tname.split())
+        cparts = set(clean.split())
+        if tparts.issubset(cparts) or cparts.issubset(tparts):
+            return tinfo
+        # Also try if any 2 significant words match
+        common = tparts & cparts
+        if len(common) >= 2:
+            return tinfo
+    return None
+
+
+def get_odoo_position_for_employee(employee_name):
+    """Try to fetch position from Odoo hr.employee model for an employee by name.
+    Strips [code] prefix since Odoo stores names without it.
+    Returns position name or None.
+    """
+    if not employee_name:
+        return None
+    if not odoo.uid:
+        if not odoo.connect():
+            return None
+
+    import re
+    clean_name = re.sub(r'^\s*\[[A-Z]\d+\s*\]\s*', '', employee_name).strip()
+    candidates = [clean_name, employee_name]
+
+    try:
+        emp = None
+        for q in candidates:
+            if not q:
+                continue
+            emps = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'hr.employee', 'search_read',
+                [[('name', '=', q)]],
+                {'fields': ['name', 'job_title', 'job_id'], 'limit': 1}
+            )
+            if emps:
+                emp = emps[0]
+                break
+            emps = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'hr.employee', 'search_read',
+                [[('name', 'ilike', q)]],
+                {'fields': ['name', 'job_title', 'job_id'], 'limit': 1}
+            )
+            if emps:
+                emp = emps[0]
+                break
+
+        if not emp:
+            return None
+        if emp.get('job_id'):
+            return emp['job_id'][1]
+        return emp.get('job_title') or None
+    except Exception as e:
+        logger.warning(f"Odoo position lookup for '{employee_name}' (cleaned: '{clean_name}'): {e}")
+        return None
+
+
+# SAR → USD conversion rate
+SAR_TO_USD = 3.75
+OVERTIME_MULTIPLIER = 1.5
+
+
+def get_odoo_rate_for_employee(employee_name):
+    """Fetch hourly rate from Odoo hr.employee (timesheet_cost in SAR).
+    Converts to USD using SAR_TO_USD.
+    Returns: { 'hour_rate': float, 'overtime_rate': float, 'source': 'odoo' } or None.
+    """
+    if not employee_name:
+        return None
+    if not odoo.uid:
+        if not odoo.connect():
+            return None
+
+    # IMPORTANT: Odoo stores names WITHOUT the [E123] prefix that appears in timesheets!
+    # E.g. timesheet shows "[E102] AbdelRahman Doghish" but hr.employee.name = "AbdelRahman Doghish"
+    import re
+    clean_name = re.sub(r'^\s*\[[A-Z]\d+\s*\]\s*', '', employee_name).strip()
+    # Try both - exact match on cleaned, then ilike on cleaned, then ilike on raw
+    candidates = [clean_name, employee_name]
+
+    try:
+        emp = None
+        for q in candidates:
+            if not q:
+                continue
+            # Try exact first
+            emps = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'hr.employee', 'search_read',
+                [[('name', '=', q)]],
+                {'fields': ['name', 'timesheet_cost'], 'limit': 1}
+            )
+            if emps:
+                emp = emps[0]
+                break
+            # Try ilike (fuzzy)
+            emps = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'hr.employee', 'search_read',
+                [[('name', 'ilike', q)]],
+                {'fields': ['name', 'timesheet_cost'], 'limit': 1}
+            )
+            if emps:
+                emp = emps[0]
+                break
+
+        if not emp:
+            return None
+
+        sar_rate = emp.get('timesheet_cost')
+        if not sar_rate or sar_rate <= 0:
+            return None
+
+        usd_rate = round(sar_rate / SAR_TO_USD, 2)
+        return {
+            'hour_rate': usd_rate,
+            'overtime_rate': round(usd_rate * OVERTIME_MULTIPLIER, 2),
+            'source': 'odoo',
+            'sar_rate': sar_rate,
+            'matched_name': emp.get('name'),
+        }
+    except Exception as e:
+        logger.warning(f"Odoo rate lookup for '{employee_name}' (cleaned: '{clean_name}'): {e}")
+        return None
+
+
+def get_employee_rate(employee_name, position_name=None, is_onsite=False):
+    """Universal rate lookup with priority:
+    1. Tunis employee (by name) → use tunis_rates from DB
+    2. Try Odoo timesheet_cost → convert SAR→USD
+    3. Fallback: position_name lookup in DB positions catalog
+    Returns: { hour_rate, overtime_rate, md_rate?, source, position? } or None
+    """
+    if not employee_name:
+        return None
+
+    # 1. Tunis check (prefix [T...])
+    country = get_country_from_employee_name(employee_name)
+    if country == 'TUN':
+        tunis = get_tunis_rate_by_name(db, employee_name)
+        if tunis and tunis.get('hour_rate'):
+            return {
+                'hour_rate': tunis['hour_rate'],
+                'overtime_rate': round(tunis['hour_rate'] * OVERTIME_MULTIPLIER, 2),
+                'source': 'tunis_rates_db',
+                'position': f'TUN - {tunis["name"]}',
+            }
+        # If no Tunis rate found, fall through to other lookups
+
+    # 2. Try Odoo first (preferred - real-time data)
+    odoo_rate = get_odoo_rate_for_employee(employee_name)
+    if odoo_rate:
+        # For onsite (Egyptian traveling), Odoo rate is the BASE
+        # The onsite premium is applied via DB position lookup below
+        if not is_onsite:
+            return odoo_rate
+        # If onsite, fall through to use DB onsite position rate
+
+    # 3. Fallback to DB positions catalog
+    if position_name:
+        # Apply onsite suffix if needed
+        full_pos = position_name
+        if is_onsite and country == 'EGY' and not position_name.endswith('- onsite'):
+            full_pos = position_name + ' - onsite'
+
+        pos_info = get_position_by_name(db, full_pos)
+        if pos_info:
+            hr = pos_info.get('hour_rate')
+            if hr:
+                return {
+                    'hour_rate': hr,
+                    'overtime_rate': round(hr * OVERTIME_MULTIPLIER, 2),
+                    'md_rate': pos_info.get('md_rate'),
+                    'source': 'positions_db' + ('_onsite' if is_onsite else ''),
+                    'position': full_pos,
+                }
+
+    # If Odoo had a rate but we wanted onsite + no DB match, return Odoo as fallback
+    if odoo_rate:
+        return odoo_rate
+
+    return None
+
+
+@app.route('/api/employee-rate')
+def api_employee_rate():
+    """Test endpoint: get rate for an employee.
+    Query: ?name=...&position=...&onsite=true
+    """
+    name = request.args.get('name', '')
+    position = request.args.get('position')
+    onsite = request.args.get('onsite', '').lower() in ('true', '1', 'yes')
+
+    if not name:
+        return jsonify({'error': 'name required'}), 400
+
+    rate = get_employee_rate(name, position, onsite)
+    return jsonify({
+        'employee_name': name,
+        'requested_position': position,
+        'is_onsite': onsite,
+        'rate': rate,
+    })
+
+
+def batch_fetch_employees_from_odoo(employee_names):
+    """Fetch position + timesheet_cost for a batch of employees in ONE Odoo query.
+    Strips [E123] prefix from names since Odoo stores names without it.
+    Returns: { original_name: {'odoo_name', 'position', 'sar_rate'} }
+    """
+    if not employee_names:
+        return {}
+    if not odoo.uid:
+        if not odoo.connect():
+            return {}
+
+    import re
+    cleaned_to_originals = {}
+    for n in employee_names:
+        if not n:
+            continue
+        clean = re.sub(r'^\s*\[[A-Z]\d+\s*\]\s*', '', n).strip()
+        if clean:
+            cleaned_to_originals.setdefault(clean, []).append(n)
+
+    if not cleaned_to_originals:
+        return {}
+
+    try:
+        emps = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'hr.employee', 'search_read',
+            [[('name', 'in', list(cleaned_to_originals.keys()))]],
+            {'fields': ['id', 'name', 'job_title', 'job_id', 'timesheet_cost']}
+        )
+
+        result = {}
+        for emp in emps:
+            emp_name = emp.get('name', '')
+            position = None
+            if emp.get('job_id'):
+                position = emp['job_id'][1] if isinstance(emp['job_id'], list) else None
+            position = position or emp.get('job_title')
+            sar_rate = emp.get('timesheet_cost') or 0
+
+            entry = {
+                'odoo_name': emp_name,
+                'position': position,
+                'sar_rate': sar_rate,
+            }
+
+            for original in cleaned_to_originals.get(emp_name, []):
+                result[original] = entry
+
+        logger.info(f"Batch fetched {len(emps)} of {len(cleaned_to_originals)} employees from Odoo")
+        return result
+    except Exception as e:
+        logger.warning(f"Batch employee fetch failed: {e}")
+        return {}
+
+
+@app.route('/debug/employee-fields')
+def debug_employee_fields():
+    """Returns ALL fields of all hr.employee records to discover the correct rate field name."""
+    if not odoo.uid:
+        if not odoo.connect():
+            return jsonify({'error': 'Odoo unreachable'}), 500
+    try:
+        # First, get available fields of hr.employee model
+        fields_info = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'hr.employee', 'fields_get',
+            [],
+            {'attributes': ['type', 'string']}
+        )
+        # Filter to likely rate-related fields
+        rate_like = {}
+        for fname, finfo in fields_info.items():
+            label = (finfo.get('string') or '').lower()
+            if any(k in fname.lower() for k in ['cost', 'rate', 'hour', 'salary', 'wage']):
+                rate_like[fname] = finfo
+            elif any(k in label for k in ['cost', 'rate', 'hour', 'salary', 'wage']):
+                rate_like[fname] = finfo
+
+        # Try to fetch sample employee with all likely fields
+        sample = None
+        emp_name = request.args.get('name')
+        if emp_name:
+            try:
+                emps = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'hr.employee', 'search_read',
+                    [[('name', 'ilike', emp_name)]],
+                    {'fields': list(rate_like.keys()) + ['name'], 'limit': 5}
+                )
+                sample = emps
+            except Exception as e:
+                sample = {'error': str(e)}
+
+        return jsonify({
+            'rate_like_fields_count': len(rate_like),
+            'rate_like_fields': rate_like,
+            'sample_employee': sample,
+            'usage': 'Add ?name=Doghish to see actual values for a specific employee',
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================
+# PLAN OVERRIDES (stored in JSON)
+# ============================================================
+PLAN_FILE = os.path.join(PERSIST_DIR, 'plan_overrides.json')  # legacy path (kept for backup endpoint)
+
+
+def load_plan_overrides():
+    """Load plan overrides from DB.
+    Returns structure compatible with old JSON format:
+    {
+      'plan_overrides': {phase: {month_key: {field: value}}},
+      'position_overrides': {emp_name: position_name}
     }
-    recomputePlanRow(tr);
-  });
-}
+    """
+    # Plan overrides: namespace='plan', phase=<phase>, key='<month_key>.<field>'
+    plan_data = db.get_namespace_overrides('plan')
+    plan_overrides = {}
+    for phase, items in plan_data.items():
+        if not phase:
+            continue
+        plan_overrides[phase] = {}
+        for combined_key, val in items.items():
+            # combined_key = '<month_key>.<field>'
+            if '.' in combined_key:
+                month_key, field = combined_key.rsplit('.', 1)
+                if month_key not in plan_overrides[phase]:
+                    plan_overrides[phase][month_key] = {}
+                plan_overrides[phase][month_key][field] = val
 
-function renderEffort(data, phaseKey) {
-  const containerId = `effort-live-${phaseKey}`;
-  // Store containerId on window for renderVarianceSubTab to use
-  window._effortContainerId = containerId;
-  window._effortPhaseKey = phaseKey;
+    # Position overrides: namespace='position', phase='', key=<emp_name>
+    position_overrides = db.get_namespace_overrides('position', '')
 
-  return `
-    <div class="card">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
-        <div>
-          <h3 style="margin: 0; font-size: 14px;">Current Effort — Excel Style</h3>
-          <span class="muted-text" style="font-size: 11px;">Live from Odoo · Starting from first month with logs · Regular / Ramadan / Overtime split per country rules</span>
-        </div>
-        <button class="btn-primary" id="effort-reload-${phaseKey}" onclick="loadEffortLive('${phaseKey}','${containerId}')">↻ Refresh from Odoo</button>
-      </div>
-      <div id="${containerId}"><div class="loading">Loading from Odoo…</div></div>
-    </div>
-  `;
-}
-
-async function loadEffortLive(phaseKey, containerId) {
-  const cont = document.getElementById(containerId);
-  cont.innerHTML = '<div class="loading">Loading from Odoo (this may take a moment)…</div>';
-
-  try {
-    const res = await fetch(`/api/effort/${phaseKey}/all-months`);
-    const d = await res.json();
-
-    if (d.error) {
-      cont.innerHTML = `<div class="banner banner-warn"><strong>Error:</strong> ${d.error}</div>`;
-      return;
+    return {
+        'plan_overrides': plan_overrides,
+        'position_overrides': position_overrides,
     }
 
-    if (!d.employees || !d.employees.length) {
-      cont.innerHTML = `<div class="loading">No timesheet entries found for this phase</div>`;
-      return;
+
+def save_plan_overrides(data):
+    """Save plan_overrides back to DB. Diff against existing to avoid bulk re-writes.
+    This is kept for backward compat with restore endpoint.
+    """
+    # Plan
+    plan = data.get('plan_overrides', {}) or {}
+    for phase, months in plan.items():
+        if not isinstance(months, dict):
+            continue
+        for month_key, fields in months.items():
+            if not isinstance(fields, dict):
+                continue
+            for field, value in fields.items():
+                db.set_override('plan', phase, f"{month_key}.{field}", value)
+
+    # Position
+    pos = data.get('position_overrides', {}) or {}
+    for emp_name, pos_val in pos.items():
+        db.set_override('position', '', emp_name, pos_val)
+
+
+@app.route('/api/positions')
+def api_positions():
+    """Get full positions catalog from DB (replaces Excel-based)."""
+    positions = get_all_positions(db)
+    tunis = get_all_tunis_rates(db)
+    return jsonify({
+        'positions': positions,
+        'count': len(positions),
+        'tunis_rates': tunis,
+        'tunis_count': len(tunis),
+    })
+
+
+@app.route('/api/positions', methods=['POST'])
+def api_positions_save():
+    """Add or update a position. Body: { position, hour_rate, md_rate, country, is_onsite }"""
+    body = request.json or {}
+    position = body.get('position', '').strip()
+    if not position:
+        return jsonify({'error': 'position name required'}), 400
+
+    def to_float(v):
+        if v is None or v == '':
+            return None
+        try:
+            return float(v)
+        except (ValueError, TypeError):
+            return None
+
+    result = upsert_position(
+        db,
+        position_name=position,
+        hour_rate=to_float(body.get('hour_rate')),
+        md_rate=to_float(body.get('md_rate')),
+        country=body.get('country'),
+        is_onsite=body.get('is_onsite'),
+    )
+    return jsonify({'ok': True, 'position': result})
+
+
+@app.route('/api/positions/<path:position_name>', methods=['DELETE'])
+def api_positions_delete(position_name):
+    delete_position(db, position_name)
+    return jsonify({'ok': True})
+
+
+@app.route('/api/tunis-rates', methods=['POST'])
+def api_tunis_rates_save():
+    """Add or update a Tunis person rate."""
+    body = request.json or {}
+    name = body.get('name', '').strip()
+    hour_rate = body.get('hour_rate')
+    if not name:
+        return jsonify({'error': 'name required'}), 400
+    try:
+        hour_rate = float(hour_rate) if hour_rate else None
+    except Exception:
+        hour_rate = None
+    upsert_tunis_rate(db, name, hour_rate)
+    return jsonify({'ok': True, 'name': name, 'hour_rate': hour_rate})
+
+
+@app.route('/api/tunis-rates/<path:name>', methods=['DELETE'])
+def api_tunis_rates_delete(name):
+    delete_tunis_rate(db, name)
+    return jsonify({'ok': True})
+
+
+@app.route('/api/effort/<phase_key>')
+def api_effort(phase_key):
+    """Computed effort for a phase + month from Odoo (single month)"""
+    year = int(request.args.get('year') or date.today().year)
+    month = int(request.args.get('month') or date.today().month)
+
+    employees_in_data = set()
+    raw = odoo.get_timesheets(
+        date_from=date(year, month, 1).isoformat(),
+        date_to=(date(year, month + 1, 1) if month < 12 else date(year + 1, 1, 1)).isoformat(),
+    )
+    if raw:
+        for e in raw:
+            emp = e.get('employee_id')
+            if emp and emp[1]:
+                employees_in_data.add(emp[1])
+
+    position_lookup = {}
+    for emp_name in employees_in_data:
+        pos = get_odoo_position_for_employee(emp_name)
+        if pos:
+            position_lookup[emp_name] = pos
+
+    overrides = load_plan_overrides().get('position_overrides', {})
+    position_lookup.update(overrides)
+
+    result = compute_effort_from_odoo(phase_key, year, month, position_lookup)
+    return jsonify(result)
+
+
+@app.route('/api/effort/<phase_key>/all-months')
+def api_effort_all_months(phase_key):
+    """Excel-style Current Effort table:
+       - Rows: each employee (one row per person)
+       - Cols: # / Name / Position / Hour Rate / Overtime Rate / [month1: Reg/Ram/OT] / [month2: Reg/Ram/OT] ...
+       - Months start from FIRST month with any log in the project (across the phase)
+       - Each cell is total hours classified as Regular / Ramadan / Overtime per country rules.
+    """
+    if not odoo.uid:
+        if not odoo.connect():
+            return jsonify({'error': 'Odoo unreachable', 'employees': [], 'months': []}), 503
+
+    # Step 1: Determine the relevant tasks (under the phase)
+    phase_names = PHASE_MAPPING.get(phase_key, [])
+    if not phase_names:
+        return jsonify({'error': f'Unknown phase: {phase_key}'}), 400
+
+    try:
+        # Find project
+        projects = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.project', 'search_read',
+            [[('name', 'ilike', PROJECT_NAME)]],
+            {'fields': ['id', 'name'], 'limit': 5}
+        )
+        if not projects:
+            return jsonify({'employees': [], 'months': []})
+        project_id = projects[0]['id']
+
+        # Find phases — try exact match first, then ilike fallback for name variations
+        phases = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.phase', 'search_read',
+            [[('name', 'in', phase_names)]],
+            {'fields': ['id', 'name']}
+        )
+        # If we didn't find all phases, try ilike for each missing one
+        found_names_lower = {p['name'].strip().lower() for p in phases}
+        for pname in phase_names:
+            if pname.strip().lower() not in found_names_lower:
+                extra = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'project.phase', 'search_read',
+                    [[('name', 'ilike', pname.strip())]],
+                    {'fields': ['id', 'name'], 'limit': 1}
+                )
+                if extra:
+                    phases.extend(extra)
+                    found_names_lower.add(extra[0]['name'].strip().lower())
+        phase_ids = [p['id'] for p in phases]
+
+        # Get ALL tasks that have phase_id in our phases (any level, not just parents)
+        phase_tasks_direct = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [[('phase_id', 'in', phase_ids), ('project_id', '=', project_id)]],
+            {'fields': ['id', 'child_ids'], 'limit': 5000}
+        )
+        parent_ids = {t['id'] for t in phase_tasks_direct}
+
+        # All project tasks → walk parents to find descendants of phase tasks
+        all_proj_tasks = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [[('project_id', '=', project_id)]],
+            {'fields': ['id', 'parent_id', 'phase_id'], 'limit': 10000}
+        )
+        task_map = {t['id']: t for t in all_proj_tasks}
+        relevant_ids = set(parent_ids)
+
+        # Also directly include any task whose phase_id is in our phases
+        for t in all_proj_tasks:
+            ph = t.get('phase_id')
+            if ph and isinstance(ph, list) and ph[0] in phase_ids:
+                relevant_ids.add(t['id'])
+
+        # Walk parent chains to include sub-tasks of phase tasks
+        for t in all_proj_tasks:
+            if t['id'] in relevant_ids:
+                continue
+            cur = t
+            visited = set()
+            while cur and cur['id'] not in visited:
+                visited.add(cur['id'])
+                if cur['id'] in parent_ids:
+                    relevant_ids.add(t['id'])
+                    break
+                if not cur.get('parent_id'):
+                    break
+                pid = cur['parent_id'][0] if isinstance(cur['parent_id'], list) else cur['parent_id']
+                cur = task_map.get(pid)
+
+        # Fetch all timesheets for these tasks (no date filter - want full history)
+        timesheets = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'account.analytic.line', 'search_read',
+            [[('task_id', 'in', list(relevant_ids))]],
+            {'fields': ['employee_id', 'date', 'unit_amount'], 'limit': 100000}
+        )
+    except Exception as e:
+        logger.error(f"all-months effort fetch failed: {e}")
+        return jsonify({'error': str(e), 'employees': [], 'months': []}), 500
+
+    if not timesheets:
+        return jsonify({'employees': [], 'months': [], 'project_start_month': None})
+
+    # Step 2: Determine the first month with any log
+    earliest = None
+    latest = None
+    for ts in timesheets:
+        d = ts.get('date')
+        if not d:
+            continue
+        try:
+            dt = datetime.strptime(d, '%Y-%m-%d').date()
+            if earliest is None or dt < earliest:
+                earliest = dt
+            if latest is None or dt > latest:
+                latest = dt
+        except Exception:
+            continue
+
+    if not earliest:
+        return jsonify({'employees': [], 'months': []})
+
+    # Build list of months from first log to current month (or last log, whichever later)
+    today_d = date.today()
+    end_month = max(latest, today_d) if latest else today_d
+
+    months = []
+    cur = date(earliest.year, earliest.month, 1)
+    end_first = date(end_month.year, end_month.month, 1)
+    while cur <= end_first:
+        months.append({
+            'year': cur.year,
+            'month': cur.month,
+            'label': cur.strftime('%B %Y'),     # "April 2026"
+            'short': cur.strftime('%b'),         # "Apr"
+            'key': cur.strftime('%Y-%m'),
+        })
+        # Next month
+        if cur.month == 12:
+            cur = date(cur.year + 1, 1, 1)
+        else:
+            cur = date(cur.year, cur.month + 1, 1)
+
+    # Step 3: Aggregate per employee per month
+    # person_data[emp_name][month_key] = {regular, ramadan, overtime}
+    from collections import defaultdict
+    person_data = defaultdict(lambda: defaultdict(lambda: {'regular': 0, 'ramadan': 0, 'overtime': 0}))
+
+    # Travel records for onsite detection
+    travel_records = load_travel()
+
+    for ts in timesheets:
+        emp = ts.get('employee_id', [None, ''])
+        emp_name = emp[1] if isinstance(emp, list) and len(emp) > 1 else ''
+        if not emp_name:
+            continue
+        d_str = ts.get('date')
+        if not d_str:
+            continue
+        try:
+            d = datetime.strptime(d_str, '%Y-%m-%d').date()
+        except Exception:
+            continue
+        h = float(ts.get('unit_amount') or 0)
+        if h <= 0:
+            continue
+        month_key = d.strftime('%Y-%m')
+
+        country = get_country_from_employee_name(emp_name)
+
+        # Check Ramadan
+        is_ramadan = False
+        ramadan = RAMADAN_RANGES.get(country)
+        if ramadan:
+            try:
+                r_start = datetime.strptime(ramadan['start'], '%Y-%m-%d').date()
+                r_end = datetime.strptime(ramadan['end'], '%Y-%m-%d').date()
+                if r_start <= d <= r_end:
+                    is_ramadan = True
+            except Exception:
+                pass
+
+        # Weekend check → overtime
+        weekend = TUNIS_WEEKEND if country == 'TUN' else WEEKEND_DAYS
+        is_weekend = d.weekday() in weekend
+        is_holiday = is_public_holiday(d_str, country)
+
+        if is_weekend or is_holiday:
+            person_data[emp_name][month_key]['overtime'] += h
+        elif is_ramadan:
+            person_data[emp_name][month_key]['ramadan'] += h
+        else:
+            person_data[emp_name][month_key]['regular'] += h
+
+    # Step 4: BATCH fetch all employees from Odoo in ONE query (performance!)
+    all_emp_names = list(person_data.keys())
+    odoo_data = batch_fetch_employees_from_odoo(all_emp_names)
+    logger.info(f"Resolved {len(odoo_data)} of {len(all_emp_names)} employees from Odoo")
+
+    # ── imports for onsite split logic ──
+    import re as _re_effort
+    import calendar as _cal
+    from datetime import date as _date_cls2
+
+    # ── keyword-based onsite position resolver ──
+    _EGY_ONSITE_MAP = {
+        ('lead',   'business analyst'):  'EGY - Lead Business Analyst - onsite',
+        ('senior', 'business analyst'):  'EGY - Sr Business Analyst - onsite',
+        ('mid',    'business analyst'):  'EGY - Business Analyst - onsite',
+        ('lead',   'software engineer'): 'EGY - Lead Software Engineer - onsite',
+        ('senior', 'software engineer'): 'EGY - Sr. Software Engineer - onsite',
+        ('mid',    'software engineer'): 'EGY - Software Engineer - onsite',
+        ('lead',   'quality engineer'):  'EGY - Lead Quality Engineer - onsite',
+        ('senior', 'quality engineer'):  'EGY - Sr Quality Engineer - onsite',
+        ('mid',    'quality engineer'):  'EGY - Quality Engineer - onsite',
+        ('lead',   'ux designer'):       'EGY - Lead UX Designer - onsite',
+        ('senior', 'ux designer'):       'EGY - Sr UX Designer - onsite',
+        ('mid',    'ux designer'):       'EGY - UX Designer - onsite',
+        ('lead',   'project manager'):   'EGY - Project Manager - onsite',
+        ('senior', 'project manager'):   'EGY - Project Manager - onsite',
+        ('mid',    'project manager'):   'EGY - Project Manager - onsite',
     }
 
-    const months = d.months || [];
+    def _detect_level(s):
+        p = s.lower()
+        if any(x in p for x in ['lead', 'team lead', 'principal', 'head']):
+            return 'lead'
+        if any(x in p for x in ['senior', 'sr.', ' sr ']):
+            return 'senior'
+        return 'mid'
 
-    // Build column headers: # | Name | Position | Hour Rate | Overtime | [month1: 3 cols] | [month2: 3 cols] ...
-    let monthHeaders1 = '';  // top row - month names spanning 3 cols
-    let monthHeaders2 = '';  // bottom row - Reg/Ram/OT labels
-    months.forEach(m => {
-      monthHeaders1 += `<th colspan="3" class="num eff-month-head" style="border-left: 2px solid var(--border-strong);">${m.label}</th>`;
-      monthHeaders2 += `
-        <th class="num" style="border-left: 2px solid var(--border-strong); font-size: 9px;">Regular<br>(MH)</th>
-        <th class="num" style="font-size: 9px;">Ramadan<br>Hours</th>
-        <th class="num" style="font-size: 9px;">Overtime<br>(MH)</th>
-      `;
-    });
+    def _detect_role(s):
+        p = s.lower()
+        if any(x in p for x in ['project manager', 'pm ']):
+            return 'project manager'
+        if any(x in p for x in ['business anal', 'ba ', ' ba']):
+            return 'business analyst'
+        if any(x in p for x in ['software', 'developer', ' sw ']):
+            return 'software engineer'
+        if any(x in p for x in ['quality', 'qc', 'qa', 'test']):
+            return 'quality engineer'
+        if any(x in p for x in ['ux', 'ui/ux', 'design']):
+            return 'ux designer'
+        if 'engineer' in p:
+            return 'software engineer'
+        if 'analyst' in p:
+            return 'business analyst'
+        return None
 
-    let html = `
-      <div class="banner banner-info" style="margin-bottom: 12px; font-size: 12px;">
-        <strong>${d.total_employees} team members</strong> · 
-        Showing <strong>${months.length} month${months.length !== 1 ? 's' : ''}</strong>
-        (from <strong>${months[0]?.label || '—'}</strong> to <strong>${months[months.length-1]?.label || '—'}</strong>) ·
-        Rates from Odoo (SAR÷3.75) with DB fallback · Overtime = Hour Rate × 1.5
-      </div>
-      <div class="table-scroll eff-table-scroll">
-        <table class="data-table eff-table">
-          <thead>
-            <tr class="eff-row-month">
-              <th rowspan="2" style="position: sticky; left: 0; background: var(--navy); color: white; z-index: 3;">#</th>
-              <th rowspan="2" style="position: sticky; left: 40px; background: var(--navy); color: white; z-index: 3;">Name</th>
-              <th rowspan="2" style="position: sticky; background: var(--navy); color: white; z-index: 3;">Position</th>
-              <th rowspan="2" class="num">Hour Rate ($)</th>
-              <th rowspan="2" class="num">Overtime Rate</th>
-              ${monthHeaders1}
-              <th rowspan="2" class="num" style="border-left: 2px solid var(--border-strong);">Total<br>Cost ($)</th>
-              <th rowspan="2" class="num">Current<br>MDs done</th>
-            </tr>
-            <tr class="eff-row-subhead">
-              ${monthHeaders2}
-            </tr>
-          </thead>
-          <tbody>
-    `;
+    def _resolve_onsite_position(odoo_pos_str, country):
+        if not odoo_pos_str or country != 'EGY':
+            return None
+        level = _detect_level(odoo_pos_str)
+        role = _detect_role(odoo_pos_str)
+        if role:
+            return _EGY_ONSITE_MAP.get((level, role))
+        return None
 
-    let grandTotalCost = 0;
-    let grandTotalHours = 0;
-    let grandTotalMDs = 0;
+    def _calc_mds(regular_h, ramadan_h, overtime_h):
+        """Correct MD formula:
+        MDs = (Regular + Overtime) / 8  +  Ramadan / 6
+        """
+        return round((regular_h + overtime_h) / 8.0 + ramadan_h / 6.0, 2)
 
-    // Current month key
-    const now = new Date();
-    const thisMonthKey = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
-    let grandThisMonthMDs = 0;
+    def _calc_cost(regular_h, ramadan_h, overtime_h, hour_rate, overtime_rate):
+        """Correct cost formula:
+        Cost = (Regular + Ramadan) * hour_rate  +  Overtime * overtime_rate
+        """
+        base = (regular_h + ramadan_h) * (hour_rate or 0)
+        ot = overtime_h * (overtime_rate or 0)
+        return round(base + ot, 2)
 
-    // Per-month MD totals for TOTAL row
-    const monthMDTotals = {};
-    months.forEach(m => { monthMDTotals[m.key] = 0; });
+    _all_positions = get_all_positions(db)
+    all_promotions = load_promotions()
 
-    d.employees.forEach((emp, idx) => {
-      grandTotalCost += emp.total_cost_usd || 0;
-      grandTotalHours += emp.total_hours || 0;
-      grandTotalMDs += emp.current_mds || 0;
+    # For each employee: segment hours by (position, is_onsite) per day
+    employees_out = []
 
-      // Accumulate per-month MDs
-      months.forEach(m => {
-        const cell = emp.months?.[m.key] || { regular: 0, ramadan: 0, overtime: 0 };
-        monthMDTotals[m.key] += (cell.regular + cell.overtime) / 8 + cell.ramadan / 6;
-      });
+    for emp_name, months_data in sorted(person_data.items()):
+        country = get_country_from_employee_name(emp_name)
 
-      // This month MDs for summary strip
-      const thisCell = emp.months?.[thisMonthKey] || { regular: 0, ramadan: 0, overtime: 0 };
-      grandThisMonthMDs += (thisCell.regular + thisCell.overtime) / 8 + thisCell.ramadan / 6;
+        emp_code_match = _re_effort.match(r'^\[([A-Z]\d+)\s*\]', emp_name)
+        emp_code = emp_code_match.group(1) if emp_code_match else ''
+        emp_display = _re_effort.sub(r'^\[[A-Z]\d+\s*\]\s*', '', emp_name).strip()
 
-      // Country color
-      const countryColor = emp.country === 'KSA' ? '#10B981'
-                         : emp.country === 'TUN' ? '#F59E0B'
-                         : '#3B82F6';
+        odoo_info = odoo_data.get(emp_name, {})
+        odoo_pos = odoo_info.get('position')
+        sar_rate = odoo_info.get('sar_rate', 0)
 
-      // Onsite badge
-      const onsiteBadge = emp.is_onsite
-        ? '<span class="badge badge-amber" style="font-size: 9px; margin-left: 4px;">ONSITE</span>'
-        : '';
+        # ── Travel periods ──
+        emp_travel_periods = []
+        for tr in travel_records:
+            if not tr.get('name') or not tr.get('start_date'):
+                continue
+            tn = tr['name'].strip().lower()
+            en_clean = _re_effort.sub(r'\[[A-Z]\d+\s*\]\s*', '', emp_name).strip().lower()
+            if tn == en_clean or tn in en_clean or en_clean in tn:
+                emp_travel_periods.append({'start': tr['start_date'], 'end': tr.get('end_date')})
 
-      // Rate source badge
-      let sourceBadge = '';
-      if (emp.rate_source === 'odoo') {
-        sourceBadge = '<span class="badge" style="font-size: 9px; background: #d1fae5; color: #065f46;">Odoo</span>';
-      } else if (emp.rate_source && emp.rate_source.includes('onsite')) {
-        sourceBadge = '<span class="badge" style="font-size: 9px; background: #fef3c7; color: #92400e;">Onsite DB</span>';
-      } else if (emp.rate_source) {
-        sourceBadge = '<span class="badge" style="font-size: 9px; background: #e0e7ff; color: #3730a3;">DB</span>';
-      }
+        # ── Promotion records ──
+        emp_promos = []
+        for pr in all_promotions:
+            pn = (pr.get('name') or '').strip().lower()
+            en_clean2 = _re_effort.sub(r'\[[A-Z]\d+\s*\]\s*', '', emp_name).strip().lower()
+            if pn == en_clean2 or pn in en_clean2 or en_clean2 in pn:
+                emp_promos.append(pr)
+        emp_promos.sort(key=lambda x: x.get('promotion_date', ''))
 
-      // Build month cells
-      let monthCells = '';
-      months.forEach(m => {
-        const cell = emp.months[m.key] || { regular: 0, ramadan: 0, overtime: 0 };
-        monthCells += `
-          <td class="num" style="border-left: 2px solid var(--border-strong);">${cell.regular > 0 ? fmt.decimal(cell.regular) : '<span class="muted-text">—</span>'}</td>
-          <td class="num" style="color: ${cell.ramadan > 0 ? 'var(--amber)' : 'var(--text-muted)'};">${cell.ramadan > 0 ? fmt.decimal(cell.ramadan) : '—'}</td>
-          <td class="num" style="color: ${cell.overtime > 0 ? 'var(--red)' : 'var(--text-muted)'};">${cell.overtime > 0 ? fmt.decimal(cell.overtime) : '—'}</td>
-        `;
-      });
+        def _date_is_onsite(date_str):
+            for period in emp_travel_periods:
+                if date_str < period['start']: continue
+                if period['end'] is None or date_str <= period['end']: return True
+            return False
 
-      html += `
-        <tr>
-          <td style="position: sticky; left: 0; background: white; z-index: 2; font-weight: 600;">${idx + 1}</td>
-          <td style="position: sticky; left: 40px; background: white; z-index: 2;">
-            <b>${emp.name}</b>${onsiteBadge}<br>
-            <span class="muted-text" style="font-size: 10px;">${emp.code} · <span style="color: ${countryColor};">${emp.country}</span></span>
-          </td>
-          <td style="position: sticky; background: white; z-index: 2; font-size: 11px;">${emp.position}${sourceBadge ? ' ' + sourceBadge : ''}</td>
-          <td class="num"><b>${emp.hour_rate ? '$' + fmt.decimal(emp.hour_rate) : '<span style="color: var(--red);">—</span>'}</b></td>
-          <td class="num">${emp.overtime_rate ? '$' + fmt.decimal(emp.overtime_rate) : '—'}</td>
-          ${monthCells}
-          <td class="num" style="border-left: 2px solid var(--border-strong);"><b style="color: var(--blue);">$${fmt.num(Math.round(emp.total_cost_usd))}</b></td>
-          <td class="num"><b>${fmt.decimal(emp.current_mds)}</b></td>
-        </tr>
-      `;
-    });
+        def _base_position_on_date(date_str):
+            pos = odoo_pos or ''
+            if emp_promos:
+                if date_str < emp_promos[0]['promotion_date']:
+                    pos = emp_promos[0].get('old_position') or odoo_pos or ''
+                else:
+                    for promo in reversed(emp_promos):
+                        if date_str >= promo['promotion_date']:
+                            pos = promo.get('new_position') or odoo_pos or ''
+                            break
+            return pos
 
-    // Totals row — with per-month MD subtotals
-    html += `
-      <tr style="background: var(--bg-subtle); font-weight: 700;">
-        <td colspan="2" style="position: sticky; left: 0; background: var(--bg-subtle); z-index: 2;">TOTAL</td>
-        <td colspan="3" style="position: sticky; background: var(--bg-subtle); z-index: 2;">${d.total_employees} employees</td>
-    `;
-    months.forEach(m => {
-      const mds = monthMDTotals[m.key] || 0;
-      html += `
-        <td colspan="3" class="num" style="border-left: 2px solid var(--border-strong); vertical-align: middle;">
-          ${mds > 0 ? `<div style="font-size:10px; color:var(--text-muted); font-weight:400; margin-bottom:1px;">MDs</div><span style="color:var(--blue); font-size:13px;">${fmt.decimal(mds)}</span>` : '—'}
-        </td>`;
-    });
-    html += `
-        <td class="num" style="border-left: 2px solid var(--border-strong);"><b style="color: var(--blue);">$${fmt.num(Math.round(grandTotalCost))}</b></td>
-        <td class="num"><b style="color: var(--blue);">${fmt.decimal(grandTotalMDs)}</b></td>
-      </tr>
-      </tbody></table></div>
-    `;
+        # KSA position aliases: Odoo returns various formats, normalize to DB keys
+        _KSA_ALIASES = {
+            'ksa-business analyst':              'KSA - Business Analyst',
+            'ksa-senior business analyst':       'KSA - Sr Business Analyst',
+            'ksa-sr business analyst':           'KSA - Sr Business Analyst',
+            'ksa - senior business analyst':     'KSA - Sr Business Analyst',
+            'ksa - ksa-business analyst':        'KSA - Business Analyst',
+            'ksa - ksa-senior business analyst': 'KSA - Sr Business Analyst',
+            'ksa - ksa-sr business analyst':     'KSA - Sr Business Analyst',
+            'ksa - senior project manager':      'KSA - Project Manager',
+            'ksa - technical project manager':   'KSA - Project Manager',
+            'ksa - business analysis team lead': 'KSA - Lead Business Analyst',
+            'ksa - sr. manager, business consulting': 'KSA - Solution Architect / Manager',
+            'ksa - associated business analyst': 'KSA - Business Analyst',
+        }
 
-    // ── Summary strip OUTSIDE the table ──
-    const totalCostSAR = grandTotalCost * 3.75;
-    const avgCostPerMD = grandTotalMDs > 0 ? totalCostSAR / grandTotalMDs : 0;
-    html += `
-      <div style="display: flex; gap: 32px; align-items: center; flex-wrap: wrap; margin-top: 16px; padding: 14px 18px; background: #EFF6FF; border-radius: 8px; border: 1px solid #BFDBFE;">
-        <div>
-          <div style="font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 2px;">Total Cost in SAR</div>
-          <div style="font-size: 20px; font-weight: 700; color: var(--navy);">SAR ${fmt.num(Math.round(totalCostSAR))}</div>
-        </div>
-        <div style="width: 1px; height: 36px; background: #BFDBFE;"></div>
-        <div>
-          <div style="font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 2px;">Average Cost per MD</div>
-          <div style="font-size: 20px; font-weight: 700; color: var(--navy);">SAR ${fmt.num(Math.round(avgCostPerMD))}</div>
-        </div>
-        <div style="width: 1px; height: 36px; background: #BFDBFE;"></div>
-        <div>
-          <div style="font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 2px;">This Month MDs</div>
-          <div style="font-size: 20px; font-weight: 700; color: var(--blue);">${fmt.decimal(grandThisMonthMDs)}</div>
-        </div>
-        <div style="font-size: 11px; color: var(--text-muted); margin-left: auto;">$1 = SAR 3.75 · Total MDs: <b style="color:var(--navy)">${fmt.decimal(grandTotalMDs)}</b></div>
-      </div>
-    `;
-    cont.innerHTML = html;
-  } catch (err) {
-    cont.innerHTML = `<div class="banner banner-warn"><strong>Error:</strong> ${err.message}</div>`;
-  }
-}
+        def _lookup_pos_fuzzy(pos_str):
+            """Try exact DB lookup, then normalize spaces/dashes, then alias map."""
+            if not pos_str:
+                return None
+            # 0. Check alias map first
+            alias = _KSA_ALIASES.get(pos_str.strip().lower())
+            if alias:
+                pi = get_position_by_name(db, alias)
+                if pi and pi.get('hour_rate'):
+                    return pi
+            # 1. Exact match
+            pi = get_position_by_name(db, pos_str)
+            if pi and pi.get('hour_rate'):
+                return pi
+            # 2. Normalize: collapse spaces around dashes
+            import re as _re_pos
+            def _norm(s):
+                s = _re_pos.sub(r'\s*-\s*', ' - ', s)
+                s = _re_pos.sub(r'\s+', ' ', s).strip()
+                return s.lower()
+            target = _norm(pos_str)
+            all_pos = get_all_positions(db)
+            for p in all_pos:
+                if _norm(p.get('position', '') or p.get('name', '')) == target and p.get('hour_rate'):
+                    return p
+            # 3. Also try normalizing Sr. / Senior / Sr variants
+            def _core(s):
+                s = _re_pos.sub(r'\bsenior\b', 'sr', s, flags=_re_pos.IGNORECASE)
+                s = _re_pos.sub(r'\bsr\.\b', 'sr', s, flags=_re_pos.IGNORECASE)
+                return _norm(s)
+            t_core = _core(pos_str)
+            for p in all_pos:
+                pname = p.get('position', '') or p.get('name', '')
+                if _core(pname) == t_core and p.get('hour_rate'):
+                    return p
+            return None
 
-function renderEstimated(data, phaseKey) {
-  // Build interactive estimated cost table — editable rows, auto-calc from positions catalog
-  return `<div id="estimatedLiveWrap">
-    <div class="loading">Loading estimated cost table…</div>
-  </div>`;
-}
+        def _get_rate_for_pos(base_pos_with_country, is_onsite):
+            hour_rate = None; rate_source = None
+            if country == 'TUN':
+                tunis = get_tunis_rate_by_name(db, emp_name)
+                if tunis:
+                    hour_rate = tunis['hour_rate']; rate_source = 'tunis_rates_db'
+            elif is_onsite:
+                raw_pos = (base_pos_with_country or '').replace(f'{country} - ', '')
+                onsite_pos = _resolve_onsite_position(raw_pos, country)
+                if onsite_pos:
+                    pi = _lookup_pos_fuzzy(onsite_pos)
+                    if pi:
+                        hour_rate = pi['hour_rate']; rate_source = 'positions_db_onsite'
+                if hour_rate is None and sar_rate and sar_rate > 0:
+                    hour_rate = round(sar_rate / SAR_TO_USD, 2); rate_source = 'odoo_fallback'
+            else:
+                # Always try DB first (handles promotions — each segment has different position)
+                if base_pos_with_country:
+                    pi = _lookup_pos_fuzzy(base_pos_with_country)
+                    if pi:
+                        hour_rate = pi['hour_rate']; rate_source = 'positions_db'
+                # Fallback to Odoo SAR rate ONLY if no DB match
+                if hour_rate is None and sar_rate and sar_rate > 0:
+                    hour_rate = round(sar_rate / SAR_TO_USD, 2); rate_source = 'odoo'
+            overtime_rate = round(hour_rate * OVERTIME_MULTIPLIER, 2) if hour_rate else None
+            return hour_rate, overtime_rate, rate_source
 
-let _estPositions = [];
-let _estRows = [];
-let _estPhase = '';
+        # ── Per-month segmentation ──
+        from collections import defaultdict as _dd2
+        segment_data = _dd2(lambda: _dd2(lambda: {'regular': 0.0, 'ramadan': 0.0, 'overtime': 0.0}))
+        weekend = TUNIS_WEEKEND if country == 'TUN' else WEEKEND_DAYS
 
-function makeEstRow(position = '', hourRate = '', actualTime = 176, estMonths = '') {
-  return { id: Date.now() + Math.random(), position, hourRate, actualTime, estMonths };
-}
+        for m in months:
+            mkey = m['key']
+            cell = months_data.get(mkey, {'regular': 0, 'ramadan': 0, 'overtime': 0})
+            total_cell = cell['regular'] + cell['ramadan'] + cell['overtime']
+            if total_cell == 0:
+                continue
 
-async function loadEstimatedLive(phaseKey, containerId) {
-  const wrap = document.getElementById(containerId || 'estimatedLiveWrap');
-  if (!wrap) { console.warn('estimatedLiveWrap not found'); return; }
-  wrap.innerHTML = '<div class="loading">Loading estimated cost table…</div>';
+            seg_counts = _dd2(int)
+            days_in_month = _cal.monthrange(m['year'], m['month'])[1]
+            for day in range(1, days_in_month + 1):
+                try: d_obj = _date_cls2(m['year'], m['month'], day)
+                except: continue
+                if d_obj.weekday() in weekend: continue
+                d_str = f"{m['year']:04d}-{m['month']:02d}-{day:02d}"
+                if is_public_holiday(d_str, country): continue  # holidays → overtime, skip from working day count
+                raw_pos = _base_position_on_date(d_str)
+                base_p = f"{country} - {raw_pos}" if raw_pos else None
+                is_on = _date_is_onsite(d_str)
+                seg_counts[(base_p, is_on)] += 1
 
-  // Load positions catalog from DB
-  let positions = [];
-  try {
-    const r = await fetch('/api/positions');
-    const d = await r.json();
-    positions = (d.positions || []).filter(p => p.hour_rate)
-      .sort((a,b) => (a.position||a.name||'').localeCompare(b.position||b.name||''));
-  } catch (e) { console.warn('positions load failed:', e); }
+            total_working = sum(seg_counts.values())
+            if total_working == 0:
+                raw_pos = _base_position_on_date(mkey + '-15')
+                base_p = f"{country} - {raw_pos}" if raw_pos else None
+                seg_counts[(base_p, False)] = 1
+                total_working = 1
 
-  // Load saved rows from server
-  let rows = [];
-  try {
-    const r = await fetch('/api/estimated-rows?phase=' + encodeURIComponent(phaseKey || 'development'));
-    if (r.ok) {
-      const d = await r.json();
-      rows = d.rows || [];
+            for (base_p, is_on), cnt in seg_counts.items():
+                ratio = cnt / total_working
+                segment_data[(base_p, is_on)][mkey]['regular']  += cell['regular']  * ratio
+                segment_data[(base_p, is_on)][mkey]['ramadan']  += cell['ramadan']  * ratio
+                segment_data[(base_p, is_on)][mkey]['overtime'] += cell['overtime'] * ratio
+
+        # ── Build one row per segment ──
+        if not segment_data:
+            base_p = f"{country} - {odoo_pos}" if odoo_pos else '—'
+            hr, ot_r, src = _get_rate_for_pos(base_p, False)
+            employees_out.append({
+                'name': emp_display, 'full_name': emp_name, 'code': emp_code, 'country': country,
+                'position': base_p, 'hour_rate': hr, 'overtime_rate': ot_r, 'rate_source': src,
+                'sar_rate': sar_rate, 'is_onsite': False,
+                'months': {m['key']: {'regular':0,'ramadan':0,'overtime':0,'total':0} for m in months},
+                'total_hours': 0, 'total_cost_usd': 0, 'current_mds': 0,
+            })
+            continue
+
+        for (base_p, is_on), mkey_data in sorted(segment_data.items(), key=lambda x: (x[0][0] or '', x[0][1])):
+            full_months = {}
+            for m in months:
+                c = mkey_data.get(m['key'], {'regular': 0, 'ramadan': 0, 'overtime': 0})
+                full_months[m['key']] = {
+                    'regular':  round(c['regular'], 2),
+                    'ramadan':  round(c['ramadan'], 2),
+                    'overtime': round(c['overtime'], 2),
+                    'total':    round(c['regular'] + c['ramadan'] + c['overtime'], 2),
+                }
+            seg_reg = sum(v['regular']  for v in full_months.values())
+            seg_ram = sum(v['ramadan']  for v in full_months.values())
+            seg_ot  = sum(v['overtime'] for v in full_months.values())
+            if seg_reg + seg_ram + seg_ot < 0.01:
+                continue
+
+            hr, ot_r, src = _get_rate_for_pos(base_p, is_on)
+            if is_on:
+                raw_pos = (base_p or '').replace(f'{country} - ', '')
+                display_pos = _resolve_onsite_position(raw_pos, country) or ((base_p or '') + ' - onsite')
+            else:
+                display_pos = base_p or '—'
+
+            employees_out.append({
+                'name': emp_display + (' — Onsite' if is_on else ''),
+                'full_name': emp_name, 'code': emp_code, 'country': country,
+                'position': display_pos, 'hour_rate': hr, 'overtime_rate': ot_r,
+                'rate_source': src, 'sar_rate': sar_rate, 'is_onsite': is_on,
+                'months': full_months,
+                'total_hours': round(seg_reg + seg_ram + seg_ot, 2),
+                'total_cost_usd': _calc_cost(seg_reg, seg_ram, seg_ot, hr, ot_r),
+                'current_mds': _calc_mds(seg_reg, seg_ram, seg_ot),
+            })
+
+    # Sort: name alpha, onsite after regular
+    employees_out.sort(key=lambda x: (
+        x['name'].lower().replace(' — onsite', ''),
+        1 if x.get('is_onsite') else 0
+    ))
+
+    return jsonify({
+        'phase': phase_key,
+        'months': months,
+        'employees': employees_out,
+        'project_start_month': months[0]['key'] if months else None,
+        'total_employees': len(employees_out),
+    })
+
+
+@app.route('/api/plan-overrides', methods=['GET'])
+def api_plan_overrides_get():
+    return jsonify(load_plan_overrides())
+
+
+@app.route('/api/plan-overrides', methods=['POST'])
+def api_plan_overrides_save():
+    body = request.json or {}
+    phase = body.get('phase')
+    month_key = body.get('month_key')
+    field = body.get('field')  # 'completion' or 'remaining'
+    value = body.get('value')
+
+    # Backward compat: 'plan_md' key
+    if 'plan_md' in body and not field:
+        field = 'plan'
+        value = body.get('plan_md')
+
+    if not phase or not month_key or not field:
+        return jsonify({'error': 'phase, month_key, and field required'}), 400
+
+    # Convert to float
+    if value is not None and value != '':
+        try:
+            value = float(value)
+        except (ValueError, TypeError):
+            return jsonify({'error': 'value must be numeric'}), 400
+    else:
+        value = None
+
+    # Write to DB directly
+    db.set_override('plan', phase, f"{month_key}.{field}", value)
+
+    return jsonify({'ok': True})
+
+
+@app.route('/api/position-overrides', methods=['POST'])
+def api_position_overrides_save():
+    """Manual position override for an employee (when Odoo doesn't have it)"""
+    body = request.json or {}
+    name = body.get('name')
+    position = body.get('position')
+    if not name:
+        return jsonify({'error': 'name required'}), 400
+    db.set_override('position', '', name, position if position else None)
+    return jsonify({'ok': True})
+
+
+@app.route('/api/plan-overrides/backup')
+def api_overrides_backup():
+    """Download all overrides as JSON for manual backup"""
+    data = {
+        'plan_overrides': load_plan_overrides(),
+        'travel_records': load_travel(),
+        'exported_at': datetime.now().isoformat(),
     }
-  } catch (e) {}
-  if (!rows.length) rows = [makeEstRow()];
+    import json
+    return Response(
+        json.dumps(data, indent=2, ensure_ascii=False),
+        mimetype='application/json',
+        headers={'Content-Disposition': f'attachment; filename="dashboard_backup_{date.today().isoformat()}.json"'}
+    )
 
-  _estPositions = positions;
-  _estRows = rows;
-  _estPhase = phaseKey;
-  renderEstimatedTable(wrap, rows, positions, phaseKey);
-}
+@app.route('/api/plan-overrides/restore', methods=['POST'])
+def api_overrides_restore():
+    """Upload a backup JSON to restore overrides + travel records"""
+    body = request.json or {}
+    if not body:
+        return jsonify({'error': 'Empty body'}), 400
+    if 'plan_overrides' in body:
+        save_plan_overrides(body['plan_overrides'])
+    if 'travel_records' in body:
+        save_travel(body['travel_records'])
+    return jsonify({'ok': True, 'restored': {
+        'plan_overrides': len(body.get('plan_overrides', {})),
+        'travel_records': len(body.get('travel_records', [])),
+    }})
 
-function renderEstimatedTable(wrap, rows, positions, phaseKey) {
-  _estPositions = positions;
-  _estRows = rows;
-  _estPhase = phaseKey;
 
-  const posOptions = positions.map(p =>
-    `<option value="${p.position || p.name}">${p.position || p.name} — $${p.hour_rate}/h</option>`
-  ).join('');
-
-  // Compute totals
-  let totalUSD = 0, totalMDs = 0;
-  rows.forEach(r => {
-    const hr = parseFloat(r.hourRate) || 0;
-    const at = parseFloat(r.actualTime) || 0;
-    const em = parseFloat(r.estMonths) || 0;
-    const costPerMonth = hr * at;
-    const totalCost = costPerMonth * em;
-    const mds = at * em / 8;
-    totalUSD += totalCost;
-    totalMDs += mds;
-  });
-
-  const totalSAR = totalUSD * 3.75;
-  const totalSARperMonth = rows.length ? (totalSAR / Math.max(1, Math.max(...rows.map(r => parseFloat(r.estMonths) || 0)))) : 0;
-  const avgMDsPerMonth = rows.length ? (totalMDs / Math.max(1, Math.max(...rows.map(r => parseFloat(r.estMonths) || 0)))) : 0;
-  const costPerMDSAR = totalMDs > 0 ? totalSAR / totalMDs : 0;
-
-  let html = `
-    <div class="card">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-        <h3 class="card-title" style="margin:0;">Estimated Cost by Position <span class="muted-text" style="font-size:12px;">— editable · auto-calculates from DB rates</span></h3>
-        <div style="display:flex;gap:8px;">
-          <button class="btn-outline" style="font-size:11px;" onclick="estAddRow()">+ Add Row</button>
-          <button class="btn-outline" style="font-size:11px; color:var(--red);" onclick="estClearAll()">🗑 Clear All</button>
-        </div>
-      </div>
-      <div class="table-scroll">
-        <table class="data-table" id="estTable">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th style="min-width:220px;">Position</th>
-              <th class="num">Hour Rate ($)</th>
-              <th class="num">Actual Time<br><small>(MH/month)</small></th>
-              <th class="num">Cost per Month<br><small>($)</small></th>
-              <th class="num">Est. # of<br>Months</th>
-              <th class="num">Total Cost<br>USD</th>
-              <th class="num">Total No<br>of MDs</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-  `;
-
-  rows.forEach((r, i) => {
-    const hr = parseFloat(r.hourRate) || 0;
-    const at = parseFloat(r.actualTime) || 0;
-    const em = parseFloat(r.estMonths) || 0;
-    const costPerMonth = hr > 0 && at > 0 ? hr * at : null;
-    const totalCost = costPerMonth !== null && em > 0 ? costPerMonth * em : null;
-    const mds = at > 0 && em > 0 ? at * em / 8 : null;
-
-    html += `
-      <tr data-row="${r.id}">
-        <td style="color:var(--text-muted); font-size:11px;">${i + 1}</td>
-        <td>
-          <select class="svc-input est-pos-select" data-rowid="${r.id}" style="width:100%; padding:4px 6px; font-size:12px; border:1px solid var(--border-strong); border-radius:4px;"
-            onchange="estOnPosChange(this)">
-            <option value="">— select position —</option>
-            ${posOptions}
-          </select>
-          <script>document.querySelector('[data-row="${r.id}"] select').value = ${JSON.stringify(r.position || '')};</script>
-        </td>
-        <td class="num">
-          <input type="number" step="0.01" class="svc-input" data-rowid="${r.id}" data-field="hourRate"
-            value="${r.hourRate || ''}" placeholder="$"
-            style="width:70px; padding:4px 6px; text-align:right; border:1px solid var(--border-strong); border-radius:4px; font-size:12px;"
-            oninput="estOnChange(this)">
-        </td>
-        <td class="num">
-          <input type="number" step="1" class="svc-input" data-rowid="${r.id}" data-field="actualTime"
-            value="${r.actualTime || 176}" placeholder="176"
-            style="width:60px; padding:4px 6px; text-align:right; border:1px solid var(--border-strong); border-radius:4px; font-size:12px;"
-            oninput="estOnChange(this)">
-        </td>
-        <td class="num" style="font-weight:600; color:var(--navy);">${costPerMonth !== null ? '$' + fmt.num(Math.round(costPerMonth)) : '—'}</td>
-        <td class="num">
-          <input type="number" step="1" min="1" class="svc-input" data-rowid="${r.id}" data-field="estMonths"
-            value="${r.estMonths || ''}" placeholder="#"
-            style="width:55px; padding:4px 6px; text-align:right; border:1px solid var(--border-strong); border-radius:4px; font-size:12px;"
-            oninput="estOnChange(this)">
-        </td>
-        <td class="num"><b style="color:var(--blue);">${totalCost !== null ? '$' + fmt.num(Math.round(totalCost)) : '—'}</b></td>
-        <td class="num">${mds !== null ? fmt.decimal(mds) : '—'}</td>
-        <td><button style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:14px;" onclick="estDeleteRow('${r.id}')">✕</button></td>
-      </tr>
-    `;
-  });
-
-  html += `
-          </tbody>
-          <tfoot>
-            <tr style="background:var(--navy); color:white; font-weight:700;">
-              <td colspan="6" style="text-align:right; padding:8px 12px;">TOTAL</td>
-              <td class="num" style="color:#93C5FD;">$${fmt.num(Math.round(totalUSD))}</td>
-              <td class="num" style="color:#93C5FD;">${fmt.decimal(totalMDs)}</td>
-              <td></td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-    </div>
-
-    <!-- Summary strip (mirrors Excel summary block) -->
-    <div class="card" style="margin-top:12px; background:#F8FAFC;">
-      <div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:0; border:1px solid var(--border-strong); border-radius:6px; overflow:hidden;">
-        ${[
-          ['TOTAL USD per month (22 days)', `$${fmt.num(Math.round(totalUSD / Math.max(1, Math.max(...rows.map(r=>parseFloat(r.estMonths)||0)))))} USD`],
-          ['TOTAL Estimated Cost per month (22 days) SAR', `${fmt.num(Math.round(totalSAR / Math.max(1, Math.max(...rows.map(r=>parseFloat(r.estMonths)||0)))))} SAR`],
-          ['Estimated MDs / Month', fmt.decimal(avgMDsPerMonth)],
-          ['TOTAL Estimated Cost per MD SAR', `${fmt.num(Math.round(costPerMDSAR))} SAR`],
-        ].map(([label, val]) => `
-          <div style="padding:12px 16px; border-right:1px solid var(--border-strong);">
-            <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:4px;">${label}</div>
-            <div style="font-size:16px; font-weight:700; color:var(--navy);">${val}</div>
-          </div>
-        `).join('')}
-      </div>
-      <div style="margin-top:10px; padding:14px 18px; background:var(--navy); border-radius:6px; display:flex; justify-content:space-between; align-items:center;">
-        <span style="color:#93C5FD; font-size:13px; font-weight:600;">Total Project Estimated Cost (SAR)</span>
-        <span style="color:white; font-size:22px; font-weight:700;">SAR ${fmt.num(Math.round(totalSAR))}</span>
-      </div>
-    </div>
-  `;
-
-  wrap.innerHTML = html;
-
-  // Set select values properly after render
-  rows.forEach(r => {
-    const sel = wrap.querySelector(`[data-row="${r.id}"] select`);
-    if (sel && r.position) sel.value = r.position;
-  });
-}
-
-async function estSave() {
-  try {
-    await fetch('/api/estimated-rows', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phase: _estPhase, rows: _estRows })
-    });
-  } catch (e) { console.warn('estSave failed:', e); }
-}
-
-function estOnPosChange(sel) {
-  const rowId = sel.dataset.rowid;
-  const posName = sel.value;
-  const row = _estRows.find(r => String(r.id) === String(rowId));
-  if (!row) return;
-  row.position = posName;
-  // Auto-fill hour rate from positions catalog
-  const pos = _estPositions.find(p => (p.position || p.name) === posName);
-  if (pos && pos.hour_rate) {
-    row.hourRate = pos.hour_rate;
-  }
-  estSave();
-  renderEstimatedTable(document.getElementById('estimatedLiveWrap'), _estRows, _estPositions, _estPhase);
-}
-
-function estOnChange(inp) {
-  const rowId = inp.dataset.rowid;
-  const field = inp.dataset.field;
-  const row = _estRows.find(r => String(r.id) === String(rowId));
-  if (!row) return;
-  row[field] = inp.value;
-  estSave();
-  renderEstimatedTable(document.getElementById('estimatedLiveWrap'), _estRows, _estPositions, _estPhase);
-}
-
-function estAddRow() {
-  _estRows.push(makeEstRow('', '', 176, ''));
-  estSave();
-  renderEstimatedTable(document.getElementById('estimatedLiveWrap'), _estRows, _estPositions, _estPhase);
-}
-
-function estDeleteRow(id) {
-  _estRows = _estRows.filter(r => String(r.id) !== String(id));
-  if (!_estRows.length) _estRows = [makeEstRow()];
-  estSave();
-  renderEstimatedTable(document.getElementById('estimatedLiveWrap'), _estRows, _estPositions, _estPhase);
-}
-
-function estClearAll() {
-  if (!confirm('Clear all rows?')) return;
-  _estRows = [makeEstRow()];
-  estSave();
-  renderEstimatedTable(document.getElementById('estimatedLiveWrap'), _estRows, _estPositions, _estPhase);
-}
-
-// ====== TRAVEL & ONSITE ======
-async function renderTravelSubTab() {
-  const cont = document.getElementById('varianceContent');
-
-  // Load employees + positions in parallel
-  let employees = [];
-  let positions = AppState.positions || [];
-  try {
-    const r = await fetch('/api/project-employees');
-    const d = await r.json();
-    employees = d.employees || [];
-  } catch (e) {}
-
-  AppState.travelEmployees = employees;
-  AppState.travelPositions = positions;
-
-  cont.innerHTML = `
-    <div class="banner banner-info">
-      <strong>Travel & Onsite Records:</strong>
-      Track when team members travel onsite. Rates differ between Egypt and onsite work.
-      Leave end date empty if travel is open-ended.
-    </div>
-
-    <div class="card">
-      <h3 class="card-title" id="travelFormTitle">Add Travel Record</h3>
-      <div class="travel-form">
-        <div class="form-row">
-          <label>Employee Name
-            <input list="empNamesList" id="trName" placeholder="Type or pick from list..." class="search-input" autocomplete="off">
-            <datalist id="empNamesList">
-              ${employees.map(e => `<option value="${e.name}" data-position="${e.position || ''}">`).join('')}
-            </datalist>
-          </label>
-          <label>Position
-            <input list="positionsList" id="trPos" placeholder="Type or pick from list..." class="search-input" autocomplete="off">
-            <datalist id="positionsList">
-              ${positions.map(p => `<option value="${p.name}">`).join('')}
-            </datalist>
-          </label>
-        </div>
-        <div class="form-row">
-          <label>Travel Start <input type="date" id="trStart" class="search-input"></label>
-          <label>End Date <small class="muted-text">(optional · leave empty for open trip)</small> <input type="date" id="trEnd" class="search-input"></label>
-        </div>
-        <div class="form-row">
-          <label class="full-width">Notes <input type="text" id="trNotes" placeholder="Optional notes..." class="search-input"></label>
-        </div>
-        <div class="form-actions">
-          <button id="trCancel" class="btn-ghost" style="display:none;">Cancel Edit</button>
-          <button id="trSubmit" class="btn-primary">+ Add Record</button>
-        </div>
-        <input type="hidden" id="trEditingId" value="">
-      </div>
-    </div>
-
-    <div class="card">
-      <h3 class="card-title">Travel Records <span class="muted-text">— click "Edit" to update</span></h3>
-      <div class="table-scroll">
-        <table class="data-table" id="travelTable">
-          <thead><tr>
-            <th>Name</th><th>Position</th><th>Start</th><th>End</th>
-            <th class="num">Days</th><th>Status</th><th>Notes</th><th></th>
-          </tr></thead>
-          <tbody><tr><td colspan="8" class="loading">Loading…</td></tr></tbody>
-        </table>
-      </div>
-    </div>
-  `;
-
-  // Auto-fill position when name selected
-  document.getElementById('trName').addEventListener('input', (e) => {
-    const name = e.target.value;
-    const emp = (AppState.travelEmployees || []).find(x => x.name === name);
-    if (emp && emp.position && !document.getElementById('trPos').value) {
-      // Strip "- onsite" suffix to land on the dropdown value (PM picks onsite manually here)
-      const cleanPos = emp.position.replace(/\s*-\s*onsite\s*$/i, '').trim();
-      document.getElementById('trPos').value = cleanPos;
+@app.route('/api/storage-info')
+def api_storage_info():
+    """Diagnostic endpoint to verify storage is working"""
+    info = {
+        'persist_dir': PERSIST_DIR,
+        'persist_dir_exists': os.path.isdir(PERSIST_DIR),
+        'persist_dir_writable': os.access(PERSIST_DIR, os.W_OK),
+        'data_path_env': os.environ.get('DATA_PATH'),
+        'files': [],
+        'db_stats': db.get_stats(),
     }
-  });
+    if info['persist_dir_exists']:
+        for f in os.listdir(PERSIST_DIR):
+            full = os.path.join(PERSIST_DIR, f)
+            if os.path.isfile(full):
+                info['files'].append({
+                    'name': f,
+                    'size_bytes': os.path.getsize(full),
+                    'modified': datetime.fromtimestamp(os.path.getmtime(full)).isoformat(),
+                })
+    return jsonify(info)
 
-  document.getElementById('trSubmit').addEventListener('click', submitTravel);
-  document.getElementById('trCancel').addEventListener('click', cancelEdit);
-  await loadTravelRecords();
-}
 
-async function loadTravelRecords() {
-  const res = await fetch('/api/travel');
-  const d = await res.json();
-  const tbody = document.querySelector('#travelTable tbody');
-  if (!d.records || !d.records.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="loading">No travel records yet — add one above</td></tr>';
-    return;
-  }
-  AppState.travelRecords = d.records;
-  tbody.innerHTML = '';
-  d.records.forEach(r => {
-    const tr = document.createElement('tr');
-    const statusClass = r.status === 'Returned' ? 'status-Done' :
-                        r.status === 'Onsite' ? 'status-In-Progress' :
-                        r.status === 'Onsite (open-ended)' ? 'status-At-Risk' : 'status-Not-Started';
-    tr.innerHTML = `
-      <td><b>${r.name}</b></td>
-      <td><span class="muted-text" style="font-size: 11px;">${r.position || '—'}</span></td>
-      <td><span style="font-family: var(--mono); font-size: 12px;">${r.start_date}</span></td>
-      <td><span style="font-family: var(--mono); font-size: 12px;">${r.end_date || '<span style="color: var(--amber); font-weight: 600;">— open —</span>'}</span></td>
-      <td class="num"><b>${r.days_onsite || 0}</b></td>
-      <td><span class="status-pill ${statusClass}">${r.status}</span></td>
-      <td><span class="muted-text" style="font-size: 11px;">${r.notes || ''}</span></td>
-      <td>
-        <button class="see-details-btn" data-edit-id="${r.id}">Edit</button>
-        <button class="btn-ghost" style="padding: 4px 10px; font-size: 11px;" data-del-id="${r.id}">Delete</button>
-      </td>
-    `;
-    tbody.appendChild(tr);
-  });
-  tbody.querySelectorAll('[data-edit-id]').forEach(b => {
-    b.addEventListener('click', () => startEdit(b.dataset.editId));
-  });
-  tbody.querySelectorAll('[data-del-id]').forEach(b => {
-    b.addEventListener('click', async () => {
-      if (!confirm('Delete this travel record?')) return;
-      await fetch(`/api/travel/${b.dataset.delId}`, { method: 'DELETE' });
-      loadTravelRecords();
-    });
-  });
-}
+@app.route('/api/db/audit')
+def api_db_audit():
+    """Get recent changes for debugging"""
+    limit = int(request.args.get('limit', 50))
+    return jsonify({
+        'recent_changes': db.get_recent_audit(limit=limit),
+    })
 
-function startEdit(id) {
-  const r = (AppState.travelRecords || []).find(x => String(x.id) === String(id));
-  if (!r) return;
-  document.getElementById('trName').value = r.name || '';
-  document.getElementById('trPos').value = r.position || '';
-  document.getElementById('trStart').value = r.start_date || '';
-  document.getElementById('trEnd').value = r.end_date || '';
-  document.getElementById('trNotes').value = r.notes || '';
-  document.getElementById('trEditingId').value = r.id;
-  document.getElementById('trSubmit').textContent = '✓ Save Changes';
-  document.getElementById('trSubmit').className = 'btn-export';
-  document.getElementById('trCancel').style.display = '';
-  document.getElementById('travelFormTitle').textContent = `Edit Travel Record #${r.id} — ${r.name}`;
-  // Scroll to form
-  document.querySelector('.travel-form').scrollIntoView({ behavior: 'smooth', block: 'center' });
-}
 
-function cancelEdit() {
-  document.getElementById('trEditingId').value = '';
-  ['trName','trPos','trStart','trEnd','trNotes'].forEach(id => document.getElementById(id).value = '');
-  document.getElementById('trSubmit').textContent = '+ Add Record';
-  document.getElementById('trSubmit').className = 'btn-primary';
-  document.getElementById('trCancel').style.display = 'none';
-  document.getElementById('travelFormTitle').textContent = 'Add Travel Record';
-}
 
-async function submitTravel() {
-  const editingId = document.getElementById('trEditingId').value;
-  const body = {
-    name: document.getElementById('trName').value.trim(),
-    position: document.getElementById('trPos').value.trim(),
-    start_date: document.getElementById('trStart').value,
-    end_date: document.getElementById('trEnd').value || null,
-    notes: document.getElementById('trNotes').value.trim(),
-  };
-  if (!body.name || !body.start_date) {
-    alert('Name and start date are required');
-    return;
-  }
-  let res;
-  if (editingId) {
-    res = await fetch(`/api/travel/${editingId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-  } else {
-    res = await fetch('/api/travel', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-  }
-  if (res.ok) {
-    cancelEdit();
-    loadTravelRecords();
-  } else {
-    const e = await res.json();
-    alert('Error: ' + (e.error || 'failed'));
-  }
-}
+@app.route('/api/project-employees')
+def api_project_employees():
+    """Get list of employees who have logged time on the project, with their positions"""
+    raw = odoo.get_timesheets()
+    if raw is None:
+        return jsonify({'employees': [], 'connected': False})
 
-// ============================================================
-// PROMOTIONS SUB-TAB
-// ============================================================
-async function renderPromotionsSubTab() {
-  const cont = document.getElementById('varianceContent');
-  cont.innerHTML = '<div class="loading">Loading promotions…</div>';
+    seen = {}
+    import re as _re_emp
+    for e in raw:
+        emp = e.get('employee_id')
+        if emp and emp[1]:
+            full_name = emp[1]
+            display_name = _re_emp.sub(r'^\s*\[[A-Z]\d+\s*\]\s*', '', full_name).strip()
+            if full_name not in seen:
+                seen[full_name] = {'name': display_name, 'full_name': full_name}
 
-  try {
-    // Load employees for datalist
-    const [promoRes, empRes] = await Promise.all([
-      fetch('/api/promotions'),
-      fetch('/api/project-employees'),
-    ]);
-    const promoData = await promoRes.json();
-    const empData = await empRes.json();
-    const employees = (empData.employees || []).map(e => e.name);
-    const records = promoData.records || [];
+    # Try to fetch positions
+    overrides = load_plan_overrides().get('position_overrides', {})
+    for name, info in seen.items():
+        if name in overrides:
+            info['position'] = overrides[name]
+            info['source'] = 'override'
+        else:
+            pos = get_odoo_position_for_employee(name)
+            if pos:
+                info['position'] = pos
+                info['source'] = 'odoo'
+            else:
+                info['position'] = None
+                info['source'] = None
 
-    const empOptions = employees.map(e => `<option value="${e}">`).join('');
+    employees = sorted(seen.values(), key=lambda x: x['name'].lower())
+    return jsonify({'employees': employees, 'connected': True, 'count': len(employees)})
 
-    cont.innerHTML = `
-      <div class="card" style="margin-bottom: 16px;">
-        <h3 class="card-title" id="promoFormTitle">Add Promotion Record</h3>
-        <p class="muted-text" style="font-size: 12px; margin-bottom: 12px;">
-          Track mid-project promotions so cost calculations use the correct rate before and after promotion date.
-        </p>
-        <datalist id="promoEmpList">${empOptions}</datalist>
-        <div class="travel-form" style="display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 10px; align-items: end;">
-          <div>
-            <label class="filter-label">EMPLOYEE NAME</label>
-            <input type="text" id="promoName" list="promoEmpList" placeholder="Type name…" class="svc-input" style="width:100%; padding:6px 8px; border:1px solid var(--border-strong); border-radius:4px;"
-              oninput="promoFetchOdooPosition()">
-          </div>
-          <div>
-            <label class="filter-label">PROMOTION DATE</label>
-            <input type="date" id="promoDate" class="svc-input" style="width:100%; padding:6px 8px; border:1px solid var(--border-strong); border-radius:4px;">
-          </div>
-          <div>
-            <label class="filter-label">OLD POSITION <span class="muted-text">(before date)</span></label>
-            <input type="text" id="promoOldPos" placeholder="e.g. Business Analyst" class="svc-input" style="width:100%; padding:6px 8px; border:1px solid var(--border-strong); border-radius:4px;">
-          </div>
-          <div>
-            <label class="filter-label">NEW POSITION <span class="muted-text">(after date)</span></label>
-            <input type="text" id="promoNewPos" placeholder="e.g. Senior Business Analyst" class="svc-input" style="width:100%; padding:6px 8px; border:1px solid var(--border-strong); border-radius:4px;">
-          </div>
-        </div>
-        <div style="display: flex; gap: 8px; margin-top: 10px; align-items: center;">
-          <button class="btn-primary" onclick="submitPromotion()">💾 Save Promotion</button>
-          <button class="btn-outline" id="promoCancelBtn" onclick="cancelPromoEdit()" style="display:none;">✕ Cancel</button>
-          <span id="promoOdooHint" class="muted-text" style="font-size: 11px;"></span>
-        </div>
-        <input type="hidden" id="promoEditId" value="">
-      </div>
 
-      <div class="card">
-        <h3 class="card-title">Promotion Records <span class="muted-text">(${records.length})</span></h3>
-        <div class="table-scroll">
-          <table class="data-table" id="promoTable">
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>Employee</th>
-                <th>Promotion Date</th>
-                <th>Old Position (before)</th>
-                <th>New Position (after)</th>
-                <th>Notes</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody id="promoTableBody"></tbody>
-          </table>
-        </div>
-      </div>
-    `;
-    loadPromoRecords(records);
-  } catch (e) {
-    cont.innerHTML = `<div class="banner banner-warn"><strong>Error:</strong> ${e.message}</div>`;
-  }
-}
+# Main API endpoint for variance data
+@app.route('/api/variance')
+def api_variance():
+    """Returns full variance structure"""
+    out = {'tabs': {}, 'available': os.path.exists(VARIANCE_FILE)}
+    if not out['available']:
+        return jsonify(out)
 
-function loadPromoRecords(records) {
-  const tbody = document.getElementById('promoTableBody');
-  if (!tbody) return;
-  if (!records || !records.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="loading">No promotion records yet</td></tr>';
-    return;
-  }
-  tbody.innerHTML = records.map((r, i) => `
-    <tr>
-      <td>${i + 1}</td>
-      <td><b>${r.name}</b></td>
-      <td style="font-family: var(--mono); font-size: 12px;">${r.promotion_date || '—'}</td>
-      <td style="color: var(--text-muted); font-size: 12px;">${r.old_position || '—'}</td>
-      <td style="color: var(--blue); font-size: 12px; font-weight: 600;">${r.new_position || '—'}</td>
-      <td class="muted-text" style="font-size: 11px;">${r.notes || ''}</td>
-      <td>
-        <button class="btn-outline" style="font-size: 11px; padding: 3px 8px;" onclick="startPromoEdit(${r.id})">✏️ Edit</button>
-        <button class="btn-outline" style="font-size: 11px; padding: 3px 8px; color: var(--red);" onclick="deletePromo(${r.id})">🗑</button>
-      </td>
-    </tr>
-  `).join('');
-}
+    try:
+        for tab_key, tab_info in VARIANCE_TABS.items():
+            if tab_key == 'travel':
+                continue  # handled separately
+            tab_data = {'label': tab_info['label'], 'sections': []}
+            for sect in tab_info['sections']:
+                try:
+                    df = pd.read_excel(VARIANCE_FILE, sheet_name=sect['sheet'], header=None)
+                    parser = sect['parser']
+                    if parser == 'budget':
+                        data = parse_budget_sheet(df)
+                        # Apply persistent overrides (auto-saved values)
+                        data = apply_budget_overrides(data, tab_key)
+                    elif parser == 'profitability':
+                        data = parse_profitability_sheet(df)
+                    elif parser == 'effort':
+                        data = parse_effort_sheet(df)
+                    elif parser == 'estimated':
+                        data = parse_estimated_sheet(df)
+                    else:
+                        data = {}
+                    tab_data['sections'].append({
+                        'key': sect['key'],
+                        'label': sect['label'],
+                        'sheet': sect['sheet'],
+                        'data': data,
+                    })
+                except Exception as e:
+                    logger.error(f"Variance parse {sect['sheet']}: {e}")
+                    tab_data['sections'].append({
+                        'key': sect['key'],
+                        'label': sect['label'],
+                        'sheet': sect['sheet'],
+                        'error': str(e),
+                    })
+            out['tabs'][tab_key] = tab_data
+    except Exception as e:
+        logger.error(f"Variance error: {e}\n{traceback.format_exc()}")
+        out['error'] = str(e)
+    return jsonify(out)
 
-async function promoFetchOdooPosition() {
-  const name = document.getElementById('promoName')?.value?.trim();
-  const hint = document.getElementById('promoOdooHint');
-  if (!name || name.length < 3) { if (hint) hint.textContent = ''; return; }
-  if (hint) hint.textContent = 'Fetching position from Odoo…';
-  try {
-    const res = await fetch(`/api/promotions/employee-odoo-position?name=${encodeURIComponent(name)}`);
-    const d = await res.json();
-    if (d.current_position) {
-      const newPosEl = document.getElementById('promoNewPos');
-      const oldPosEl = document.getElementById('promoOldPos');
-      if (newPosEl && !newPosEl.value) newPosEl.value = d.current_position;
-      if (oldPosEl && !oldPosEl.value && d.suggested_old_position) oldPosEl.value = d.suggested_old_position;
-      if (hint) hint.textContent = `✓ Odoo position: ${d.current_position}`;
-    } else {
-      if (hint) hint.textContent = 'Position not found in Odoo';
+@app.route('/api/variance/export')
+def api_variance_export():
+    """Export variance Excel with current overrides applied"""
+    from flask import send_file
+    import shutil
+    if not os.path.exists(VARIANCE_FILE):
+        return jsonify({'error': 'File not found'}), 404
+
+    # Copy original to a temp file in PERSIST_DIR
+    out_path = os.path.join(PERSIST_DIR, f'variance_export_{date.today().isoformat()}.xlsx')
+    try:
+        shutil.copyfile(VARIANCE_FILE, out_path)
+
+        # Apply overrides — open with openpyxl to preserve formatting
+        try:
+            from openpyxl import load_workbook
+            wb = load_workbook(out_path)
+            overrides_data = load_plan_overrides()
+            plan_overrides = overrides_data.get('plan_overrides', {})
+
+            # Map phase to sheet name
+            phase_to_sheet = {
+                'development': 'Profitability - Development',
+                'consultation': 'Profitability - Consultation',
+            }
+
+            for phase_key, sheet_name in phase_to_sheet.items():
+                if sheet_name not in wb.sheetnames:
+                    continue
+                ws = wb[sheet_name]
+                phase_overrides = plan_overrides.get(phase_key, {})
+
+                # Header at row 6 (1-indexed in openpyxl), data starts row 8
+                # Find Month col (col A) and key columns
+                # Reading row 6 to find column indices
+                header_row = 6
+                col_indices = {}
+                for col in range(1, ws.max_column + 1):
+                    val = ws.cell(row=header_row, column=col).value
+                    if val:
+                        col_indices[str(val).strip()] = col
+
+                completion_col = col_indices.get('% Completion from plan')
+                remaining_col = col_indices.get('Estimated Remaining (MD)')
+
+                # Walk rows 8+ and apply overrides
+                for row in range(8, ws.max_row + 1):
+                    month_val = ws.cell(row=row, column=1).value
+                    if not month_val:
+                        continue
+                    if isinstance(month_val, datetime):
+                        month_key = month_val.strftime('%Y-%m')
+                    else:
+                        month_key = str(month_val)[:7]
+
+                    if month_key in phase_overrides:
+                        mo = phase_overrides[month_key]
+                        if isinstance(mo, dict):
+                            if 'completion' in mo and completion_col:
+                                # Stored as percentage, convert back to fraction
+                                ws.cell(row=row, column=completion_col).value = mo['completion'] / 100
+                            if 'remaining' in mo and remaining_col:
+                                ws.cell(row=row, column=remaining_col).value = mo['remaining']
+
+            wb.save(out_path)
+
+            # Auto-fill "Current Effort - Development" from Odoo timesheets
+            try:
+                fill_current_effort_from_odoo(out_path)
+            except Exception as e:
+                logger.warning(f"Could not auto-fill current effort from Odoo: {e}")
+        except Exception as e:
+            logger.warning(f"Could not apply overrides to export: {e}")
+
+    except Exception as e:
+        logger.error(f"Export failed: {e}")
+        return jsonify({'error': str(e)}), 500
+
+    return send_file(
+        out_path,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name=f'BOG_Variance_{date.today().isoformat()}.xlsx'
+    )
+
+
+def fill_current_effort_from_odoo(xlsx_path):
+    """Read Odoo timesheets and fill the 'Current Effort - Development' sheet.
+    Sheet structure:
+      - Row 4: Month names (March, April, May, ...) at columns G, J, M, P, S, V, Y, AB, AE, AH, AK
+      - Row 5: Per-month sub-headers: Regular Time (MH), Ramdan Hours, Over Time (MH)
+      - Row 6+: People rows (col B=Name, col D=Position)
+    For each person, for each month, we fill:
+      - Regular Time (MH) = total hours minus Ramadan and Overtime
+      - Ramdan Hours = hours logged during Ramadan period (KSA: Feb 18-Mar 19; EGY: Feb 19-Mar 20)
+      - Over Time (MH) = hours logged on weekends (Fri+Sat for KSA/EGY)
+    """
+    if not odoo.uid:
+        if not odoo.connect():
+            logger.warning("Odoo not available for auto-fill")
+            return
+
+    from openpyxl import load_workbook
+    wb = load_workbook(xlsx_path)
+    sheet_name = 'Current Effort - Development'
+    if sheet_name not in wb.sheetnames:
+        logger.warning(f"Sheet '{sheet_name}' not found")
+        return
+    ws = wb[sheet_name]
+
+    # Map month name → starting column (Regular Time col index)
+    # Row 4 has month names spaced every 3 columns starting from G (col 7)
+    month_columns = {}  # 'March' -> col_index of "Regular Time (MH)"
+    for col in range(1, ws.max_column + 1):
+        v = ws.cell(row=4, column=col).value
+        if v and isinstance(v, str):
+            month_columns[v.strip()] = col
+
+    if not month_columns:
+        logger.warning("No month columns found in row 4")
+        return
+
+    logger.info(f"Found month columns: {list(month_columns.keys())}")
+
+    # Read people from rows 6+ (col B = Name, col D = Position)
+    people = []
+    for r in range(6, ws.max_row + 1):
+        name = ws.cell(row=r, column=2).value
+        if not name or not isinstance(name, str):
+            continue
+        people.append({
+            'row': r,
+            'name': name.strip(),
+            'position': (ws.cell(row=r, column=4).value or '').strip() if ws.cell(row=r, column=4).value else '',
+        })
+
+    if not people:
+        logger.warning("No people found in sheet")
+        return
+
+    logger.info(f"Found {len(people)} people in Current Effort sheet")
+
+    # Get all timesheets for this project for the development phase
+    project_id = None
+    if PROJECT_NAME:
+        try:
+            projects = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.project', 'search_read',
+                [[('name', 'ilike', PROJECT_NAME)]],
+                {'fields': ['id', 'name'], 'limit': 5}
+            )
+            if projects:
+                project_id = projects[0]['id']
+        except Exception as e:
+            logger.warning(f"Could not find project: {e}")
+
+    if not project_id:
+        logger.warning("Could not resolve project_id, skipping auto-fill")
+        return
+
+    # Fetch all timesheets for this project (within Development phase)
+    try:
+        # Get tasks under Development Phase
+        dev_phase_names = PHASE_MAPPING.get('development', ['Development Phase'])
+        phases = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.phase', 'search_read',
+            [[('name', 'in', dev_phase_names)]],
+            {'fields': ['id', 'name'], 'limit': 50}
+        )
+        phase_ids = [p['id'] for p in phases]
+
+        # Get parent tasks under these phases
+        parent_tasks = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [[('phase_id', 'in', phase_ids), ('project_id', '=', project_id)]],
+            {'fields': ['id', 'child_ids'], 'limit': 5000}
+        )
+        parent_task_ids = {t['id'] for t in parent_tasks}
+
+        # Get all sub-tasks too (recursively walk down)
+        all_relevant_task_ids = set(parent_task_ids)
+        all_tasks_in_proj = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [[('project_id', '=', project_id)]],
+            {'fields': ['id', 'parent_id'], 'limit': 10000}
+        )
+        # Walk parent chains
+        task_by_id = {t['id']: t for t in all_tasks_in_proj}
+        for t in all_tasks_in_proj:
+            cur = t
+            visited = set()
+            while cur and cur['id'] not in visited:
+                visited.add(cur['id'])
+                if cur['id'] in parent_task_ids:
+                    all_relevant_task_ids.add(t['id'])
+                    break
+                if not cur.get('parent_id'):
+                    break
+                pid = cur['parent_id'][0] if isinstance(cur['parent_id'], list) else cur['parent_id']
+                cur = task_by_id.get(pid)
+
+        logger.info(f"Found {len(all_relevant_task_ids)} relevant tasks for development phase")
+
+        # Now fetch timesheets for these tasks
+        timesheets = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'account.analytic.line', 'search_read',
+            [[('task_id', 'in', list(all_relevant_task_ids))]],
+            {'fields': ['employee_id', 'date', 'unit_amount'], 'limit': 50000}
+        )
+        logger.info(f"Fetched {len(timesheets)} timesheet entries")
+    except Exception as e:
+        logger.error(f"Could not fetch timesheets: {e}")
+        return
+
+    # Aggregate timesheets per person per month, splitting into Regular/Ramadan/Overtime
+    from collections import defaultdict
+    # person_data[name][month_name] = {'regular': h, 'ramadan': h, 'overtime': h}
+    person_data = defaultdict(lambda: defaultdict(lambda: {'regular': 0, 'ramadan': 0, 'overtime': 0}))
+
+    MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
+                   'July', 'August', 'September', 'October', 'November', 'December']
+
+    for ts in timesheets:
+        emp = ts.get('employee_id', [None, ''])
+        emp_name = emp[1] if isinstance(emp, list) and len(emp) > 1 else ''
+        if not emp_name:
+            continue
+        date_str = ts.get('date')
+        if not date_str:
+            continue
+        try:
+            d = datetime.strptime(date_str, '%Y-%m-%d').date()
+        except Exception:
+            continue
+        hours = float(ts.get('unit_amount') or 0)
+        if hours <= 0:
+            continue
+
+        month_name = MONTH_NAMES[d.month - 1]
+
+        # Determine country from employee name (KSA/EGY/TUN)
+        country = get_country_from_employee_name(emp_name)
+
+        # Check if Ramadan (period stored in RAMADAN_RANGES)
+        is_ramadan = False
+        ramadan_range = RAMADAN_RANGES.get(country)
+        if ramadan_range:
+            try:
+                ram_start = datetime.strptime(ramadan_range['start'], '%Y-%m-%d').date()
+                ram_end = datetime.strptime(ramadan_range['end'], '%Y-%m-%d').date()
+                if ram_start <= d <= ram_end:
+                    is_ramadan = True
+            except Exception:
+                pass
+
+        # Check if weekend → overtime
+        # Tunis: Sat+Sun (5,6); KSA/EGY: Fri+Sat (4,5)
+        weekend_days = TUNIS_WEEKEND if country == 'TUN' else WEEKEND_DAYS
+        is_weekend = d.weekday() in weekend_days
+        is_holiday = is_public_holiday(date_str, country)
+
+        if is_weekend or is_holiday:
+            person_data[emp_name][month_name]['overtime'] += hours
+        elif is_ramadan:
+            person_data[emp_name][month_name]['ramadan'] += hours
+        else:
+            person_data[emp_name][month_name]['regular'] += hours
+
+    logger.info(f"Aggregated data for {len(person_data)} people")
+
+    # Now write into the Excel sheet
+    # For each person, find their row by name (fuzzy match - strip [code] prefix etc.)
+    def normalize_name(s):
+        # Remove [E123] prefix and lowercase
+        import re
+        return re.sub(r'\[[A-Z]\d+\]\s*', '', s).strip().lower()
+
+    sheet_name_to_row = {}
+    for p in people:
+        sheet_name_to_row[normalize_name(p['name'])] = p['row']
+
+    filled_count = 0
+    for emp_name, months_data in person_data.items():
+        norm = normalize_name(emp_name)
+        # Try exact match
+        target_row = sheet_name_to_row.get(norm)
+        if not target_row:
+            # Fuzzy match: any sheet name that contains the emp name (or vice versa)
+            for sheet_norm, row_idx in sheet_name_to_row.items():
+                if sheet_norm == norm:
+                    target_row = row_idx
+                    break
+                # Match first 2 words
+                emp_words = norm.split()[:2]
+                sheet_words = sheet_norm.split()[:2]
+                if emp_words and sheet_words and emp_words[0] == sheet_words[0]:
+                    if len(emp_words) > 1 and len(sheet_words) > 1 and emp_words[1] == sheet_words[1]:
+                        target_row = row_idx
+                        break
+        if not target_row:
+            logger.info(f"  Skipping {emp_name} - not in sheet")
+            continue
+
+        for month_name, hrs in months_data.items():
+            if month_name not in month_columns:
+                continue
+            base_col = month_columns[month_name]
+            # base_col = Regular Time, base_col+1 = Ramadan, base_col+2 = Overtime
+            if hrs['regular'] > 0:
+                ws.cell(row=target_row, column=base_col).value = round(hrs['regular'], 2)
+            if hrs['ramadan'] > 0:
+                ws.cell(row=target_row, column=base_col + 1).value = round(hrs['ramadan'], 2)
+            if hrs['overtime'] > 0:
+                ws.cell(row=target_row, column=base_col + 2).value = round(hrs['overtime'], 2)
+            filled_count += 1
+
+    logger.info(f"Filled {filled_count} person-month cells")
+
+    wb.save(xlsx_path)
+    logger.info(f"Saved updated workbook to {xlsx_path}")
+
+# ============================================================
+# TRAVEL & ONSITE — stored in DB
+# ============================================================
+def load_travel():
+    return db.list_travel()
+
+
+def save_travel(records):
+    """Bulk save (used by restore endpoint)."""
+    if isinstance(records, list):
+        for r in records:
+            if isinstance(r, dict) and r.get('id') is not None:
+                db.upsert_travel(str(r['id']), r)
+
+# ============================================================
+# PROMOTIONS — track when employees get promoted mid-project
+# ============================================================
+def load_promotions():
+    raw = db.get_namespace_overrides('promotions', '')
+    records = []
+    for k, v in raw.items():
+        if isinstance(v, dict):
+            records.append(v)
+    records.sort(key=lambda x: (x.get('name', ''), x.get('promotion_date', '')))
+    return records
+
+
+@app.route('/api/promotions', methods=['GET'])
+def api_promotions_list():
+    return jsonify({'records': load_promotions()})
+
+
+@app.route('/api/promotions', methods=['POST'])
+def api_promotions_add():
+    body = request.json or {}
+    records = load_promotions()
+    existing_ids = [int(r.get('id', 0)) for r in records if str(r.get('id', '')).isdigit()]
+    new_id = max(existing_ids, default=0) + 1
+    record = {
+        'id': new_id,
+        'name': body.get('name', '').strip(),
+        'old_position': body.get('old_position', '').strip(),
+        'new_position': body.get('new_position', '').strip(),
+        'promotion_date': body.get('promotion_date', ''),
+        'notes': body.get('notes', '').strip(),
+        'created_at': datetime.now().isoformat(),
     }
-  } catch (e) {
-    if (hint) hint.textContent = '';
-  }
-}
+    if not record['name'] or not record['promotion_date']:
+        return jsonify({'error': 'name and promotion_date required'}), 400
+    db.set_override('promotions', '', str(new_id), record)
+    return jsonify({'ok': True, 'record': record})
 
-async function submitPromotion() {
-  const id = document.getElementById('promoEditId')?.value;
-  const body = {
-    name: document.getElementById('promoName')?.value?.trim(),
-    promotion_date: document.getElementById('promoDate')?.value,
-    old_position: document.getElementById('promoOldPos')?.value?.trim(),
-    new_position: document.getElementById('promoNewPos')?.value?.trim(),
-    notes: '',
-  };
-  if (!body.name || !body.promotion_date) { alert('Name and promotion date are required'); return; }
 
-  const url = id ? `/api/promotions/${id}` : '/api/promotions';
-  const method = id ? 'PUT' : 'POST';
-  const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  if (res.ok) {
-    cancelPromoEdit();
-    renderPromotionsSubTab();
-  } else {
-    const e = await res.json();
-    alert('Error: ' + (e.error || 'failed'));
-  }
-}
+@app.route('/api/promotions/<int:rec_id>', methods=['PUT'])
+def api_promotions_update(rec_id):
+    body = request.json or {}
+    records = load_promotions()
+    for r in records:
+        if int(r.get('id', 0)) == rec_id:
+            for k in ['name', 'old_position', 'new_position', 'promotion_date', 'notes']:
+                if k in body:
+                    r[k] = body[k]
+            r['updated_at'] = datetime.now().isoformat()
+            db.set_override('promotions', '', str(rec_id), r)
+            return jsonify({'ok': True, 'record': r})
+    return jsonify({'error': 'not found'}), 404
 
-async function startPromoEdit(id) {
-  const res = await fetch('/api/promotions');
-  const d = await res.json();
-  const r = (d.records || []).find(x => x.id === id);
-  if (!r) return;
-  document.getElementById('promoEditId').value = id;
-  document.getElementById('promoName').value = r.name || '';
-  document.getElementById('promoDate').value = r.promotion_date || '';
-  document.getElementById('promoOldPos').value = r.old_position || '';
-  document.getElementById('promoNewPos').value = r.new_position || '';
-  document.getElementById('promoFormTitle').textContent = `Edit Promotion — ${r.name}`;
-  document.getElementById('promoCancelBtn').style.display = '';
-}
 
-function cancelPromoEdit() {
-  document.getElementById('promoEditId').value = '';
-  document.getElementById('promoName').value = '';
-  document.getElementById('promoDate').value = '';
-  document.getElementById('promoOldPos').value = '';
-  document.getElementById('promoNewPos').value = '';
-  document.getElementById('promoFormTitle').textContent = 'Add Promotion Record';
-  const btn = document.getElementById('promoCancelBtn');
-  if (btn) btn.style.display = 'none';
-  const hint = document.getElementById('promoOdooHint');
-  if (hint) hint.textContent = '';
-}
+@app.route('/api/promotions/<int:rec_id>', methods=['DELETE'])
+def api_promotions_delete(rec_id):
+    db.set_override('promotions', '', str(rec_id), None)
+    return jsonify({'ok': True})
 
-async function deletePromo(id) {
-  if (!confirm('Delete this promotion record?')) return;
-  await fetch(`/api/promotions/${id}`, { method: 'DELETE' });
-  renderPromotionsSubTab();
-}
+
+@app.route('/api/promotions/employee-odoo-position')
+def api_employee_odoo_position():
+    """Get current Odoo position + suggest previous level."""
+    name = request.args.get('name', '').strip()
+    if not name:
+        return jsonify({'error': 'name required'}), 400
+    current_pos = get_odoo_position_for_employee(name)
+    suggested_old = None
+    if current_pos:
+        import re as _rp
+        p = current_pos.lower()
+        if 'lead' in p:
+            suggested_old = _rp.sub(r'(?i)lead\s+', 'Sr ', current_pos).strip()
+        elif 'senior' in p:
+            suggested_old = _rp.sub(r'(?i)senior\s+', '', current_pos).strip()
+        elif _rp.search(r'(?i)\bsr\.?\s+', current_pos):
+            suggested_old = _rp.sub(r'(?i)\bsr\.?\s+', '', current_pos).strip()
+        else:
+            suggested_old = current_pos
+    return jsonify({
+        'name': name,
+        'current_position': current_pos,
+        'suggested_old_position': suggested_old,
+    })
+
+@app.route('/api/estimated-rows', methods=['GET'])
+def api_estimated_rows_get():
+    """Get saved estimated cost rows for a phase."""
+    phase = request.args.get('phase', 'development')
+    rows = db.get_override('estimated_rows', '', phase) or []
+    if isinstance(rows, str):
+        import json as _json
+        try: rows = _json.loads(rows)
+        except: rows = []
+    return jsonify({'phase': phase, 'rows': rows if isinstance(rows, list) else []})
+
+
+@app.route('/api/estimated-rows', methods=['POST'])
+def api_estimated_rows_save():
+    """Save estimated cost rows for a phase."""
+    body = request.json or {}
+    phase = body.get('phase', 'development')
+    rows = body.get('rows', [])
+    db.set_override('estimated_rows', '', phase, rows)
+    return jsonify({'ok': True, 'phase': phase, 'count': len(rows)})
+
+
+@app.route('/api/travel', methods=['GET'])
+def api_travel_list():
+    records = load_travel()
+    today_str = date.today().isoformat()
+    # Compute current status for each record
+    for r in records:
+        end = r.get('end_date')
+        if not end:
+            r['status'] = 'Onsite (open-ended)'
+            r['days_onsite'] = (date.today() - datetime.strptime(r['start_date'], '%Y-%m-%d').date()).days + 1 if r.get('start_date') else 0
+        else:
+            try:
+                end_d = datetime.strptime(end, '%Y-%m-%d').date()
+                start_d = datetime.strptime(r['start_date'], '%Y-%m-%d').date()
+                if end_d < date.today():
+                    r['status'] = 'Returned'
+                else:
+                    r['status'] = 'Onsite'
+                r['days_onsite'] = (end_d - start_d).days + 1
+            except Exception:
+                r['status'] = 'Unknown'
+                r['days_onsite'] = 0
+    return jsonify({'records': records, 'today': today_str})
+
+@app.route('/api/travel', methods=['POST'])
+def api_travel_add():
+    body = request.json or {}
+    records = load_travel()
+    new_id = max([int(r.get('id', 0)) for r in records if str(r.get('id', '')).isdigit()], default=0) + 1
+    record = {
+        'id': new_id,
+        'name': body.get('name', '').strip(),
+        'position': body.get('position', '').strip(),
+        'start_date': body.get('start_date'),
+        'end_date': body.get('end_date') or None,
+        'notes': body.get('notes', ''),
+        'created_at': datetime.now().isoformat(),
+    }
+    if not record['name'] or not record['start_date']:
+        return jsonify({'error': 'name and start_date required'}), 400
+    db.upsert_travel(str(new_id), record)
+    return jsonify({'ok': True, 'record': record})
+
+@app.route('/api/travel/<int:rec_id>', methods=['PUT'])
+def api_travel_update(rec_id):
+    body = request.json or {}
+    records = load_travel()
+    for r in records:
+        if int(r.get('id', 0)) == rec_id:
+            for k in ['name', 'position', 'start_date', 'end_date', 'notes']:
+                if k in body:
+                    r[k] = body[k] or None if k == 'end_date' else body[k]
+            db.upsert_travel(str(rec_id), r)
+            return jsonify({'ok': True, 'record': r})
+    return jsonify({'error': 'not found'}), 404
+
+@app.route('/api/travel/<int:rec_id>', methods=['DELETE'])
+def api_travel_delete(rec_id):
+    db.delete_travel(str(rec_id))
+    return jsonify({'ok': True})
+
+
+@app.route('/health')
+def health():
+    return jsonify({'status': 'ok', 'time': datetime.now().isoformat()})
+
+@app.route('/debug/task-fields/<int:task_id>')
+def debug_task_fields(task_id):
+    """Returns ALL fields of a specific task to help debug assignment issues."""
+    if not odoo.uid:
+        if not odoo.connect():
+            return jsonify({'error': 'Odoo unreachable'}), 500
+    try:
+        # Try to get the task with ALL standard fields
+        task = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'read',
+            [[task_id]],
+            {}  # no fields filter = all fields
+        )
+        if not task:
+            return jsonify({'error': f'Task {task_id} not found'}), 404
+        return jsonify({
+            'task_id': task_id,
+            'task': task[0],
+            'available_fields': list(task[0].keys()),
+            'assignment_related': {
+                k: v for k, v in task[0].items()
+                if 'user' in k.lower() or 'assign' in k.lower() or 'owner' in k.lower()
+            }
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/debug/task-by-name')
+def debug_task_by_name():
+    """Find a task by name and return its fields. Use ?name=Env"""
+    name = request.args.get('name', '')
+    if not odoo.uid:
+        if not odoo.connect():
+            return jsonify({'error': 'Odoo unreachable'}), 500
+    try:
+        tasks = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [[('name', 'ilike', name)]],
+            {'fields': [], 'limit': 5}  # all fields
+        )
+        result = []
+        for t in tasks:
+            result.append({
+                'id': t.get('id'),
+                'name': t.get('name'),
+                'available_fields': list(t.keys()),
+                'assignment_related': {
+                    k: v for k, v in t.items()
+                    if 'user' in k.lower() or 'assign' in k.lower() or 'owner' in k.lower()
+                }
+            })
+        return jsonify({'count': len(result), 'tasks': result})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/debug/effort-phase')
+def debug_effort_phase():
+    """Debug: check what tasks/timesheets are found for a phase key.
+    Usage: /debug/effort-phase?phase=consultation
+    """
+    phase_key = request.args.get('phase', 'consultation')
+    if not odoo.uid:
+        if not odoo.connect():
+            return jsonify({'error': 'Odoo unreachable'})
+
+    phase_names = PHASE_MAPPING.get(phase_key, [])
+    info = {'phase_key': phase_key, 'phase_names': phase_names}
+
+    try:
+        projects = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.project', 'search_read',
+            [[('name', 'ilike', PROJECT_NAME)]],
+            {'fields': ['id', 'name'], 'limit': 5}
+        )
+        info['projects'] = [{'id': p['id'], 'name': p['name']} for p in projects]
+        if not projects:
+            return jsonify(info)
+        project_id = projects[0]['id']
+
+        phases = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.phase', 'search_read',
+            [[('name', 'in', phase_names)]],
+            {'fields': ['id', 'name']}
+        )
+        info['phases_found'] = [{'id': p['id'], 'name': p['name']} for p in phases]
+        phase_ids = [p['id'] for p in phases]
+
+        if not phase_ids:
+            # Try ilike instead of exact match
+            phases_ilike = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.phase', 'search_read',
+                [[('name', 'ilike', 'Consultation')]],
+                {'fields': ['id', 'name']}
+            )
+            info['phases_ilike_consultation'] = [{'id': p['id'], 'name': p['name']} for p in phases_ilike]
+
+            all_phases = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.phase', 'search_read',
+                [[('project_id', '=', project_id)]],
+                {'fields': ['id', 'name']}
+            )
+            info['all_project_phases'] = [{'id': p['id'], 'name': p['name']} for p in all_phases]
+            return jsonify(info)
+
+        phase_tasks = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [[('phase_id', 'in', phase_ids), ('project_id', '=', project_id)]],
+            {'fields': ['id', 'name', 'phase_id'], 'limit': 20}
+        )
+        info['phase_tasks_count'] = len(phase_tasks)
+        info['phase_tasks_sample'] = [{'id': t['id'], 'name': t['name']} for t in phase_tasks[:5]]
+
+        parent_ids = {t['id'] for t in phase_tasks}
+
+        all_proj_tasks = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [[('project_id', '=', project_id)]],
+            {'fields': ['id', 'parent_id', 'phase_id'], 'limit': 10000}
+        )
+        relevant_ids = set(parent_ids)
+        for t in all_proj_tasks:
+            ph = t.get('phase_id')
+            if ph and isinstance(ph, list) and ph[0] in phase_ids:
+                relevant_ids.add(t['id'])
+
+        info['relevant_task_ids_count'] = len(relevant_ids)
+
+        if relevant_ids:
+            ts_sample = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'account.analytic.line', 'search_read',
+                [[('task_id', 'in', list(relevant_ids)[:100])]],
+                {'fields': ['employee_id', 'date', 'unit_amount'], 'limit': 10}
+            )
+            info['timesheets_sample_count'] = len(ts_sample)
+            info['timesheets_sample'] = ts_sample[:3]
+
+    except Exception as e:
+        info['error'] = str(e)
+
+    return jsonify(info)
+
+
+@app.route('/debug/timesheets')
+def debug_timesheets():
+    """Test the actual timesheet fetching path used by the app"""
+    date_from = request.args.get('from', (date.today() - timedelta(days=30)).isoformat())
+    date_to = request.args.get('to', date.today().isoformat())
+
+    info = {
+        'date_from': date_from,
+        'date_to': date_to,
+        'project_name': PROJECT_NAME,
+        'odoo_uid': odoo.uid,
+        'odoo_last_error': odoo.last_error,
+    }
+
+    # Try fetching
+    raw = odoo.get_timesheets(date_from=date_from, date_to=date_to)
+    if raw is None:
+        info['result'] = 'FAILED — odoo.get_timesheets returned None'
+        info['odoo_last_error_after'] = odoo.last_error
+    else:
+        info['result'] = f'SUCCESS — {len(raw)} entries'
+        info['sample_raw'] = raw[:2] if raw else []
+        normalized = [normalize_timesheet(e) for e in raw[:3]]
+        info['sample_normalized'] = normalized
+
+    # Test with no date filter
+    raw_all = odoo.get_timesheets()
+    info['no_filter_count'] = len(raw_all) if raw_all is not None else 'FAILED'
+
+    return jsonify(info)
+
+
+@app.route('/debug')
+def debug():
+    info = {
+        'base_dir': BASE_DIR,
+        'data_file_exists': os.path.exists(DATA_FILE),
+        'templates': sorted(os.listdir(os.path.join(BASE_DIR, 'templates'))) if os.path.exists(os.path.join(BASE_DIR, 'templates')) else 'NA',
+        'partials': sorted(os.listdir(os.path.join(BASE_DIR, 'templates', 'partials'))) if os.path.exists(os.path.join(BASE_DIR, 'templates', 'partials')) else 'NA',
+        'env_vars': {
+            'ODOO_URL': ODOO_URL,
+            'ODOO_DB': ODOO_DB,
+            'ODOO_USERNAME_set': bool(ODOO_USERNAME),
+            'ODOO_USERNAME_preview': ODOO_USERNAME[:3] + '***' if ODOO_USERNAME else None,
+            'ODOO_PASSWORD_set': bool(ODOO_PASSWORD),
+            'ODOO_PASSWORD_length': len(ODOO_PASSWORD) if ODOO_PASSWORD else 0,
+            'PROJECT_NAME': PROJECT_NAME,
+        },
+        'odoo_test': {}
+    }
+
+    # Test Odoo connection step by step
+    try:
+        common = xmlrpc.client.ServerProxy(f'{ODOO_URL}/xmlrpc/2/common')
+        version = common.version()
+        info['odoo_test']['1_server_reachable'] = True
+        info['odoo_test']['2_odoo_version'] = version.get('server_version', 'unknown') if version else 'unknown'
+    except Exception as e:
+        info['odoo_test']['1_server_reachable'] = False
+        info['odoo_test']['error'] = f"Cannot reach {ODOO_URL}: {str(e)}"
+        return jsonify(info)
+
+    if not ODOO_USERNAME or not ODOO_PASSWORD:
+        info['odoo_test']['3_credentials'] = 'NOT SET — add ODOO_USERNAME and ODOO_PASSWORD in Railway Variables'
+        return jsonify(info)
+
+    try:
+        common = xmlrpc.client.ServerProxy(f'{ODOO_URL}/xmlrpc/2/common')
+        uid = common.authenticate(ODOO_DB, ODOO_USERNAME, ODOO_PASSWORD, {})
+        if uid:
+            info['odoo_test']['3_auth'] = f'SUCCESS — uid={uid}'
+        else:
+            info['odoo_test']['3_auth'] = 'FAILED — check ODOO_DB, ODOO_USERNAME, ODOO_PASSWORD'
+            info['odoo_test']['hint'] = 'Most common: wrong ODOO_DB name OR using regular password instead of API key'
+            return jsonify(info)
+    except Exception as e:
+        info['odoo_test']['3_auth'] = f'ERROR — {type(e).__name__}: {str(e)}'
+        return jsonify(info)
+
+    # Test fetching timesheets
+    try:
+        models = xmlrpc.client.ServerProxy(f'{ODOO_URL}/xmlrpc/2/object')
+        # Check if project exists
+        projects = models.execute_kw(
+            ODOO_DB, uid, ODOO_PASSWORD,
+            'project.project', 'search_read',
+            [[('name', 'ilike', PROJECT_NAME)]],
+            {'fields': ['name', 'id'], 'limit': 5}
+        )
+        info['odoo_test']['4_project_search'] = {
+            'matches_found': len(projects),
+            'projects': [{'id': p['id'], 'name': p['name']} for p in projects]
+        }
+
+        # Sample timesheets
+        ts = models.execute_kw(
+            ODOO_DB, uid, ODOO_PASSWORD,
+            'account.analytic.line', 'search_read',
+            [[('project_id.name', 'ilike', PROJECT_NAME)]],
+            {'fields': ['date', 'employee_id', 'project_id'], 'limit': 3}
+        )
+        info['odoo_test']['5_sample_timesheets'] = {
+            'count': len(ts),
+            'sample': ts[:2] if ts else []
+        }
+    except Exception as e:
+        info['odoo_test']['4_data_fetch'] = f'ERROR — {type(e).__name__}: {str(e)}'
+
+    return jsonify(info)
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
