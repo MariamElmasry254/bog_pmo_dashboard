@@ -624,6 +624,7 @@ async function profBuildTable(phaseKey) {
     wrap.innerHTML = '<div class="loading">Loading effort data…</div>';
     try {
       const res = await fetch(`/api/effort/${phaseKey}/all-months`);
+      if (!res.ok) throw new Error('Effort API ' + res.status);
       const d = await res.json();
       if (d.months && d.months.length) {
         // Store months in AppState
@@ -855,7 +856,7 @@ async function profRecomputeAll(phaseKey) {
         AppState._effortMonthMDs[phaseKey]=mMDs;
         AppState._effortMonthCosts[phaseKey]=mCosts;
       }
-    } catch(e) {}
+    } catch(e) { console.warn('Effort fetch error:', e); }
   }
 
   const costPerMD = totalEstMDs > 0 ? totalEstCostSAR / totalEstMDs : 0;
@@ -946,7 +947,7 @@ async function profRecomputeAll(phaseKey) {
 
     const profColor2 = profitAtComp > 0 ? 'var(--green)' : 'var(--red)';
     setSpan(`pc-profit-comp-${monthKey}`,   `<b style="color:${profColor2};">${fSAR(profitAtComp)}</b>`);
-    setSpan(`pc-planned-profit-${monthKey}`, fSAR(plannedProfit));
+    setSpan(`pc-planned-profit-${monthKey}`, fSAR(plannedProfitFinal));
     setSpan(`pc-profit-pct-${monthKey}`,    `<b style="color:${profColor2};">${fmt.decimal(profitAtCompPct)}%</b>`);
 
     const pvColor = profVar >= 0 ? 'var(--green)' : 'var(--red)';
