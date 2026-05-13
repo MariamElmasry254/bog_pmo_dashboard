@@ -79,16 +79,17 @@ function renderVarianceSubTab(key) {
   // Wire up auto-save for any budget inputs
   wireBudgetInputs(cont);
 
-  // Load live effort + estimated tables
-  const activePhase = key;
+  // Load live effort + estimated tables AFTER DOM is set
   if (data.sections.some(s => s.key === 'effort')) {
-    setTimeout(() => loadEffortLive(activePhase, 'effortLiveWrap'), 50);
+    const effortContainerId = `effort-live-${key}`;
+    setTimeout(() => loadEffortLive(key, effortContainerId), 100);
   }
   if (data.sections.some(s => s.key === 'estimated')) {
     setTimeout(() => {
       const wrap = document.getElementById('estimatedLiveWrap');
-      if (wrap) loadEstimatedLive(activePhase, 'estimatedLiveWrap');
-    }, 100);
+      if (wrap) loadEstimatedLive(key, 'estimatedLiveWrap');
+      else console.warn('estimatedLiveWrap still not found after 200ms');
+    }, 200);
   }
 }
 
@@ -435,27 +436,22 @@ function applyPlanOverrides(phaseKey) {
 
 function renderEffort(data, phaseKey) {
   const containerId = `effort-live-${phaseKey}`;
+  // Store containerId on window for renderVarianceSubTab to use
+  window._effortContainerId = containerId;
+  window._effortPhaseKey = phaseKey;
 
-  let html = `
+  return `
     <div class="card">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
         <div>
           <h3 style="margin: 0; font-size: 14px;">Current Effort — Excel Style</h3>
           <span class="muted-text" style="font-size: 11px;">Live from Odoo · Starting from first month with logs · Regular / Ramadan / Overtime split per country rules</span>
         </div>
-        <button class="btn-primary" id="effort-reload-${phaseKey}">↻ Refresh from Odoo</button>
+        <button class="btn-primary" id="effort-reload-${phaseKey}" onclick="loadEffortLive('${phaseKey}','${containerId}')">↻ Refresh from Odoo</button>
       </div>
       <div id="${containerId}"><div class="loading">Loading from Odoo…</div></div>
     </div>
   `;
-
-  setTimeout(() => {
-    const reload = () => loadEffortLive(phaseKey, containerId);
-    document.getElementById(`effort-reload-${phaseKey}`).addEventListener('click', reload);
-    reload();
-  }, 50);
-
-  return html;
 }
 
 async function loadEffortLive(phaseKey, containerId) {
