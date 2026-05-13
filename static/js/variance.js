@@ -300,64 +300,85 @@ function budgetDeleteChange(phaseKey, idx) {
 }
 
 function budgetAutoCalc(phaseKey) {
-  // Pull values from Estimated Cost globals
-  const estTotalMDs   = typeof totalMDs !== 'undefined' ? totalMDs : 0;
-  const estTotalUSD   = typeof totalUSD !== 'undefined' ? totalUSD : 0;
-  const estTotalSAR   = estTotalUSD * 3.75;
+  const setEl = (id, val, color) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = val;
+    if (color) el.style.color = color;
+  };
 
-  // Use live estimated values if available
-  let mds = 0, costUSD = 0, costSAR = 0;
+  // Cost from Estimated Cost rows
+  let mds = 0, costUSD = 0;
   if (_estPhase === phaseKey && _estRows && _estRows.length) {
     _estRows.forEach(r => {
       const hr = parseFloat(r.hourRate)||0, at = parseFloat(r.actualTime)||0, em = parseFloat(r.estMonths)||0;
-      mds    += at * em / 8;
+      mds     += at * em / 8;
       costUSD += hr * at * em;
     });
-    costSAR = costUSD * 3.75;
   }
-
-  // Update approved section live fields
-  const setEl = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
-  setEl(`bud-mds-${phaseKey}`, mds > 0 ? fmt.num(Math.round(mds)) : '—');
-  setEl(`bud-cost-usd-${phaseKey}`, costUSD > 0 ? fmtExact(costUSD) : '—');
-  setEl(`bud-cost-sar-${phaseKey}`, costSAR > 0 ? fmt.money(Math.round(costSAR)) : '—');
+  const costSAR = costUSD * 3.75;
 
   // Revenue from input
   const revEl = document.getElementById(`inp-rev-${phaseKey}`);
-  const revSAR = revEl ? (parseFloat(revEl.value)||0) : 0;
-
-  // Approved profit
-  const profitSAR = revSAR - costSAR;
-  const profitPct = revSAR > 0 ? profitSAR / revSAR * 100 : 0;
-  setEl(`bud-profit-sar-${phaseKey}`, revSAR > 0 ? fmt.money(Math.round(profitSAR)) + ' SAR' : '—');
-  setEl(`bud-profit-pct-${phaseKey}`, revSAR > 0 ? fmt.decimal(profitPct) + '%' : '—');
+  const approvedRevSAR = revEl ? (parseFloat(revEl.value)||0) : 0;
+  const approvedCostSAR = costSAR;
 
   // Changes totals
   const changes = _budgetChanges[phaseKey] || [];
-  const deltaCost = changes.reduce((s,c) => s + (parseFloat(c.delta_cost)||0), 0);
-  const deltaRev  = changes.reduce((s,c) => s + (parseFloat(c.delta_rev)||0), 0);
+  const deltaCostTotal = changes.reduce((s,c) => s + (parseFloat(c.delta_cost)||0), 0);
+  const deltaRevTotal  = changes.reduce((s,c) => s + (parseFloat(c.delta_rev)||0), 0);
 
-  // Final budget
-  const finCostSAR = costSAR + deltaCost;
-  const finRevSAR  = revSAR + deltaRev;
-  const finProfit  = finRevSAR - finCostSAR;
-  const finPct     = finRevSAR > 0 ? finProfit / finRevSAR * 100 : 0;
+  // Final = Approved + Σ Changes
+  const finCostSAR = approvedCostSAR + deltaCostTotal;
+  const finRevSAR  = approvedRevSAR + deltaRevTotal;
 
-  setEl(`fin-cost-sar-${phaseKey}`, fmt.money(Math.round(finCostSAR)) + ' SAR');
-  setEl(`fin-rev-sar-${phaseKey}`,  fmt.money(Math.round(finRevSAR))  + ' SAR');
-  setEl(`fin-delta-cost-${phaseKey}`, deltaCost ? fmt.money(Math.abs(deltaCost)) + ' SAR' : '—');
-  setEl(`fin-delta-rev-${phaseKey}`,  deltaRev  ? '(' + fmt.money(Math.abs(deltaRev)) + ')' : '—');
-  setEl(`fin-profit-sar-${phaseKey}`, revSAR > 0 ? fmt.money(Math.round(finProfit)) + ' SAR' : '—');
-  setEl(`fin-profit-pct-${phaseKey}`, finRevSAR > 0 ? fmt.decimal(finPct) + '%' : '—');
+  // Approved profit
+  const appProfit    = approvedRevSAR - approvedCostSAR;
+  const appProfitPct = approvedRevSAR > 0 ? appProfit / approvedRevSAR * 100 : 0;
+
+  // Final profit
+  const finProfit    = finRevSAR - finCostSAR;
+  const finProfitPct = finRevSAR > 0 ? finProfit / finRevSAR * 100 : 0;
+
+  const profColor = (p) => p >= 40 ? 'var(--green)' : p >= 20 ? 'var(--amber)' : 'var(--red)';
+
+  // Approved section
+  setEl(`bud-mds-${phaseKey}`, mds > 0 ? fmt.num(Math.round(mds)) : '—');
+  setEl(`bud-cost-usd-${phaseKey}`, costUSD > 0 ? fmtExact(costUSD) : '—');
+  setEl(`bud-cost-sar-${phaseKey}`, costSAR > 0 ? fmt.money(Math.round(costSAR)) : '—');
+  setEl(`bud-profit-sar-${phaseKey}`, approvedRevSAR > 0 ? fmt.money(Math.round(appProfit)) + ' SAR' : '—', profColor(appProfitPct));
+  setEl(`bud-profit-pct-${phaseKey}`, approvedRevSAR > 0 ? fmt.decimal(appProfitPct) + '%' : '—', profColor(appProfitPct));
+
+  // Final section — show only what changed, compute from approved + delta
+  setEl(`fin-cost-sar-${phaseKey}`,   fmt.money(Math.round(finCostSAR)) + ' SAR');
+  setEl(`fin-rev-sar-${phaseKey}`,    fmt.money(Math.round(finRevSAR))  + ' SAR');
+
+  // Delta display — show only if there are changes
+  if (deltaCostTotal !== 0) {
+    setEl(`fin-delta-cost-${phaseKey}`, (deltaCostTotal > 0 ? '+' : '') + fmt.money(Math.abs(deltaCostTotal)) + ' SAR',
+      deltaCostTotal > 0 ? 'var(--red)' : 'var(--green)');
+  } else {
+    setEl(`fin-delta-cost-${phaseKey}`, '—');
+  }
+  if (deltaRevTotal !== 0) {
+    const sign = deltaRevTotal > 0 ? '+' : '';
+    setEl(`fin-delta-rev-${phaseKey}`,
+      deltaRevTotal < 0 ? '(' + fmt.money(Math.abs(deltaRevTotal)) + ')' : '+' + fmt.money(deltaRevTotal) + ' SAR',
+      deltaRevTotal > 0 ? 'var(--green)' : 'var(--red)');
+  } else {
+    setEl(`fin-delta-rev-${phaseKey}`, '—');
+  }
+
+  setEl(`fin-profit-sar-${phaseKey}`, finRevSAR > 0 ? fmt.money(Math.round(finProfit)) + ' SAR' : '—', profColor(finProfitPct));
+  setEl(`fin-profit-pct-${phaseKey}`, finRevSAR > 0 ? fmt.decimal(finProfitPct) + '%' : '—', profColor(finProfitPct));
 
   // KPI strip
-  setEl(`kpi-mds-${phaseKey}`, mds > 0 ? fmt.num(Math.round(mds)) : '—');
-  setEl(`kpi-cost-${phaseKey}`, costSAR > 0 ? fmt.money(Math.round(costSAR)) : '—');
-  const profitColor = profitPct >= 40 ? 'var(--green)' : profitPct >= 20 ? 'var(--amber)' : 'var(--red)';
-  setEl(`kpi-profit-pct-${phaseKey}`, revSAR > 0 ? fmt.decimal(profitPct)+'%' : '—');
-  setEl(`kpi-profit-sar-${phaseKey}`, revSAR > 0 ? fmt.money(Math.round(profitSAR)) + ' SAR' : '—');
-  setEl(`kpi-final-pct-${phaseKey}`, finRevSAR > 0 ? fmt.decimal(finPct)+'%' : '—');
-  setEl(`kpi-final-sar-${phaseKey}`, finRevSAR > 0 ? fmt.money(Math.round(finProfit)) + ' SAR' : '—');
+  setEl(`kpi-mds-${phaseKey}`,        mds > 0 ? fmt.num(Math.round(mds)) : '—');
+  setEl(`kpi-cost-${phaseKey}`,       costSAR > 0 ? fmt.money(Math.round(costSAR)) : '—');
+  setEl(`kpi-profit-pct-${phaseKey}`, approvedRevSAR > 0 ? fmt.decimal(appProfitPct)+'%' : '—', profColor(appProfitPct));
+  setEl(`kpi-profit-sar-${phaseKey}`, approvedRevSAR > 0 ? fmt.money(Math.round(appProfit)) + ' SAR' : '—');
+  setEl(`kpi-final-pct-${phaseKey}`,  finRevSAR > 0 ? fmt.decimal(finProfitPct)+'%' : '—', profColor(finProfitPct));
+  setEl(`kpi-final-sar-${phaseKey}`,  finRevSAR > 0 ? fmt.money(Math.round(finProfit)) + ' SAR' : '—');
 }
 
 // Wire up auto-save for budget inputs
