@@ -459,141 +459,115 @@ function renderProfitability(data, phaseKey) {
     }, 100);
   });
 
-  // Build month rows from saved overrides or sheet data
-  const months = data.months || [];
+  // Months come from Odoo effort data (AppState._effortMonths) — not Excel sheet
+  // We render a placeholder first, then populate when effort data is ready
 
-  const html = `
-    <div class="kpi-strip kpi-strip-small" id="prof-kpi-${phaseKey}">
-      <div class="kpi-card kpi-blue compact">
-        <div class="kpi-label">% COMPLETION</div>
-        <div class="kpi-value" id="prof-kpi-completion-${phaseKey}">—</div>
-        <div class="kpi-foot">latest month</div>
-      </div>
-      <div class="kpi-card kpi-amber compact">
-        <div class="kpi-label">REMAINING MDs</div>
-        <div class="kpi-value" id="prof-kpi-remaining-${phaseKey}">—</div>
-      </div>
-      <div class="kpi-card kpi-navy compact">
-        <div class="kpi-label">EAC MDs</div>
-        <div class="kpi-value" id="prof-kpi-eac-${phaseKey}">—</div>
-      </div>
-      <div class="kpi-card kpi-green compact">
-        <div class="kpi-label">CPI</div>
-        <div class="kpi-value" id="prof-kpi-cpi-${phaseKey}">—</div>
-        <div class="kpi-foot">cost performance index</div>
-      </div>
-      <div class="kpi-card kpi-blue compact">
-        <div class="kpi-label">PROFIT AT COMPLETION</div>
-        <div class="kpi-value" id="prof-kpi-profit-${phaseKey}">—</div>
-      </div>
-    </div>
+async function profBuildTable(phaseKey) {
+  const wrap = document.getElementById(`prof-table-wrap-${phaseKey}`);
+  if (!wrap) return;
 
-    <div class="card" style="margin-top:12px;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-        <div>
-          <h3 class="card-title" style="margin:0;">Monthly Profitability Variance</h3>
-          <span class="muted-text" style="font-size:11px;">% Completion & Remaining MDs are editable · all other columns auto-calculated · auto-saved</span>
-        </div>
-        <button class="btn-outline" style="font-size:11px;" onclick="profRecomputeAll('${phaseKey}')">↻ Recalculate</button>
-      </div>
-      <div class="table-scroll">
-      <table class="data-table" id="profit-table-${phaseKey}" style="font-size:12px;">
-        <thead>
-          <tr>
-            <th rowspan="2" style="position:sticky;left:0;z-index:3;background:var(--navy);color:white;min-width:70px;">Month</th>
-            <th colspan="3" style="text-align:center;background:#1B2A4E;color:#93C5FD;border-left:3px solid #3B82F6;">Presales Budget</th>
-            <th colspan="2" style="text-align:center;background:#1B2A4E;color:#FCD34D;border-left:3px solid #F59E0B;">Current Effort</th>
-            <th colspan="2" style="text-align:center;background:#1a4a7a;color:white;border-left:3px solid #60A5FA;">Editable</th>
-            <th colspan="5" style="text-align:center;background:#1B2A4E;color:#6EE7B7;border-left:3px solid #10B981;">Cost Variance</th>
-            <th colspan="4" style="text-align:center;background:#1B2A4E;color:#FCA5A5;border-left:3px solid #EF4444;">Profitability</th>
-            <th colspan="3" style="text-align:center;background:#1B2A4E;color:#C4B5FD;border-left:3px solid #8B5CF6;">Virtual Invoice</th>
-          </tr>
-          <tr style="font-size:10px;background:#f8fafc;">
-            <th class="num" style="border-left:3px solid #3B82F6;">Revenue<br>SAR</th>
-            <th class="num">Est. Cost<br>SAR</th>
-            <th class="num">Est.<br>MDs</th>
-            <th class="num" style="border-left:3px solid #F59E0B;">This Month<br>MDs</th>
-            <th class="num">Actual MDs<br>to Date</th>
-            <th class="num" style="border-left:3px solid #60A5FA;background:#EFF6FF;">%<br>Completion</th>
-            <th class="num" style="background:#EFF6FF;">Remaining<br>MDs</th>
-            <th class="num" style="border-left:3px solid #10B981;">Current<br>Cost SAR</th>
-            <th class="num">EAC<br>MDs</th>
-            <th class="num">Cost to<br>Complete SAR</th>
-            <th class="num">Est. at<br>Completion SAR</th>
-            <th class="num">CPI</th>
-            <th class="num" style="border-left:3px solid #EF4444;">Profit at<br>Comp SAR</th>
-            <th class="num">Planned<br>Profit SAR</th>
-            <th class="num">Profit<br>%</th>
-            <th class="num">Prof.<br>Variance SAR</th>
-            <th class="num" style="border-left:3px solid #8B5CF6;">Revenue<br>to Date</th>
-            <th class="num">This Month<br>VI SAR</th>
-            <th class="num">Acc.<br>VI SAR</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${months.map((m, idx) => {
-            const monthDate = String(m['Month'] || '').slice(0, 10);
-            const monthKey  = monthDate.slice(0, 7);
-            const sheetPct  = (parseFloat(m['% Completion from plan']) || 0) * 100;
-            const sheetRem  = parseFloat(m['Estimated Remaining (MD)']) || 0;
-            return `
-            <tr data-month-key="${monthKey}" data-idx="${idx}">
-              <td style="position:sticky;left:0;background:white;z-index:2;font-family:var(--mono);font-size:11px;">${monthDate.slice(0,7)}</td>
-              <!-- Presales Budget — read from budget section -->
-              <td class="num prof-rev-${phaseKey}" style="border-left:2px solid var(--border-strong);">—</td>
-              <td class="num prof-estcost-${phaseKey}">—</td>
-              <td class="num prof-estmds-${phaseKey}">—</td>
-              <!-- Current Month -->
-              <td class="num prof-thismonth-${phaseKey}" style="border-left:2px solid var(--border-strong);">—</td>
-              <td class="num prof-actual-${phaseKey}">—</td>
-              <td class="num" style="background:#f0f7ff;">
-                <input type="number" step="0.01" min="0" max="200"
-                  class="completion-input" data-phase="${phaseKey}" data-month="${monthKey}" data-field="completion"
-                  value="${sheetPct.toFixed(2)}"
-                  style="width:70px;padding:3px 6px;font-size:12px;text-align:right;border:1px solid var(--border-strong);border-radius:4px;font-family:var(--mono);"
-                  oninput="profRecomputeAll('${phaseKey}')" onblur="saveOverride(this)">
-                <span style="font-size:10px;color:var(--text-muted);">%</span>
-              </td>
-              <td class="num" style="background:#f0f7ff;">
-                <input type="number" step="0.01" min="0"
-                  class="remaining-input" data-phase="${phaseKey}" data-month="${monthKey}" data-field="remaining"
-                  value="${sheetRem.toFixed(2)}"
-                  style="width:80px;padding:3px 6px;font-size:12px;text-align:right;border:1px solid var(--border-strong);border-radius:4px;font-family:var(--mono);"
-                  oninput="profRecomputeAll('${phaseKey}')" onblur="saveOverride(this)">
-              </td>
-              <!-- Cost Variance (all computed) -->
-              <td class="num" style="border-left:2px solid var(--border-strong);"><span class="pc-currcost-${monthKey}">—</span></td>
-              <td class="num"><span class="pc-eac-${monthKey}"><b style="color:var(--blue);">—</b></span></td>
-              <td class="num"><span class="pc-costtocomplete-${monthKey}">—</span></td>
-              <td class="num"><span class="pc-eac-cost-${monthKey}">—</span></td>
-              <td class="num"><span class="pc-cpi-${monthKey}">—</span></td>
-              <!-- Profitability -->
-              <td class="num" style="border-left:2px solid var(--border-strong);"><span class="pc-profit-comp-${monthKey}">—</span></td>
-              <td class="num"><span class="pc-planned-profit-${monthKey}">—</span></td>
-              <td class="num"><span class="pc-profit-pct-${monthKey}">—</span></td>
-              <td class="num"><span class="pc-prof-var-${monthKey}">—</span></td>
-              <!-- Virtual Invoice -->
-              <td class="num" style="border-left:2px solid var(--border-strong);"><span class="pc-rev-todate-${monthKey}">—</span></td>
-              <td class="num"><span class="pc-vi-month-${monthKey}">—</span></td>
-              <td class="num"><span class="pc-vi-acc-${monthKey}">—</span></td>
-            </tr>`;
-          }).join('')}
-        </tbody>
-      </table>
-      </div>
+  // Get months from effort data (AppState._effortMonths set by loadEffortLive)
+  let months = (AppState._effortMonths && AppState._effortMonths[phaseKey]) || [];
+
+  if (!months.length) {
+    wrap.innerHTML = '<div class="loading">No effort data yet — load Current Effort first then click Recalculate</div>';
+    return;
+  }
+
+  // Load saved overrides
+  let overrides = {};
+  try {
+    const r = await fetch('/api/plan-overrides');
+    const d = await r.json();
+    AppState.planOverrides = d.plan_overrides || {};
+    overrides = (AppState.planOverrides[phaseKey]) || {};
+  } catch(e) {}
+
+  const tableHtml = `
+    <div class="table-scroll">
+    <table class="data-table" id="profit-table-${phaseKey}" style="font-size:12px;">
+      <thead>
+        <tr>
+          <th rowspan="2" style="position:sticky;left:0;z-index:3;background:var(--navy);color:white;min-width:70px;">Month</th>
+          <th colspan="3" style="text-align:center;background:#1B2A4E;color:#93C5FD;border-left:3px solid #3B82F6;">Presales Budget</th>
+          <th colspan="2" style="text-align:center;background:#1B2A4E;color:#FCD34D;border-left:3px solid #F59E0B;">Current Effort</th>
+          <th colspan="2" style="text-align:center;background:#1a4a7a;color:white;border-left:3px solid #60A5FA;">Editable</th>
+          <th colspan="5" style="text-align:center;background:#1B2A4E;color:#6EE7B7;border-left:3px solid #10B981;">Cost Variance</th>
+          <th colspan="4" style="text-align:center;background:#1B2A4E;color:#FCA5A5;border-left:3px solid #EF4444;">Profitability</th>
+          <th colspan="3" style="text-align:center;background:#1B2A4E;color:#C4B5FD;border-left:3px solid #8B5CF6;">Virtual Invoice</th>
+        </tr>
+        <tr style="font-size:10px;background:#f8fafc;">
+          <th class="num" style="border-left:3px solid #3B82F6;">Revenue<br>SAR</th>
+          <th class="num">Est. Cost<br>SAR</th>
+          <th class="num">Est.<br>MDs</th>
+          <th class="num" style="border-left:3px solid #F59E0B;">This Month<br>MDs</th>
+          <th class="num">Actual MDs<br>to Date</th>
+          <th class="num" style="border-left:3px solid #60A5FA;background:#EFF6FF;">%<br>Completion</th>
+          <th class="num" style="background:#EFF6FF;">Remaining<br>MDs</th>
+          <th class="num" style="border-left:3px solid #10B981;">Current<br>Cost SAR</th>
+          <th class="num">EAC<br>MDs</th>
+          <th class="num">Cost to<br>Complete SAR</th>
+          <th class="num">Est. at<br>Completion SAR</th>
+          <th class="num">CPI</th>
+          <th class="num" style="border-left:3px solid #EF4444;">Profit at<br>Comp SAR</th>
+          <th class="num">Planned<br>Profit SAR</th>
+          <th class="num">Profit<br>%</th>
+          <th class="num">Prof.<br>Variance SAR</th>
+          <th class="num" style="border-left:3px solid #8B5CF6;">Revenue<br>to Date</th>
+          <th class="num">This Month<br>VI SAR</th>
+          <th class="num">Acc.<br>VI SAR</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${months.map((m) => {
+          const monthKey = m.key;
+          const mo = overrides[monthKey] || {};
+          const savedPct = mo.completion !== undefined ? parseFloat(mo.completion).toFixed(2) : '0.00';
+          const savedRem = mo.remaining  !== undefined ? parseFloat(mo.remaining).toFixed(2)  : '0.00';
+          return `
+          <tr data-month-key="${monthKey}">
+            <td style="position:sticky;left:0;background:white;z-index:2;font-family:var(--mono);font-size:11px;">${monthKey}</td>
+            <td class="num prof-rev-${phaseKey}" style="border-left:3px solid #3B82F6;">—</td>
+            <td class="num prof-estcost-${phaseKey}">—</td>
+            <td class="num prof-estmds-${phaseKey}">—</td>
+            <td class="num prof-thismonth-${phaseKey}" style="border-left:3px solid #F59E0B;">—</td>
+            <td class="num prof-actual-${phaseKey}">—</td>
+            <td class="num" style="background:#EFF6FF;border-left:3px solid #60A5FA;">
+              <input type="number" step="0.01" min="0" max="200"
+                class="completion-input" data-phase="${phaseKey}" data-month="${monthKey}" data-field="completion"
+                value="${savedPct}"
+                style="width:65px;padding:3px 6px;font-size:12px;text-align:right;border:1px solid var(--border-strong);border-radius:4px;font-family:var(--mono);"
+                oninput="profRecomputeAll('${phaseKey}')" onblur="saveOverride(this)">
+              <span style="font-size:10px;color:var(--text-muted);">%</span>
+            </td>
+            <td class="num" style="background:#EFF6FF;">
+              <input type="number" step="0.01" min="0"
+                class="remaining-input" data-phase="${phaseKey}" data-month="${monthKey}" data-field="remaining"
+                value="${savedRem}"
+                style="width:75px;padding:3px 6px;font-size:12px;text-align:right;border:1px solid var(--border-strong);border-radius:4px;font-family:var(--mono);"
+                oninput="profRecomputeAll('${phaseKey}')" onblur="saveOverride(this)">
+            </td>
+            <td class="num" style="border-left:3px solid #10B981;"><span class="pc-currcost-${monthKey}">—</span></td>
+            <td class="num"><span class="pc-eac-${monthKey}">—</span></td>
+            <td class="num"><span class="pc-costtocomplete-${monthKey}">—</span></td>
+            <td class="num"><span class="pc-eac-cost-${monthKey}">—</span></td>
+            <td class="num"><span class="pc-cpi-${monthKey}">—</span></td>
+            <td class="num" style="border-left:3px solid #EF4444;"><span class="pc-profit-comp-${monthKey}">—</span></td>
+            <td class="num"><span class="pc-planned-profit-${monthKey}">—</span></td>
+            <td class="num"><span class="pc-profit-pct-${monthKey}">—</span></td>
+            <td class="num"><span class="pc-prof-var-${monthKey}">—</span></td>
+            <td class="num" style="border-left:3px solid #8B5CF6;"><span class="pc-rev-todate-${monthKey}">—</span></td>
+            <td class="num"><span class="pc-vi-month-${monthKey}">—</span></td>
+            <td class="num"><span class="pc-vi-acc-${monthKey}">—</span></td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
     </div>
   `;
 
-  setTimeout(() => {
-    applyPlanOverrides(phaseKey);
-    profRecomputeAll(phaseKey);
-    // Wire save on blur
-    document.querySelectorAll(`#profit-table-${phaseKey} .completion-input, #profit-table-${phaseKey} .remaining-input`).forEach(inp => {
-      inp.addEventListener('blur', () => saveOverride(inp));
-    });
-  }, 150);
-
-  return html;
+  wrap.innerHTML = tableHtml;
+  profRecomputeAll(phaseKey);
 }
 
 async function profRecomputeAll(phaseKey) {
@@ -857,9 +831,15 @@ async function loadEffortLive(phaseKey, containerId) {
       const thisCell = emp.months?.[thisMonthKey] || { regular: 0, ramadan: 0, overtime: 0 };
       grandThisMonthMDs += (thisCell.regular + thisCell.overtime) / 8 + thisCell.ramadan / 6;
 
-    // Save to AppState for profitability table
+    // Save months + MDs to AppState for profitability table
     if (!AppState._effortMonthMDs) AppState._effortMonthMDs = {};
+    if (!AppState._effortMonths)   AppState._effortMonths   = {};
     AppState._effortMonthMDs[phaseKey] = monthMDTotals;
+    AppState._effortMonths[phaseKey]   = months;
+    // Rebuild profitability table now that we have months + MDs
+    if (document.getElementById(`prof-table-wrap-${phaseKey}`)) {
+      profBuildTable(phaseKey);
+    }
 
       // Country color
       const countryColor = emp.country === 'KSA' ? '#10B981'
@@ -1678,4 +1658,5 @@ async function deletePromo(id) {
   if (!confirm('Delete this promotion record?')) return;
   await fetch(`/api/promotions/${id}`, { method: 'DELETE' });
   renderPromotionsSubTab();
+}
 }
