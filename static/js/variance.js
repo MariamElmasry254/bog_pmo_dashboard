@@ -85,7 +85,10 @@ function renderVarianceSubTab(key) {
     setTimeout(() => loadEffortLive(activePhase, 'effortLiveWrap'), 50);
   }
   if (data.sections.some(s => s.key === 'estimated')) {
-    setTimeout(() => loadEstimatedLive(activePhase, 'estimatedLiveWrap'), 50);
+    setTimeout(() => {
+      const wrap = document.getElementById('estimatedLiveWrap');
+      if (wrap) loadEstimatedLive(activePhase, 'estimatedLiveWrap');
+    }, 100);
   }
 }
 
@@ -645,38 +648,43 @@ function renderEstimated(data, phaseKey) {
   </div>`;
 }
 
-async function loadEstimatedLive(phaseKey, containerId) {
-  const wrap = document.getElementById(containerId || 'estimatedLiveWrap');
-  if (!wrap) return;
-
-  // Load positions catalog from DB
-  let positions = [];
-  try {
-    const r = await fetch('/api/positions');
-    const d = await r.json();
-    positions = (d.positions || []).filter(p => p.hour_rate);
-  } catch (e) {}
-
-  // Load saved rows from DB
-  const storageKey = `estimated_rows_${phaseKey || 'dev'}`;
-  let rows = [];
-  try {
-    const saved = localStorage.getItem(storageKey);
-    if (saved) rows = JSON.parse(saved);
-  } catch (e) {}
-  if (!rows.length) {
-    rows = [makeEstRow()];
-  }
-
-  renderEstimatedTable(wrap, rows, positions, phaseKey);
-}
-
 let _estPositions = [];
 let _estRows = [];
 let _estPhase = '';
 
 function makeEstRow(position = '', hourRate = '', actualTime = 176, estMonths = '') {
   return { id: Date.now() + Math.random(), position, hourRate, actualTime, estMonths };
+}
+
+async function loadEstimatedLive(phaseKey, containerId) {
+  const wrap = document.getElementById(containerId || 'estimatedLiveWrap');
+  if (!wrap) { console.warn('estimatedLiveWrap not found'); return; }
+  wrap.innerHTML = '<div class="loading">Loading estimated cost table…</div>';
+
+  // Load positions catalog from DB
+  let positions = [];
+  try {
+    const r = await fetch('/api/positions');
+    const d = await r.json();
+    positions = (d.positions || []).filter(p => p.hour_rate)
+      .sort((a,b) => (a.position||a.name||'').localeCompare(b.position||b.name||''));
+  } catch (e) { console.warn('positions load failed:', e); }
+
+  // Load saved rows from server
+  let rows = [];
+  try {
+    const r = await fetch('/api/estimated-rows?phase=' + encodeURIComponent(phaseKey || 'development'));
+    if (r.ok) {
+      const d = await r.json();
+      rows = d.rows || [];
+    }
+  } catch (e) {}
+  if (!rows.length) rows = [makeEstRow()];
+
+  _estPositions = positions;
+  _estRows = rows;
+  _estPhase = phaseKey;
+  renderEstimatedTable(wrap, rows, positions, phaseKey);
 }
 
 function renderEstimatedTable(wrap, rows, positions, phaseKey) {
@@ -823,10 +831,14 @@ function renderEstimatedTable(wrap, rows, positions, phaseKey) {
   });
 }
 
-function estSave() {
+async function estSave() {
   try {
-    localStorage.setItem(`estimated_rows_${_estPhase}`, JSON.stringify(_estRows));
-  } catch (e) {}
+    await fetch('/api/estimated-rows', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phase: _estPhase, rows: _estRows })
+    });
+  } catch (e) { console.warn('estSave failed:', e); }
 }
 
 function estOnPosChange(sel) {
