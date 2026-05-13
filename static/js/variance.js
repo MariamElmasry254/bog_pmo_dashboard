@@ -108,15 +108,36 @@ function renderVarianceSubTab(key) {
   // Wire up auto-save for any budget inputs
   wireBudgetInputs(cont);
 
-  // Load live effort + estimated tables AFTER DOM is set
+  // Load order: Effort first (has cost/MDs data), then everything that depends on it
+  const effortContainerId = `effort-live-${key}`;
+
+  // Step 1: Load effort (contains MDs + costs per month)
+  if (tab.sections.some(s => s.key === 'effort')) {
+    setTimeout(async () => {
+      await loadEffortLive(key, effortContainerId);
+      // Step 2: After effort loads, load estimated (contains total MDs + total cost)
+      if (tab.sections.some(s => s.key === 'estimated')) {
+        const wrap = document.getElementById('estimatedLiveWrap');
+        if (wrap) await loadEstimatedLive(key, 'estimatedLiveWrap');
+      }
+      // Step 3: After estimated loads, recalc budget
+      if (tab.sections.some(s => s.key === 'budget')) {
+        budgetAutoCalc(key);
+      }
+      // Step 4: Rebuild profitability with fresh data
+      if (tab.sections.some(s => s.key === 'profitability')) {
+        profBuildTable(key);
+      }
+    }, 100);
+  }
+
+  // Load budget changes + revenue (independent of effort)
   if (tab.sections.some(s => s.key === 'budget')) {
     setTimeout(() => loadBudgetChanges(key), 150);
   }
-  if (tab.sections.some(s => s.key === 'effort')) {
-    const effortContainerId = `effort-live-${key}`;
-    setTimeout(() => loadEffortLive(key, effortContainerId), 100);
-  }
-  if (tab.sections.some(s => s.key === 'estimated')) {
+
+  // Estimated standalone (if no effort section)
+  if (!tab.sections.some(s => s.key === 'effort') && tab.sections.some(s => s.key === 'estimated')) {
     setTimeout(() => {
       const wrap = document.getElementById('estimatedLiveWrap');
       if (wrap) loadEstimatedLive(key, 'estimatedLiveWrap');
@@ -283,7 +304,8 @@ async function loadBudgetChanges(phaseKey) {
   } catch(e) {}
 
   renderBudgetChanges(phaseKey);
-  budgetAutoCalc(phaseKey);
+  // Delay to ensure estimated cost rows are loaded first
+  setTimeout(() => budgetAutoCalc(phaseKey), 300);
 }
 
 function renderBudgetChanges(phaseKey) {
@@ -1098,6 +1120,8 @@ async function loadEstimatedLive(phaseKey, containerId) {
   _estRows = rows;
   _estPhase = phaseKey;
   renderEstimatedTable(wrap, rows, positions, phaseKey);
+  // After estimated loads, update budget calculations
+  setTimeout(() => budgetAutoCalc(phaseKey), 50);
 }
 
 function renderEstimatedTable(wrap, rows, positions, phaseKey) {
