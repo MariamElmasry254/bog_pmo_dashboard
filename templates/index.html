@@ -16,14 +16,21 @@
 <header class="exec-header">
   <div class="exec-content">
     <div class="exec-top">
-      <span class="exec-label">PMO DASHBOARD — FY 2026</span>
+      <div style="display:flex;align-items:center;gap:16px;">
+        <a href="/projects" style="font-size:11px;color:rgba(255,255,255,.6);text-decoration:none;
+           letter-spacing:.1em;text-transform:uppercase;font-weight:600;transition:color .15s;"
+           onmouseover="this.style.color='white'" onmouseout="this.style.color='rgba(255,255,255,.6)'">
+          ← All Projects
+        </a>
+        <span class="exec-label">PMO DASHBOARD</span>
+      </div>
       <div class="exec-meta">
         <div><span>PROJECT MANAGER</span><b id="headerPM">—</b></div>
         <div><span>COORDINATOR</span><b id="headerCoord">—</b></div>
         <div><span>GENERATED</span><b id="generatedTime">—</b></div>
       </div>
     </div>
-    <h1 class="exec-title">BOG Digital Transformation</h1>
+    <h1 class="exec-title" id="headerProjectTitle">{{ project_name }}</h1>
 
 
     <nav class="exec-tabs">
