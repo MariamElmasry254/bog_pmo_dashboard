@@ -199,6 +199,27 @@
     </div>
     <div class="import-result" id="travelImportResult"></div>
 
+    <!-- PDF Ticket Upload -->
+    <div style="background:white;border:1px solid var(--border);border-radius:10px;padding:16px 20px;margin-bottom:16px;">
+      <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;">📄 Parse from Flight Ticket PDF</div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <label style="padding:8px 16px;background:var(--bg);border:1px solid var(--border);border-radius:8px;
+                      cursor:pointer;font-size:13px;font-weight:500;transition:all .15s;"
+               onmouseover="this.style.background='#E0E7FF'" onmouseout="this.style.background='var(--bg)'">
+          📂 Upload Ticket PDF
+          <input type="file" id="ticketFile" accept=".pdf" style="display:none" onchange="parseTicket(this)">
+        </label>
+        <div id="ticketResult" style="font-size:13px;color:var(--muted);flex:1;"></div>
+      </div>
+      <!-- Parsed result preview -->
+      <div id="ticketPreview" style="display:none;margin-top:12px;padding:12px;background:#F0FDF4;border:1px solid #A7F3D0;border-radius:8px;">
+        <div style="font-size:11px;font-weight:700;color:#065F46;margin-bottom:8px;">✅ Extracted from ticket:</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin-bottom:10px;" id="ticketFields"></div>
+        <button class="btn btn-primary" onclick="confirmTicketImport()" style="font-size:12px;padding:6px 14px;">Add to Travel Records</button>
+        <button class="btn btn-ghost" onclick="document.getElementById('ticketPreview').style.display='none'" style="font-size:12px;padding:6px 14px;">Discard</button>
+      </div>
+    </div>
+
     <!-- Toolbar -->
     <div class="toolbar">
       <input class="search-inp" id="travelSearch" placeholder="🔍 Search by name…" oninput="loadTravel()">
@@ -231,7 +252,7 @@
       </div>
       <div style="display:flex;gap:8px;">
         <button class="btn btn-primary" onclick="addTravel()">Save Record</button>
-        <button class="btn btn-ghost" onclick="toggleForm('travelForm')">Cancel</button>
+        <button class="btn btn-ghost" onclick="cancelEdit()">Cancel</button>
       </div>
     </div>
 
@@ -240,10 +261,10 @@
       <table>
         <thead>
           <tr>
-            <th>#</th><th>Name</th><th>Position</th><th>Start</th><th>End</th><th>Status</th><th>Notes</th><th></th>
+            <th>#</th><th>Name</th><th>Position</th><th>Start</th><th>End</th><th>Status</th><th>Notes</th><th colspan="2"></th>
           </tr>
         </thead>
-        <tbody id="travelBody"><tr><td colspan="8" style="text-align:center;padding:32px;color:var(--muted);">Loading…</td></tr></tbody>
+        <tbody id="travelBody"><tr><td colspan="9" style="text-align:center;padding:32px;color:var(--muted);">Loading…</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -462,20 +483,32 @@ async function addTravel() {
   const name  = document.getElementById('tv_name').value.trim();
   const start = document.getElementById('tv_start').value;
   if (!name || !start) { alert('Name and start date required'); return; }
-  const res = await fetch('/api/global/travel', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({
-      name, start_date: start,
-      position: document.getElementById('tv_pos').value.trim(),
-      end_date:  document.getElementById('tv_end').value,
-      notes:     document.getElementById('tv_notes').value.trim(),
-      status: 'confirmed'
-    })
-  });
+  const body = {
+    name, start_date: start,
+    position: document.getElementById('tv_pos').value.trim(),
+    end_date:  document.getElementById('tv_end').value,
+    notes:     document.getElementById('tv_notes').value.trim(),
+    status: 'confirmed'
+  };
+
+  let res;
+  if (_editingTravel) {
+    // UPDATE existing record
+    res = await fetch('/api/global/travel/'+_editingTravel.id, {
+      method:'PUT', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+  } else {
+    // ADD new record
+    res = await fetch('/api/global/travel', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+  }
+
   const d = await res.json();
   if (d.ok) {
-    ['tv_name','tv_pos','tv_start','tv_end','tv_notes'].forEach(id => document.getElementById(id).value='');
-    document.getElementById('travelForm').classList.remove('open');
+    cancelEdit();
     loadTravel();
   } else if (d.error === 'duplicate') {
     alert('Duplicate: this person already has a travel record starting on that date.');
@@ -488,6 +521,73 @@ async function deleteTravel(id) {
   if (!confirm('Delete this travel record?')) return;
   await fetch('/api/global/travel/'+id, {method:'DELETE'});
   loadTravel();
+}
+
+// ── PDF Ticket Parser ────────────────────────────────────────────────
+let _parsedTicket = null;
+
+async function parseTicket(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const resultEl  = document.getElementById('ticketResult');
+  const previewEl = document.getElementById('ticketPreview');
+  resultEl.textContent = '⏳ Reading ticket…';
+  previewEl.style.display = 'none';
+  input.value = '';
+
+  const formData = new FormData();
+  formData.append('file', file);
+  try {
+    const res = await fetch('/api/global/travel/parse-ticket', {method:'POST', body: formData});
+    const d   = await res.json();
+    if (!d.ok) { resultEl.textContent = '⚠️ ' + (d.error||'Parse failed'); return; }
+    _parsedTicket = d;
+    resultEl.textContent = '';
+    // Show preview
+    const fields = document.getElementById('ticketFields');
+    fields.innerHTML = [
+      {label:'Name',       val: d.name       || '—'},
+      {label:'Start Date', val: d.start_date || '—'},
+      {label:'End Date',   val: d.end_date   || '—  (add manually if return ticket missing)'},
+      {label:'Direction',  val: d.direction  || '—'},
+      {label:'Route',      val: (d.from_city && d.to_city) ? `${d.from_city} → ${d.to_city}` : '—'},
+      {label:'Airline',    val: d.airline    || '—'},
+    ].map(f => `<div style="background:white;padding:8px 10px;border-radius:6px;border:1px solid #D1FAE5;">
+      <div style="font-size:9px;font-weight:700;color:#065F46;text-transform:uppercase;letter-spacing:.4px;margin-bottom:2px;">${f.label}</div>
+      <div style="font-size:13px;font-weight:600;">${f.val}</div>
+    </div>`).join('');
+    previewEl.style.display = 'block';
+  } catch(e) {
+    resultEl.textContent = '⚠️ Error: ' + e.message;
+  }
+}
+
+async function confirmTicketImport() {
+  if (!_parsedTicket) return;
+  const d = _parsedTicket;
+  if (!d.name) { alert('Could not extract name from ticket — please add manually.'); return; }
+  const res = await fetch('/api/global/travel', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({
+      name:       d.name,
+      position:   '',
+      start_date: d.start_date,
+      end_date:   d.end_date || '',
+      notes:      `${d.airline||''} ${d.flight||''} ${d.from_city||''} → ${d.to_city||''}`.trim(),
+      status:     'confirmed'
+    })
+  });
+  const r = await res.json();
+  if (r.ok) {
+    document.getElementById('ticketPreview').style.display = 'none';
+    document.getElementById('ticketResult').textContent = `✅ Added: ${d.name} (${d.start_date})`;
+    _parsedTicket = null;
+    loadTravel();
+  } else if (r.error === 'duplicate') {
+    alert('Already exists: ' + d.name + ' on ' + d.start_date);
+  } else {
+    alert('Error: ' + (r.error||'Unknown'));
+  }
 }
 
 // ── Promotions CRUD ──────────────────────────────────────────────────
