@@ -407,7 +407,8 @@ def normalize_timesheet(entry):
 
     return {
         'date': entry.get('date'),
-        'employee': entry.get('employee_id', [None, 'Unknown'])[1] if entry.get('employee_id') else 'Unknown',
+        'employee':         entry.get('employee_id', [None, 'Unknown'])[1] if entry.get('employee_id') else 'Unknown',
+        'odoo_employee_id': entry.get('employee_id', [None])[0] if entry.get('employee_id') else None,
         'project': project[1] if project else '',
         'task': task_name,
         'service': service_name,  # umbrella/parent — used to group actuals per service
@@ -812,6 +813,99 @@ def api_search_employees():
         return jsonify({'employees': result})
     except Exception as ex:
         return jsonify({'employees': [], 'error': str(ex)})
+
+
+@app.route('/api/global/travel/auto-link', methods=['POST'])
+def api_travel_auto_link():
+    """Auto-match unlinked travel records to Odoo employees by fuzzy name."""
+    try:
+        if not odoo.uid: odoo.connect()
+        records = _global_get('travel') or []
+        import re as _re
+        def norm(s):
+            return _re.sub(r"[\s\-_'.]+",'', (s or '').lower().strip())
+        
+        all_emps = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'hr.employee', 'search_read',
+            [[('active','=',True)]],
+            {'fields':['id','name'], 'limit':2000}
+        )
+        emp_norm = {norm(e['name']): e for e in all_emps}
+        # Also index by first+last word
+        emp_fl = {}
+        for e in all_emps:
+            words = e['name'].lower().split()
+            if len(words) >= 2:
+                key = words[0] + words[-1]
+                emp_fl[key] = e
+
+        matched = unmatched = 0
+        for r in records:
+            if r.get('odoo_employee_id'):
+                continue  # already linked
+            n = norm(r.get('name',''))
+            found = emp_norm.get(n)
+            if not found:
+                words = r.get('name','').lower().split()
+                if len(words) >= 2:
+                    found = emp_fl.get(words[0]+words[-1])
+            if found:
+                r['odoo_employee_id'] = found['id']
+                r['odoo_employee_name'] = found['name']
+                matched += 1
+            else:
+                unmatched += 1
+
+        _global_set('travel', records)
+        return jsonify({'ok':True,'matched':matched,'unmatched':unmatched,'total':len(records)})
+    except Exception as e:
+        return jsonify({'error':str(e)}), 500
+
+
+@app.route('/api/global/promotions/auto-link', methods=['POST'])
+def api_promotions_auto_link():
+    """Auto-match unlinked promotion records to Odoo employees by fuzzy name."""
+    try:
+        if not odoo.uid: odoo.connect()
+        records = _global_get('promotions') or []
+        import re as _re
+        def norm(s):
+            return _re.sub(r"[\s\-_'.]+",'', (s or '').lower().strip())
+        all_emps = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'hr.employee', 'search_read',
+            [[('active','=',True)]],
+            {'fields':['id','name'], 'limit':2000}
+        )
+        emp_norm = {norm(e['name']): e for e in all_emps}
+        emp_fl = {}
+        for e in all_emps:
+            words = e['name'].lower().split()
+            if len(words) >= 2:
+                emp_fl[words[0]+words[-1]] = e
+
+        matched = unmatched = 0
+        for r in records:
+            if r.get('odoo_employee_id'):
+                continue
+            n = norm(r.get('name',''))
+            found = emp_norm.get(n)
+            if not found:
+                words = r.get('name','').lower().split()
+                if len(words) >= 2:
+                    found = emp_fl.get(words[0]+words[-1])
+            if found:
+                r['odoo_employee_id'] = found['id']
+                r['odoo_employee_name'] = found['name']
+                matched += 1
+            else:
+                unmatched += 1
+
+        _global_set('promotions', records)
+        return jsonify({'ok':True,'matched':matched,'unmatched':unmatched,'total':len(records)})
+    except Exception as e:
+        return jsonify({'error':str(e)}), 500
 
 
 @app.route('/debug/projects-raw')
@@ -3230,22 +3324,27 @@ def _names_match(a, b):
     return False
 
 
-def get_travel_periods_for_employee(name):
+def get_travel_periods_for_employee(name, odoo_employee_id=None):
     """Returns list of (start_date, end_date_or_None) tuples for an employee's travel periods.
-    Uses fuzzy name matching to handle slight spelling differences.
-    Also matches by odoo_employee_id if stored in travel record.
+    Matches by odoo_employee_id first (exact), then fuzzy name match.
     """
     records = load_travel()
     periods = []
     for r in records:
-        rec_name = r.get('name', '')
-        if _names_match(rec_name, name):
+        matched = False
+        # 1. Exact Odoo ID match (most reliable)
+        if odoo_employee_id and r.get('odoo_employee_id'):
+            matched = int(r['odoo_employee_id']) == int(odoo_employee_id)
+        # 2. Fuzzy name match
+        if not matched:
+            matched = _names_match(r.get('name',''), name)
+        if matched:
             periods.append((r.get('start_date'), r.get('end_date')))
     return periods
 
-def is_onsite_on_date(name, date_str):
+def is_onsite_on_date(name, date_str, odoo_employee_id=None):
     """Check if employee was onsite on a given date"""
-    periods = get_travel_periods_for_employee(name)
+    periods = get_travel_periods_for_employee(name, odoo_employee_id=odoo_employee_id)
     for start, end in periods:
         if not start:
             continue
@@ -3298,6 +3397,7 @@ def compute_effort_from_odoo(phase_key, year, month, position_lookup=None):
 
     # Group by employee, then by date
     by_emp = {}
+    emp_odoo_ids = {}  # emp_name -> odoo_employee_id
     for entry in entries:
         emp = entry['employee']
         d = entry['date']
@@ -3307,6 +3407,8 @@ def compute_effort_from_odoo(phase_key, year, month, position_lookup=None):
         if d not in by_emp[emp]:
             by_emp[emp][d] = 0
         by_emp[emp][d] += h
+        if entry.get('odoo_employee_id') and emp not in emp_odoo_ids:
+            emp_odoo_ids[emp] = entry['odoo_employee_id']
 
     team = []
     for emp_name, day_hours in by_emp.items():
@@ -3334,7 +3436,7 @@ def compute_effort_from_odoo(phase_key, year, month, position_lookup=None):
             wd = d_obj.weekday()
             is_weekend = wd in weekend_days
             in_ramadan = is_in_ramadan(day_str, country)
-            is_onsite = is_onsite_on_date(emp_name, day_str)
+            is_onsite = is_onsite_on_date(emp_name, day_str, odoo_employee_id=emp_odoo_ids.get(emp_name))
             is_holiday = is_public_holiday(day_str, country)
 
             total_days += 1
