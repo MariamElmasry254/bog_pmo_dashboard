@@ -1080,6 +1080,22 @@ def api_promotions_auto_link():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/debug/emp-fields')
+def debug_emp_fields():
+    """Check what fields Odoo employees have for code identification"""
+    try:
+        if not odoo.uid: odoo.connect()
+        emps = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'hr.employee', 'search_read',
+            [[('name', 'in', ['Sara Samir', 'Rabab Hosney', 'Ahmed Helmi', 'Omar Mohamed'])]],
+            {'fields': ['id', 'name', 'barcode', 'identification_id', 'employee_id', 'pin']}
+        )
+        return jsonify({'employees': emps})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/debug/autolink-test')
 def debug_autolink_test():
     """Debug: show why auto-link fails - compare travel names vs Odoo names"""
