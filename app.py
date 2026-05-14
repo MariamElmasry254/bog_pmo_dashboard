@@ -2,7 +2,7 @@
 BOG Digital Transformation - PMO Dashboard v3
 Modular templates + service mapping + filters
 """
-from flask import Flask, render_template, jsonify, request, Response
+from flask import Flask, render_template, jsonify, request, Response, session, redirect, url_for
 import pandas as pd
 import os
 import sys
@@ -88,6 +88,40 @@ app = Flask(
     template_folder=os.path.join(BASE_DIR, 'templates'),
     static_folder=os.path.join(BASE_DIR, 'static')
 )
+app.secret_key = os.environ.get('SECRET_KEY', 'codelab-pmo-2026-secret')
+
+def get_active_project():
+    """Returns (project_id, project_name) from session, falling back to env default."""
+    pid  = session.get('project_id')
+    name = session.get('project_name', PROJECT_NAME)
+    return pid, name
+
+def active_project_name():
+    """Shortcut: returns just the project name for Odoo queries."""
+    return session.get('project_name', PROJECT_NAME)
+
+def active_db_prefix():
+    """Returns DB namespace prefix for this project: 'proj_{id}' or '' for default."""
+    pid = session.get('project_id')
+    return f'proj_{pid}' if pid else ''
+
+def proj_get_override(namespace, subkey, key):
+    """Get DB override with project prefix."""
+    pfx = active_db_prefix()
+    full_ns = f'{pfx}_{namespace}' if pfx else namespace
+    return db.get_override(full_ns, subkey, key)
+
+def proj_set_override(namespace, subkey, key, value):
+    """Set DB override with project prefix."""
+    pfx = active_db_prefix()
+    full_ns = f'{pfx}_{namespace}' if pfx else namespace
+    db.set_override(full_ns, subkey, key, value)
+
+def proj_get_namespace(namespace, subkey):
+    """Get all overrides in namespace+subkey with project prefix."""
+    pfx = active_db_prefix()
+    full_ns = f'{pfx}_{namespace}' if pfx else namespace
+    return db.get_namespace_overrides(full_ns, subkey)
 
 
 # ============================================================
@@ -189,7 +223,7 @@ class OdooClient:
                                 all_proj_tasks = self.models.execute_kw(
                                     ODOO_DB, self.uid, ODOO_PASSWORD,
                                     'project.task', 'search_read',
-                                    [[('project_id.name', 'ilike', PROJECT_NAME)]],
+                                    [[('project_id.name', 'ilike', _proj_name)]],
                                     {'fields': ['id', 'parent_id', 'phase_id'], 'limit': 10000}
                                 )
                                 task_map = {t['id']: t for t in all_proj_tasks}
@@ -451,11 +485,78 @@ def handle_error(e):
 
 @app.route('/')
 def index():
-    return render_template('index.html', project_name=PROJECT_NAME)
+    # If no project selected, redirect to projects list
+    if not session.get('project_id') and not session.get('project_name'):
+        # Set default to BOG for backward compatibility
+        session['project_name'] = PROJECT_NAME
+    _, proj_name = get_active_project()
+    return render_template('index.html', project_name=proj_name)
+
+
+@app.route('/projects')
+def projects_list():
+    """Projects selection page — lists all Odoo projects with stage info."""
+    return render_template('projects.html')
+
+
+@app.route('/project/select', methods=['POST'])
+def project_select():
+    """Set the active project in session and redirect to dashboard."""
+    data = request.get_json() or {}
+    project_id   = data.get('project_id')
+    project_name = data.get('project_name', '')
+    if not project_name:
+        return jsonify({'error': 'project_name required'}), 400
+    session['project_id']   = project_id
+    session['project_name'] = project_name
+    # Clear cached data so new project loads fresh
+    return jsonify({'ok': True, 'redirect': '/'})
+
+
+@app.route('/api/projects/list')
+def api_projects_list():
+    """Fetch all projects from Odoo with stage, PM, dates, value."""
+    try:
+        if not odoo.uid:
+            if not odoo.connect():
+                return jsonify({'error': 'Odoo not connected', 'projects': []}), 503
+        projects = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.project', 'search_read',
+            [[('active', '=', True)]],
+            {'fields': ['id', 'name', 'user_id', 'date_start', 'end_date',
+                        'last_update_status',   # stage color: on_track / at_risk / off_track
+                        'description',
+                        'value',                # project value SAR
+                        'coordinator_id',
+                        ],
+             'limit': 200,
+             'order': 'name asc'}
+        )
+
+        result = []
+        for p in projects:
+            pm = p.get('user_id')
+            coord = p.get('coordinator_id')
+            result.append({
+                'id':          p['id'],
+                'name':        p['name'],
+                'pm':          pm[1] if isinstance(pm, list) and len(pm) > 1 else '',
+                'coordinator': coord[1] if isinstance(coord, list) and len(coord) > 1 else '',
+                'date_start':  (p.get('date_start') or '')[:10],
+                'end_date':    (p.get('end_date')   or '')[:10],
+                'status':      p.get('last_update_status') or 'on_track',
+                'value':       float(p.get('value') or 0),
+            })
+        return jsonify({'projects': result})
+    except Exception as e:
+        logger.error(f"Projects list error: {e}", exc_info=True)
+        return jsonify({'error': str(e), 'projects': []}), 500
 
 @app.route('/api/overview')
 def api_overview():
     """KPIs from Roadmap + Odoo project details"""
+    _proj_name = active_project_name()
     roadmap_services = ROADMAP or []
     total_wd_roadmap = sum(s.get('wd') or 0 for s in roadmap_services)
 
@@ -475,7 +576,7 @@ def api_overview():
             projects = odoo.models.execute_kw(
                 ODOO_DB, odoo.uid, ODOO_PASSWORD,
                 'project.project', 'search_read',
-                [[('name', 'ilike', PROJECT_NAME)]],
+                [[('name', 'ilike', _proj_name)]],
                 {'fields': ['id', 'name', 'start_date', 'end_date',
                             'user_id',        # Project Manager (many2one res.users)
                             'coordinator_id', # Coordinator (many2one res.users)
@@ -654,7 +755,7 @@ def api_overview_tags_analysis():
         # Build base domain - tasks in this project
         project_domain = []
         if PROJECT_NAME:
-            project_domain.append(('project_id.name', 'ilike', PROJECT_NAME))
+            project_domain.append(('project_id.name', 'ilike', _proj_name))
 
         # Get parent tasks under requested phases
         parent_domain = list(project_domain)
@@ -894,7 +995,7 @@ def api_overview_analysis(phase_group):
         # Step 1: Get parent tasks (those with phase_id set directly)
         project_domain = [('phase_id', 'in', phase_ids)]
         if PROJECT_NAME:
-            project_domain.append(('project_id.name', 'ilike', PROJECT_NAME))
+            project_domain.append(('project_id.name', 'ilike', _proj_name))
 
         # Try to detect available assignment fields in this Odoo version.
         # Common multi-assignee field names:
@@ -951,7 +1052,7 @@ def api_overview_analysis(phase_group):
         if project_ids:
             all_project_domain = [('project_id', 'in', list(project_ids))]
         elif PROJECT_NAME:
-            all_project_domain = [('project_id.name', 'ilike', PROJECT_NAME)]
+            all_project_domain = [('project_id.name', 'ilike', _proj_name)]
         else:
             all_project_domain = []
 
@@ -2335,7 +2436,7 @@ def load_budget_overrides():
 
 def save_budget_override(phase, path, value):
     """Save (or delete if value is None) a single budget override."""
-    db.set_override('budget', phase, path, value)
+    proj_set_override('budget', phase, path, value)
 
 
 def apply_budget_overrides(budget_info, phase_key):
@@ -2391,7 +2492,7 @@ def api_budget_override_save():
 @app.route('/api/variance/budget-override/<phase>')
 def api_budget_overrides_get(phase):
     """Get all overrides for a phase."""
-    overrides = db.get_namespace_overrides('budget', phase)
+    overrides = proj_get_namespace('budget', phase)
     return jsonify({'phase': phase, 'overrides': overrides})
 
 
@@ -2407,7 +2508,7 @@ def api_overview_financials():
     for phase in phases:
         try:
             # Strategy 1: direct override key
-            overrides = db.get_namespace_overrides('budget', phase) or {}
+            overrides = proj_get_namespace('budget', phase) or {}
             rev_val = 0.0
 
             # approved.revenue_sar may be stored as a dotted key
@@ -2427,13 +2528,16 @@ def api_overview_financials():
 
             # Strategy 3: read directly with get_override
             if not rev_val:
-                direct = db.get_override('budget', phase, 'approved.revenue_sar')
+                direct = proj_get_override('budget', phase, 'approved.revenue_sar')
                 if direct is not None:
                     try: rev_val = float(direct)
                     except: pass
 
+            # Strategy 4: fallback — if no revenue saved yet, note it for frontend
+            # (frontend will show '—' which is correct — revenue not yet entered)
+
             # Add Δ Revenue from budget changes (Final Budget = Approved + Changes)
-            changes_raw = db.get_override('budget_changes', '', phase)
+            changes_raw = proj_get_override('budget_changes', '', phase)
             if isinstance(changes_raw, list):
                 for ch in changes_raw:
                     try: rev_val += float(ch.get('delta_rev') or 0)
@@ -2469,7 +2573,7 @@ def debug_financials():
 @app.route('/api/variance/budget-override/<phase>/<path:path>', methods=['DELETE'])
 def api_budget_override_delete(phase, path):
     """Delete a specific override."""
-    db.set_override('budget', phase, path, None)
+    proj_set_override('budget', phase, path, None)
     return jsonify({'ok': True})
 
 # Sub-tab definitions: which sheets feed which tab
@@ -3583,6 +3687,7 @@ def api_effort_all_months(phase_key):
        - Months start from FIRST month with any log in the project (across the phase)
        - Each cell is total hours classified as Regular / Ramadan / Overtime per country rules.
     """
+    _proj_name = active_project_name()
     if not odoo.uid:
         if not odoo.connect():
             return jsonify({'error': 'Odoo unreachable', 'employees': [], 'months': []}), 503
@@ -3597,7 +3702,7 @@ def api_effort_all_months(phase_key):
         projects = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'project.project', 'search_read',
-            [[('name', 'ilike', PROJECT_NAME)]],
+            [[('name', 'ilike', _proj_name)]],
             {'fields': ['id', 'name'], 'limit': 5}
         )
         if not projects:
@@ -4727,7 +4832,7 @@ def api_employee_odoo_position():
 @app.route('/api/budget-changes', methods=['GET'])
 def api_budget_changes_get():
     phase = request.args.get('phase', 'development')
-    changes = db.get_override('budget_changes', '', phase) or []
+    changes = proj_get_override('budget_changes', '', phase) or []
     if isinstance(changes, str):
         import json as _j
         try: changes = _j.loads(changes)
@@ -4742,7 +4847,7 @@ def api_budget_changes_save():
     body = request.json or {}
     phase = body.get('phase', 'development')
     changes = body.get('changes', [])
-    db.set_override('budget_changes', '', phase, changes)
+    proj_set_override('budget_changes', '', phase, changes)
     # Save planned profit history if provided
     history = body.get('planned_profit_history')
     if history is not None:
@@ -4754,7 +4859,7 @@ def api_budget_changes_save():
 def api_estimated_rows_get():
     """Get saved estimated cost rows for a phase."""
     phase = request.args.get('phase', 'development')
-    rows = db.get_override('estimated_rows', '', phase) or []
+    rows = proj_get_override('estimated_rows', '', phase) or []
     if isinstance(rows, str):
         import json as _json
         try: rows = _json.loads(rows)
@@ -4768,7 +4873,7 @@ def api_estimated_rows_save():
     body = request.json or {}
     phase = body.get('phase', 'development')
     rows = body.get('rows', [])
-    db.set_override('estimated_rows', '', phase, rows)
+    proj_set_override('estimated_rows', '', phase, rows)
     return jsonify({'ok': True, 'phase': phase, 'count': len(rows)})
 
 
@@ -5438,7 +5543,7 @@ def debug():
         ts = models.execute_kw(
             ODOO_DB, uid, ODOO_PASSWORD,
             'account.analytic.line', 'search_read',
-            [[('project_id.name', 'ilike', PROJECT_NAME)]],
+            [[('project_id.name', 'ilike', _proj_name)]],
             {'fields': ['date', 'employee_id', 'project_id'], 'limit': 3}
         )
         info['odoo_test']['5_sample_timesheets'] = {
