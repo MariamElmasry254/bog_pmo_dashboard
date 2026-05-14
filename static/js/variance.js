@@ -314,6 +314,11 @@ async function loadBudgetChanges(phaseKey) {
     if (r.ok) {
       const d = await r.json();
       _budgetChanges[phaseKey] = d.changes || [];
+      // Load planned profit history
+      if (d.planned_profit_history) {
+        if (!AppState._plannedProfitHistory) AppState._plannedProfitHistory = {};
+        AppState._plannedProfitHistory[phaseKey] = d.planned_profit_history;
+      }
     }
   } catch (e) {}
   if (!_budgetChanges[phaseKey]) _budgetChanges[phaseKey] = [];
@@ -515,10 +520,27 @@ function budgetAutoCalc(phaseKey) {
   setEl(`fin-profit-pct-${phaseKey}`, finRevSAR > 0 ? fmt.decimal(finProfitPct) + '%' : '—', profColor(finProfitPct));
 
   // KPI strip
-  // Save final profit % for profitability to use
+  // Save final profit % for profitability to use (with date for history)
   if (finRevSAR > 0) {
     if (!AppState._finalProfitPct) AppState._finalProfitPct = {};
-    AppState._finalProfitPct[phaseKey] = finProfit / finRevSAR;
+    const newProfitPct = finProfit / finRevSAR;
+    const prevPct = AppState._finalProfitPct[phaseKey];
+    AppState._finalProfitPct[phaseKey] = newProfitPct;
+
+    // Save history: if profit% changed, record when
+    if (prevPct !== undefined && Math.abs(newProfitPct - prevPct) > 0.001) {
+      if (!AppState._plannedProfitHistory) AppState._plannedProfitHistory = {};
+      if (!AppState._plannedProfitHistory[phaseKey]) AppState._plannedProfitHistory[phaseKey] = {};
+      const today = new Date().toISOString().slice(0,7); // YYYY-MM
+      AppState._plannedProfitHistory[phaseKey][today] = newProfitPct;
+      // Persist to DB
+      fetch('/api/budget-changes', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ phase: phaseKey, changes: _budgetChanges[phaseKey]||[], 
+          planned_profit_history: AppState._plannedProfitHistory[phaseKey] })
+      }).catch(()=>{});
+    }
   }
   setEl(`kpi-mds-${phaseKey}`,        mds > 0 ? fmt.num(Math.round(mds)) : '—');
   setEl(`kpi-cost-${phaseKey}`,       costSAR > 0 ? fmt.money(Math.round(costSAR)) : '—');
@@ -937,10 +959,17 @@ async function profRecomputeAll(phaseKey) {
     const revToDate         = totalRevSAR * (completionPct / 100);
     const profitAtComp      = totalRevSAR - estAtCompletion;
     const profitAtCompPct   = totalRevSAR > 0 ? profitAtComp / totalRevSAR * 100 : 0;
-    // Planned Profit = from Final Budget (updates when budget changes)
-    const plannedProfitFinal = plannedProfitSAR;
-    const profVar            = profitAtComp - plannedProfitFinal;
-    const profVarPct         = totalRevSAR > 0 ? profVar / totalRevSAR * 100 : 0;
+
+    // Planned Profit - from Final Budget, per-month history
+    // Use month-specific override if budget changed that month, else use latest
+    const monthPlannedPct = (AppState._plannedProfitHistory?.[phaseKey]?.[monthKey]) 
+      ?? (AppState._finalProfitPct?.[phaseKey] ?? (totalRevSAR > 0 ? (totalRevSAR - totalEstCostSAR) / totalRevSAR : 0));
+    const plannedProfitMonthSAR = monthPlannedPct * totalRevSAR;
+
+    // Profitability Variance = Profit at Completion - Planned Profit SAR
+    const profVar    = profitAtComp - plannedProfitMonthSAR;
+    // Profitability Variance % = Profit at Comp % - Planned Profit %
+    const profVarPct = profitAtCompPct - (monthPlannedPct * 100);
     // Progress % = Current Cost / EAC Cost
     const progressPct        = estAtCompletion > 0 ? currentCostSAR / estAtCompletion * 100 : 0;
 
@@ -981,7 +1010,8 @@ async function profRecomputeAll(phaseKey) {
 
     const profColor2 = profitAtComp > 0 ? 'var(--green)' : 'var(--red)';
     setSpan(`pc-profit-comp-${monthKey}`,   `<b style="color:${profColor2};">${fSAR(profitAtComp)}</b>`);
-    setSpan(`pc-planned-profit-${monthKey}`, fSAR(plannedProfitFinal));
+    setSpan(`pc-planned-profit-${monthKey}`, 
+      `${fSAR(plannedProfitMonthSAR)} <span style="font-size:10px;color:var(--text-muted);">(${fmt.decimal(monthPlannedPct*100)}%)</span>`);
     setSpan(`pc-profit-pct-${monthKey}`,    `<b style="color:${profColor2};">${fmt.decimal(profitAtCompPct)}%</b>`);
 
     const pvColor = profVar >= 0 ? 'var(--green)' : 'var(--red)';
