@@ -304,10 +304,13 @@ async function loadOverviewKPIs() {
     if (pEl) pEl.textContent = [d.roadmap_start, d.roadmap_end].filter(Boolean).join(' → ')
       + (d.duration_months ? ` (${d.duration_months} months)` : '');
 
-    // Revenue
+    // Revenue (Odoo project value)
     const revEl = document.getElementById('kpiRevenue');
     if (revEl) revEl.textContent = d.project_value_sar
       ? fmt.money(Math.round(d.project_value_sar)) : '—';
+
+    // Phase revenues from Final Budget (async, non-blocking)
+    _loadPhaseRevenues();
 
     // Phase progress + remaining MDs
     // development
@@ -331,13 +334,18 @@ async function loadOverviewKPIs() {
   AppState._teamActiveTab = 'development';
   _loadTeamKPI('development');
 
-  // Wire team modal button (from old modal)
-  const card = document.getElementById('kpiTeamMembersCard');
-  if (card && !card.dataset.wired) {
-    card.dataset.wired = '1';
-    card.addEventListener('click', openTeamModal);
+  // Wire team modal close (once)
+  if (!window._teamModalWired) {
+    window._teamModalWired = true;
     document.getElementById('teamModalClose')?.addEventListener('click', closeTeamModal);
     document.getElementById('teamModalOverlay')?.addEventListener('click', closeTeamModal);
+    // ESC key
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') {
+        const m = document.getElementById('teamModal');
+        if (m && m.style.display !== 'none') closeTeamModal();
+      }
+    });
   }
 }
 
@@ -352,6 +360,19 @@ window.switchTeamTab = function(phase) {
   if (conBtn) conBtn.style.cssText = conBtn.style.cssText.replace(/background[^;]+;color[^;]+;/, '') + (phase==='consultation'?navy:idle);
   _loadTeamKPI(phase);
 };
+
+async function _loadPhaseRevenues() {
+  try {
+    const res = await fetch('/api/overview/financials');
+    if (!res.ok) return;
+    const d = await res.json();
+    const fSAR = v => v ? fmt.money(Math.round(v)) : '—';
+    const set  = (id, v) => { const el=document.getElementById(id); if(el) el.textContent=v; };
+    set('kpiConRev', fSAR(d.consultation));
+    set('kpiDevRev', fSAR(d.development));
+    set('kpiSupRev', fSAR(d.support));
+  } catch(e) { console.warn('Phase revenue error:', e); }
+}
 
 async function _loadTeamKPI(phase) {
   const listEl  = document.getElementById('kpiTeamList');
