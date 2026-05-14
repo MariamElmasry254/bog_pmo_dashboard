@@ -616,6 +616,29 @@ def api_global_travel_get():
     return jsonify({'records': records, 'total': len(records)})
 
 
+@app.route('/api/global/travel', methods=['POST'])
+def api_global_travel_add():
+    _seed_if_empty('travel', TRAVEL_SEED)
+    records = _global_get('travel') or []
+    body = request.json or {}
+    name  = (body.get('name') or '').strip()
+    start = (body.get('start_date') or '').strip()
+    if not name or not start:
+        return jsonify({'error': 'name and start_date required'}), 400
+    for r in records:
+        if r.get('name','').lower()==name.lower() and r.get('start_date')==start:
+            return jsonify({'error': 'duplicate', 'existing': r}), 409
+    rec = {'id': _next_id(records), 'name': name,
+        'position': (body.get('position') or '').strip(),
+        'start_date': start, 'end_date': (body.get('end_date') or '').strip(),
+        'notes': (body.get('notes') or '').strip(), 'status': body.get('status','confirmed'),
+        'odoo_employee_id': body.get('odoo_employee_id'),
+        'odoo_employee_code': body.get('odoo_employee_code'),
+        'odoo_employee_name': body.get('odoo_employee_name')}
+    records.append(rec); _global_set('travel', records)
+    return jsonify({'ok': True, 'record': rec})
+
+
 @app.route('/api/global/travel/<int:rec_id>', methods=['PUT'])
 def api_global_travel_update(rec_id):
     records = _global_get('travel') or []
@@ -626,6 +649,15 @@ def api_global_travel_update(rec_id):
             _global_set('travel', records)
             return jsonify({'ok': True, 'record': records[i]})
     return jsonify({'error': 'not found'}), 404
+
+
+@app.route('/api/global/travel/<int:rec_id>', methods=['DELETE'])
+def api_global_travel_delete(rec_id):
+    records = _global_get('travel') or []
+    new = [r for r in records if r.get('id') != rec_id]
+    if len(new) == len(records): return jsonify({'error': 'not found'}), 404
+    _global_set('travel', new)
+    return jsonify({'ok': True})
 
 
 @app.route('/api/global/travel/import', methods=['POST'])
@@ -672,6 +704,27 @@ def api_global_promos_get():
     return jsonify({'records': records, 'total': len(records)})
 
 
+@app.route('/api/global/promotions', methods=['POST'])
+def api_global_promos_add():
+    _seed_if_empty('promotions', PROMO_SEED)
+    records = _global_get('promotions') or []
+    body = request.json or {}
+    name = (body.get('name') or '').strip()
+    year = body.get('year') or ''
+    if not name: return jsonify({'error': 'name required'}), 400
+    for r in records:
+        if r.get('name','').lower()==name.lower() and str(r.get('year',''))==str(year):
+            return jsonify({'error': 'duplicate', 'existing': r}), 409
+    rec = {'id': _next_id(records), 'name': name,
+        'new_title': (body.get('new_title') or '').strip(),
+        'effective_date': (body.get('effective_date') or '').strip(),
+        'year': int(year) if year else None, 'notes': (body.get('notes') or '').strip(),
+        'odoo_employee_id': body.get('odoo_employee_id'),
+        'odoo_employee_code': body.get('odoo_employee_code')}
+    records.append(rec); _global_set('promotions', records)
+    return jsonify({'ok': True, 'record': rec})
+
+
 @app.route('/api/global/promotions/<int:rec_id>', methods=['PUT'])
 def api_global_promos_update(rec_id):
     records = _global_get('promotions') or []
@@ -682,6 +735,15 @@ def api_global_promos_update(rec_id):
             _global_set('promotions', records)
             return jsonify({'ok': True, 'record': records[i]})
     return jsonify({'error': 'not found'}), 404
+
+
+@app.route('/api/global/promotions/<int:rec_id>', methods=['DELETE'])
+def api_global_promos_delete(rec_id):
+    records = _global_get('promotions') or []
+    new = [r for r in records if r.get('id') != rec_id]
+    if len(new) == len(records): return jsonify({'error': 'not found'}), 404
+    _global_set('promotions', new)
+    return jsonify({'ok': True})
 
 
 @app.route('/api/global/promotions/import', methods=['POST'])
