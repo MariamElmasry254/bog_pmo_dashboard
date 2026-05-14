@@ -610,33 +610,6 @@ def api_global_travel_get():
     return jsonify({'records': records, 'total': len(records)})
 
 
-@app.route('/api/global/travel', methods=['POST'])
-def api_global_travel_add():
-    _seed_if_empty('travel', TRAVEL_SEED)
-    records = _global_get('travel') or []
-    body = request.json or {}
-    name  = (body.get('name') or '').strip()
-    start = (body.get('start_date') or '').strip()
-    if not name or not start:
-        return jsonify({'error': 'name and start_date required'}), 400
-    # Dedup: same person + same start
-    for r in records:
-        if r.get('name','').lower() == name.lower() and r.get('start_date') == start:
-            return jsonify({'error': 'duplicate', 'existing': r}), 409
-    new_rec = {
-        'id': _next_id(records),
-        'name':       name,
-        'position':   (body.get('position') or '').strip(),
-        'start_date': start,
-        'end_date':   (body.get('end_date') or '').strip(),
-        'notes':      (body.get('notes') or '').strip(),
-        'status':     body.get('status', 'confirmed'),
-    }
-    records.append(new_rec)
-    _global_set('travel', records)
-    return jsonify({'ok': True, 'record': new_rec})
-
-
 @app.route('/api/global/travel/<int:rec_id>', methods=['PUT'])
 def api_global_travel_update(rec_id):
     records = _global_get('travel') or []
@@ -647,16 +620,6 @@ def api_global_travel_update(rec_id):
             _global_set('travel', records)
             return jsonify({'ok': True, 'record': records[i]})
     return jsonify({'error': 'not found'}), 404
-
-
-@app.route('/api/global/travel/<int:rec_id>', methods=['DELETE'])
-def api_global_travel_delete(rec_id):
-    records = _global_get('travel') or []
-    new = [r for r in records if r.get('id') != rec_id]
-    if len(new) == len(records):
-        return jsonify({'error': 'not found'}), 404
-    _global_set('travel', new)
-    return jsonify({'ok': True})
 
 
 @app.route('/api/global/travel/import', methods=['POST'])
@@ -703,33 +666,6 @@ def api_global_promos_get():
     return jsonify({'records': records, 'total': len(records)})
 
 
-@app.route('/api/global/promotions', methods=['POST'])
-def api_global_promos_add():
-    _seed_if_empty('promotions', PROMO_SEED)
-    records = _global_get('promotions') or []
-    body = request.json or {}
-    name  = (body.get('name') or '').strip()
-    title = (body.get('new_title') or '').strip()
-    if not name:
-        return jsonify({'error': 'name required'}), 400
-    year = body.get('year') or ''
-    # Dedup: same name + same year
-    for r in records:
-        if r.get('name','').lower() == name.lower() and str(r.get('year','')) == str(year):
-            return jsonify({'error': 'duplicate', 'existing': r}), 409
-    new_rec = {
-        'id': _next_id(records),
-        'name':           name,
-        'new_title':      title,
-        'effective_date': (body.get('effective_date') or '').strip(),
-        'year':           int(year) if year else None,
-        'notes':          (body.get('notes') or '').strip(),
-    }
-    records.append(new_rec)
-    _global_set('promotions', records)
-    return jsonify({'ok': True, 'record': new_rec})
-
-
 @app.route('/api/global/promotions/<int:rec_id>', methods=['PUT'])
 def api_global_promos_update(rec_id):
     records = _global_get('promotions') or []
@@ -740,16 +676,6 @@ def api_global_promos_update(rec_id):
             _global_set('promotions', records)
             return jsonify({'ok': True, 'record': records[i]})
     return jsonify({'error': 'not found'}), 404
-
-
-@app.route('/api/global/promotions/<int:rec_id>', methods=['DELETE'])
-def api_global_promos_delete(rec_id):
-    records = _global_get('promotions') or []
-    new = [r for r in records if r.get('id') != rec_id]
-    if len(new) == len(records):
-        return jsonify({'error': 'not found'}), 404
-    _global_set('promotions', new)
-    return jsonify({'ok': True})
 
 
 @app.route('/api/global/promotions/import', methods=['POST'])
@@ -2190,49 +2116,6 @@ def api_risks_list():
         -int(str(x.get('updated_at', '')).replace('-', '').replace(':', '').replace('T', '').replace('.', '')[:14] or 0)
     ))
     return jsonify({'risks': risks, 'count': len(risks)})
-
-
-@app.route('/api/risks', methods=['POST'])
-def api_risks_save():
-    """Create or update a risk/issue. Body should include id (or new uuid), and fields."""
-    body = request.json or {}
-    rid = body.get('id')
-    now_iso = datetime.now().isoformat()
-
-    if not rid:
-        # Create new
-        import uuid
-        rid = str(uuid.uuid4())[:8]
-        new_risk = {
-            'id': rid,
-            'created_at': now_iso,
-            'updated_at': now_iso,
-            'phase_group': body.get('phase_group', 'development'),
-            'type': body.get('type', 'Risk'),
-            'title': body.get('title', ''),
-            'description': body.get('description', ''),
-            'mitigation': body.get('mitigation', ''),
-            'severity': body.get('severity', 'Medium'),
-            'status': body.get('status', 'Open'),
-            'owner': body.get('owner', ''),
-            'date_identified': body.get('date_identified', date.today().isoformat()),
-            'target_date': body.get('target_date', ''),
-        }
-        db.upsert_risk(rid, new_risk)
-        return jsonify({'ok': True, 'risk': new_risk})
-
-    # Update existing - read current, merge body, upsert
-    risks = load_risks()
-    existing = next((r for r in risks if r.get('id') == rid), None)
-    if not existing:
-        return jsonify({'error': 'Risk not found'}), 404
-    for k in ['phase_group', 'type', 'title', 'description', 'mitigation',
-              'severity', 'status', 'owner', 'date_identified', 'target_date']:
-        if k in body:
-            existing[k] = body[k]
-    existing['updated_at'] = now_iso
-    db.upsert_risk(rid, existing)
-    return jsonify({'ok': True, 'risk': existing})
 
 
 @app.route('/api/risks/<rid>', methods=['DELETE'])
@@ -3979,14 +3862,6 @@ def api_positions_reseed():
     return jsonify({'ok': True, 'updated': count})
 
 
-@app.route('/api/positions/reseed', methods=['GET'])
-def api_positions_reseed_check():
-    """Preview current positions from DB."""
-    positions = get_all_positions(db)
-    return jsonify({'positions': positions, 'count': len(positions)})
-
-
-
 def api_positions_save():
     """Add or update a position. Body: { position, hour_rate, md_rate, country, is_onsite }"""
     body = request.json or {}
@@ -4604,37 +4479,6 @@ def api_plan_overrides_get():
     return jsonify(load_plan_overrides())
 
 
-@app.route('/api/plan-overrides', methods=['POST'])
-def api_plan_overrides_save():
-    body = request.json or {}
-    phase = body.get('phase')
-    month_key = body.get('month_key')
-    field = body.get('field')  # 'completion' or 'remaining'
-    value = body.get('value')
-
-    # Backward compat: 'plan_md' key
-    if 'plan_md' in body and not field:
-        field = 'plan'
-        value = body.get('plan_md')
-
-    if not phase or not month_key or not field:
-        return jsonify({'error': 'phase, month_key, and field required'}), 400
-
-    # Convert to float
-    if value is not None and value != '':
-        try:
-            value = float(value)
-        except (ValueError, TypeError):
-            return jsonify({'error': 'value must be numeric'}), 400
-    else:
-        value = None
-
-    # Write to DB directly
-    db.set_override('plan', phase, f"{month_key}.{field}", value)
-
-    return jsonify({'ok': True})
-
-
 @app.route('/api/position-overrides', methods=['POST'])
 def api_position_overrides_save():
     """Manual position override for an employee (when Odoo doesn't have it)"""
@@ -5183,27 +5027,6 @@ def api_promotions_list():
     return jsonify({'records': load_promotions()})
 
 
-@app.route('/api/promotions', methods=['POST'])
-def api_promotions_add():
-    body = request.json or {}
-    records = load_promotions()
-    existing_ids = [int(r.get('id', 0)) for r in records if str(r.get('id', '')).isdigit()]
-    new_id = max(existing_ids, default=0) + 1
-    record = {
-        'id': new_id,
-        'name': body.get('name', '').strip(),
-        'old_position': body.get('old_position', '').strip(),
-        'new_position': body.get('new_position', '').strip(),
-        'promotion_date': body.get('promotion_date', ''),
-        'notes': body.get('notes', '').strip(),
-        'created_at': datetime.now().isoformat(),
-    }
-    if not record['name'] or not record['promotion_date']:
-        return jsonify({'error': 'name and promotion_date required'}), 400
-    db.set_override('promotions', '', str(new_id), record)
-    return jsonify({'ok': True, 'record': record})
-
-
 @app.route('/api/promotions/<int:rec_id>', methods=['PUT'])
 def api_promotions_update(rec_id):
     body = request.json or {}
@@ -5217,12 +5040,6 @@ def api_promotions_update(rec_id):
             db.set_override('promotions', '', str(rec_id), r)
             return jsonify({'ok': True, 'record': r})
     return jsonify({'error': 'not found'}), 404
-
-
-@app.route('/api/promotions/<int:rec_id>', methods=['DELETE'])
-def api_promotions_delete(rec_id):
-    db.set_override('promotions', '', str(rec_id), None)
-    return jsonify({'ok': True})
 
 
 @app.route('/api/promotions/employee-odoo-position')
@@ -5263,19 +5080,6 @@ def api_budget_changes_get():
                     'planned_profit_history': history if isinstance(history, dict) else {}})
 
 
-@app.route('/api/budget-changes', methods=['POST'])
-def api_budget_changes_save():
-    body = request.json or {}
-    phase = body.get('phase', 'development')
-    changes = body.get('changes', [])
-    proj_set_override('budget_changes', '', phase, changes)
-    # Save planned profit history if provided
-    history = body.get('planned_profit_history')
-    if history is not None:
-        db.set_override('planned_profit_history', '', phase, history)
-    return jsonify({'ok': True})
-
-
 @app.route('/api/estimated-rows', methods=['GET'])
 def api_estimated_rows_get():
     """Get saved estimated cost rows for a phase."""
@@ -5286,16 +5090,6 @@ def api_estimated_rows_get():
         try: rows = _json.loads(rows)
         except: rows = []
     return jsonify({'phase': phase, 'rows': rows if isinstance(rows, list) else []})
-
-
-@app.route('/api/estimated-rows', methods=['POST'])
-def api_estimated_rows_save():
-    """Save estimated cost rows for a phase."""
-    body = request.json or {}
-    phase = body.get('phase', 'development')
-    rows = body.get('rows', [])
-    proj_set_override('estimated_rows', '', phase, rows)
-    return jsonify({'ok': True, 'phase': phase, 'count': len(rows)})
 
 
 def _categorize_invoice_line_by_desc(desc_name):
@@ -5671,25 +5465,6 @@ def api_travel_list():
                 r['days_onsite'] = 0
     return jsonify({'records': records, 'today': today_str})
 
-@app.route('/api/travel', methods=['POST'])
-def api_travel_add():
-    body = request.json or {}
-    records = load_travel()
-    new_id = max([int(r.get('id', 0)) for r in records if str(r.get('id', '')).isdigit()], default=0) + 1
-    record = {
-        'id': new_id,
-        'name': body.get('name', '').strip(),
-        'position': body.get('position', '').strip(),
-        'start_date': body.get('start_date'),
-        'end_date': body.get('end_date') or None,
-        'notes': body.get('notes', ''),
-        'created_at': datetime.now().isoformat(),
-    }
-    if not record['name'] or not record['start_date']:
-        return jsonify({'error': 'name and start_date required'}), 400
-    db.upsert_travel(str(new_id), record)
-    return jsonify({'ok': True, 'record': record})
-
 @app.route('/api/travel/<int:rec_id>', methods=['PUT'])
 def api_travel_update(rec_id):
     body = request.json or {}
@@ -5702,12 +5477,6 @@ def api_travel_update(rec_id):
             db.upsert_travel(str(rec_id), r)
             return jsonify({'ok': True, 'record': r})
     return jsonify({'error': 'not found'}), 404
-
-@app.route('/api/travel/<int:rec_id>', methods=['DELETE'])
-def api_travel_delete(rec_id):
-    db.delete_travel(str(rec_id))
-    return jsonify({'ok': True})
-
 
 @app.route('/health')
 def health():
