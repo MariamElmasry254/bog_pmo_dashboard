@@ -3409,20 +3409,46 @@ def _names_match(a, b):
     return False
 
 
+def _extract_emp_code(name):
+    """Extract employee code like E259, R210, T123 from name string."""
+    import re as _rec
+    m = _rec.search(r'\[([ERT]\d+)\]', name or '')
+    return m.group(1).upper() if m else None
+
+
 def get_travel_periods_for_employee(name, odoo_employee_id=None):
-    """Returns list of (start_date, end_date_or_None) tuples for an employee's travel periods.
-    Matches by odoo_employee_id first (exact), then fuzzy name match.
+    """Returns list of (start_date, end_date_or_None) tuples.
+    Match priority:
+      1. Odoo employee ID (most reliable — set by auto-link or manual link)
+      2. Employee code match (E259 in name vs odoo_employee_code in travel record)
+      3. Fuzzy name match (fallback)
     """
     records = load_travel()
     periods = []
+    emp_code = _extract_emp_code(name)  # extract from "[E259] Sara Samir"
+
     for r in records:
         matched = False
-        # 1. Exact Odoo ID match (most reliable)
+
+        # 1. Odoo ID match
         if odoo_employee_id and r.get('odoo_employee_id'):
-            matched = int(r['odoo_employee_id']) == int(odoo_employee_id)
-        # 2. Fuzzy name match
+            try:
+                matched = int(r['odoo_employee_id']) == int(odoo_employee_id)
+            except (ValueError, TypeError):
+                pass
+
+        # 2. Employee code match (E259 == E259)
+        if not matched and emp_code and r.get('odoo_employee_code'):
+            matched = emp_code.upper() == str(r['odoo_employee_code']).upper().strip()
+
+        # 3. Fuzzy name match
         if not matched:
-            matched = _names_match(r.get('name',''), name)
+            # Strip [E259] prefix from timesheet name before comparing
+            clean_name = _names_match.__code__ and name  # just use name
+            import re as _re4
+            clean_name = _re4.sub(r'\[[ERT]\d+\]\s*', '', name or '').strip()
+            matched = _names_match(r.get('name', ''), clean_name)
+
         if matched:
             periods.append((r.get('start_date'), r.get('end_date')))
     return periods
@@ -4481,22 +4507,42 @@ def api_effort_all_months(phase_key):
         odoo_pos = odoo_info.get('position')
         sar_rate = odoo_info.get('sar_rate', 0)
 
-        # ── Travel periods ──
+        # ── Travel periods (match by Odoo ID, code, or name) ──
         emp_travel_periods = []
+        en_clean = _re_effort.sub(r'\[[A-Z]\d+\s*\]\s*', '', emp_name).strip().lower()
+        # Get Odoo employee ID from timesheet data
+        _emp_odoo_id = emp_odoo_ids.get(emp_name) if 'emp_odoo_ids' in dir() else None
         for tr in travel_records:
             if not tr.get('name') or not tr.get('start_date'):
                 continue
-            tn = tr['name'].strip().lower()
-            en_clean = _re_effort.sub(r'\[[A-Z]\d+\s*\]\s*', '', emp_name).strip().lower()
-            if tn == en_clean or tn in en_clean or en_clean in tn:
+            matched_tr = False
+            # 1. Odoo ID match
+            if _emp_odoo_id and tr.get('odoo_employee_id'):
+                try:
+                    matched_tr = int(tr['odoo_employee_id']) == int(_emp_odoo_id)
+                except: pass
+            # 2. Employee code match (emp_code = E259 from "[E259] Sara Samir")
+            if not matched_tr and emp_code and tr.get('odoo_employee_code'):
+                matched_tr = emp_code.upper() == str(tr['odoo_employee_code']).upper().strip()
+            # 3. Name match
+            if not matched_tr:
+                tn = tr['name'].strip().lower()
+                matched_tr = (tn == en_clean or tn in en_clean or en_clean in tn)
+            if matched_tr:
                 emp_travel_periods.append({'start': tr['start_date'], 'end': tr.get('end_date')})
 
-        # ── Promotion records ──
+        # ── Promotion records (match by code or name) ──
         emp_promos = []
         for pr in all_promotions:
-            pn = (pr.get('name') or '').strip().lower()
-            en_clean2 = _re_effort.sub(r'\[[A-Z]\d+\s*\]\s*', '', emp_name).strip().lower()
-            if pn == en_clean2 or pn in en_clean2 or en_clean2 in pn:
+            matched_pr = False
+            # Code match
+            if emp_code and pr.get('odoo_employee_code'):
+                matched_pr = emp_code.upper() == str(pr['odoo_employee_code']).upper().strip()
+            # Name match
+            if not matched_pr:
+                pn = (pr.get('name') or '').strip().lower()
+                matched_pr = (pn == en_clean or pn in en_clean or en_clean in pn)
+            if matched_pr:
                 emp_promos.append(pr)
         emp_promos.sort(key=lambda x: x.get('promotion_date', ''))
 
