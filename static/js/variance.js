@@ -1898,7 +1898,7 @@ async function renderPromotionsSubTab() {
     </div>`;
 }
 
-async function promoFetchOdooPosition() { {
+async function promoFetchOdooPosition() {
   const name = document.getElementById('promoName')?.value?.trim();
   const hint = document.getElementById('promoOdooHint');
   if (!name || name.length < 3) { if (hint) hint.textContent = ''; return; }
@@ -1974,4 +1974,5 @@ async function deletePromo(id) {
   if (!confirm('Delete this promotion record?')) return;
   await fetch(`/api/promotions/${id}`, { method: 'DELETE' });
   renderPromotionsSubTab();
+}
 }
