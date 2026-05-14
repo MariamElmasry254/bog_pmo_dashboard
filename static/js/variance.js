@@ -1883,8 +1883,14 @@ async function renderTravelSubTab() {
 }
 
 async function loadTravelRecords() {
-  const res = await fetch('/api/travel');
-  const d = await res.json();
+  let d = { records: [] };
+  try {
+    const res = await fetch('/api/travel');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    d = await res.json();
+  } catch(e) {
+    console.error('Travel API error:', e);
+  }
   const tbody = document.querySelector('#travelTable tbody');
   if (!d.records || !d.records.length) {
     tbody.innerHTML = '<tr><td colspan="8" class="loading">No travel records yet — add one above</td></tr>';
