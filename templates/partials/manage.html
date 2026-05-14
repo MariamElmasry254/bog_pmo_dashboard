@@ -342,6 +342,12 @@
 </div>
 
 <script>
+function odooStatus(r) {
+  if (r.odoo_employee_id) {
+    return '<span style="font-size:10px;color:#1E40AF;font-weight:500;">&nbsp;· #' + r.odoo_employee_id + '</span>';
+  }
+  return '<span style="font-size:10px;color:#9CA3AF;">&nbsp;· <a href="#" onclick="openOdooLink(' + r.id + ',\'' + r.name.replace(/\'/g, "\\'" ) + '\')" style="color:#9CA3AF;font-size:10px;">unlinked</a></span>';
+}
 let activeTab = 'travel';
 
 function switchTab(tab) {
