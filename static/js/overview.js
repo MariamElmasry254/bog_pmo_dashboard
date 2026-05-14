@@ -292,14 +292,7 @@ async function loadOverviewKPIs() {
     // Header
     set('headerPM',    d.project_manager || '—');
     set('headerCoord', d.coordinator     || '—');
-    const sub = document.getElementById('headerSubtitle');
-    if (sub) {
-      const parts = [];
-      if (d.roadmap_start) parts.push(d.roadmap_start);
-      if (d.roadmap_end)   parts.push('→ ' + d.roadmap_end);
-      if (d.duration_months) parts.push(`(${d.duration_months} months)`);
-      sub.textContent = parts.join(' ');
-    }
+    // headerSubtitle removed — period shown in overview section only
     const pEl = document.getElementById('ovPeriod');
     if (pEl) pEl.textContent = [d.roadmap_start, d.roadmap_end].filter(Boolean).join(' → ')
       + (d.duration_months ? ` (${d.duration_months} months)` : '');
@@ -331,8 +324,8 @@ async function loadOverviewKPIs() {
   _loadPhaseCostKPIs();
 
   // ── 3. Team members (from effort API, split by phase) ─────────────
-  AppState._teamActiveTab = 'development';
-  _loadTeamKPI('development');
+  // Load team count from effort API
+  _loadTeamCount();
 
   // Wire team modal close (once)
   if (!window._teamModalWired) {
@@ -366,7 +359,7 @@ async function _loadPhaseRevenues() {
     const res = await fetch('/api/overview/financials');
     if (!res.ok) return;
     const d = await res.json();
-    const fSAR = v => v ? fmt.money(Math.round(v)) : '—';
+    const fSAR = v => (v && v > 0) ? fmt.money(Math.round(v)) : '—';
     const set  = (id, v) => { const el=document.getElementById(id); if(el) el.textContent=v; };
     set('kpiConRev', fSAR(d.consultation));
     set('kpiDevRev', fSAR(d.development));
@@ -374,7 +367,7 @@ async function _loadPhaseRevenues() {
   } catch(e) { console.warn('Phase revenue error:', e); }
 }
 
-async function _loadTeamKPI(phase) {
+async function _loadTeamKPI_unused(phase) {
   const listEl  = document.getElementById('kpiTeamList');
   const countEl = document.getElementById('kpiTeamCount');
   if (!listEl) return;
@@ -444,6 +437,37 @@ async function _loadTeamKPI(phase) {
   }
 }
 
+async function _loadTeamCount() {
+  // Quick count from effort API dev + con combined, deduplicated
+  try {
+    const phases = ['development','consultation'];
+    const names = new Set();
+    for (const phase of phases) {
+      let emps = AppState._effortEmployees?.[phase];
+      if (!emps) {
+        const res = await fetch(`/api/effort/${phase}/all-months`);
+        const d = await res.json();
+        if (!AppState._effortEmployees) AppState._effortEmployees = {};
+        AppState._effortEmployees[phase] = d.employees || [];
+        emps = AppState._effortEmployees[phase];
+        if (!AppState._effortMonths)     AppState._effortMonths     = {};
+        if (!AppState._effortMonthCosts) AppState._effortMonthCosts = {};
+        if (!AppState._effortMonthMDs)   AppState._effortMonthMDs   = {};
+        AppState._effortMonths[phase]     = d.months         || [];
+        AppState._effortMonthCosts[phase] = d.month_cost_usd || {};
+        AppState._effortMonthMDs[phase]   = d.month_mds      || {};
+      }
+      const isArabic = s => /[\u0600-\u06FF]/.test(s||'');
+      emps.filter(e => {
+        const n=(e.name||'').trim();
+        return n && !isArabic(n) && !/\bamr\b/i.test(n) && !e.is_onsite_row && !e.onsite;
+      }).forEach(e => names.add(e.name));
+    }
+    const countEl = document.getElementById('kpiTeamCount');
+    if (countEl) countEl.textContent = names.size || '—';
+  } catch(e) { console.warn('Team count error:', e); }
+}
+
 async function _loadPhaseCostKPIs() {
   const fSAR = v => fmt.money(Math.round(v));
   const set   = (id, v) => { const el=document.getElementById(id); if(el) el.textContent=v||'—'; };
@@ -486,8 +510,8 @@ async function _loadPhaseCostKPIs() {
 
       const pre = phase === 'development' ? 'Dev' : 'Con';
       set(`kpi${pre}Cost`,   fSAR(cumCostSAR));
-      set(`kpi${pre}EAC`,    fSAR(eacCostSAR));
-      set(`kpi${pre}EACmds`, eacMDs > 0 ? `${fmt.decimal(eacMDs)} MDs remaining` : 'EAC = Current Cost');
+      set(`kpi${pre}EAC`, fSAR(eacCostSAR));
+      // EACmds not shown in EAC card (shown in progress cards)
     } catch(e) {
       console.warn(`Phase cost KPI (${phase}):`, e);
     }
@@ -502,14 +526,32 @@ async function _loadPhaseCostKPIs() {
 
 
 async function openTeamModal() {
-  document.getElementById('teamModal').style.display = 'flex';
+  const modal = document.getElementById('teamModal');
+  modal.style.display = 'flex';
   const body = document.getElementById('teamModalBody');
-  body.innerHTML = '<div class="loading">Loading team members from Google Sheet…</div>';
+
+  // Build 2-tab layout inside modal
+  body.innerHTML = `
+    <div style="display:flex;border-bottom:1px solid var(--border);margin:-20px -24px 16px;padding:0 24px;">
+      <button id="modalTabDev" onclick="switchModalTeamTab('development')"
+        style="padding:10px 20px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
+               border:none;border-bottom:2px solid var(--navy);color:var(--navy);background:none;cursor:pointer;">
+        Development
+      </button>
+      <button id="modalTabCon" onclick="switchModalTeamTab('consultation')"
+        style="padding:10px 20px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
+               border:none;border-bottom:2px solid transparent;color:var(--text-muted);background:none;cursor:pointer;">
+        Consultation
+      </button>
+    </div>
+    <div id="modalTeamContent"><div class="loading">Loading…</div></div>`;
+
+  window._modalTeamActiveTab = 'development';
+  _loadModalTeamTab('development');
 
   try {
     const res = await fetch('/api/team/members');
     const d = await res.json();
-
     document.getElementById('teamSheetLink').href = d.sheet_url || '#';
 
     if (!d.success) {
@@ -639,6 +681,66 @@ async function openTeamModal() {
   } catch (e) {
     body.innerHTML = `<div class="banner banner-warn"><strong>Error:</strong> ${e.message}</div>`;
   }
+}
+
+window.switchModalTeamTab = function(phase) {
+  window._modalTeamActiveTab = phase;
+  ['development','consultation'].forEach(p => {
+    const btn = document.getElementById(p==='development'?'modalTabDev':'modalTabCon');
+    if (btn) {
+      btn.style.borderBottomColor = p===phase ? 'var(--navy)' : 'transparent';
+      btn.style.color = p===phase ? 'var(--navy)' : 'var(--text-muted)';
+    }
+  });
+  _loadModalTeamTab(phase);
+};
+
+async function _loadModalTeamTab(phase) {
+  const cont = document.getElementById('modalTeamContent');
+  if (!cont) return;
+  cont.innerHTML = '<div class="loading">Loading…</div>';
+  try {
+    let employees = AppState._effortEmployees?.[phase];
+    if (!employees) {
+      const res = await fetch(`/api/effort/${phase}/all-months`);
+      const d   = await res.json();
+      if (!AppState._effortEmployees) AppState._effortEmployees = {};
+      AppState._effortEmployees[phase] = d.employees || [];
+      employees = AppState._effortEmployees[phase];
+      if (!AppState._effortMonths)     AppState._effortMonths     = {};
+      if (!AppState._effortMonthCosts) AppState._effortMonthCosts = {};
+      if (!AppState._effortMonthMDs)   AppState._effortMonthMDs   = {};
+      AppState._effortMonths[phase]     = d.months          || [];
+      AppState._effortMonthCosts[phase] = d.month_cost_usd  || {};
+      AppState._effortMonthMDs[phase]   = d.month_mds       || {};
+    }
+    const isArabic = s => /[\u0600-\u06FF]/.test(s||'');
+    const team = employees.filter(e => {
+      const n = (e.name||'').trim();
+      if (!n || isArabic(n) || /\bamr\b/i.test(n)) return false;
+      if (e.is_onsite_row || e.onsite) return false;
+      return true;
+    });
+    if (!team.length) { cont.innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:8px 0;">No members found for this phase.</p>'; return; }
+    cont.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;">
+      ${team.map(e => {
+        const pos = (e.position||'').replace(/^(KSA|EGY|TUN)\s*-\s*/i,'').replace(/ - onsite$/i,'');
+        const country = ((e.position||'').match(/^(KSA|EGY|TUN)/i)||[])[1]||'';
+        const cc = {'KSA':'var(--amber)','EGY':'var(--blue)','TUN':'var(--green)'}[country.toUpperCase()]||'var(--text-muted)';
+        return `<div style="display:flex;align-items:center;gap:8px;padding:8px;background:var(--bg-subtle);border-radius:6px;">
+          <div style="width:32px;height:32px;border-radius:50%;background:var(--navy);color:white;
+                      display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0;">
+            ${(e.name||'?').charAt(0).toUpperCase()}
+          </div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${e.name}</div>
+            <div style="font-size:10px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${pos}</div>
+          </div>
+          ${country?`<span style="font-size:9px;font-weight:700;color:${cc};background:${cc}18;padding:2px 6px;border-radius:8px;flex-shrink:0;">${country}</span>`:''}
+        </div>`;
+      }).join('')}
+    </div>`;
+  } catch(e) { cont.innerHTML = '<p style="color:var(--red);">Error loading team.</p>'; }
 }
 
 function closeTeamModal() {
