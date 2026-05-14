@@ -519,7 +519,7 @@ def login():
         error = 'Invalid credentials'
         if request.is_json:
             return jsonify({'ok': False, 'error': error}), 401
-    return render_template('login.html', error=error)
+    return render_template('partials/login.html', error=error)
 
 
 @app.route('/logout')
@@ -545,8 +545,6 @@ def projects_list():
     # Try both locations
     import os
     tmpl_dir = app.template_folder
-    if os.path.exists(os.path.join(tmpl_dir, 'projects.html')):
-        return render_template('projects.html')
     return render_template('partials/projects.html')
 
 
