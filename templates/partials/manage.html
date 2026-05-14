@@ -401,15 +401,18 @@ async function loadTravel() {
 
 function codeTag(r, type) {
   type = type || 'travel';
-  // ONLY show employee code (E259/R210/T123) — never show #id
-  // Only show valid employee codes (E/R/T format)
   const raw_code = (r.odoo_employee_code || '').trim().toUpperCase();
   const code = /^[ERT]\d+$/.test(raw_code) ? raw_code : null;
   if (code) {
+    // Has valid E/R/T code
     return '<span class="code-badge">' + code + '</span>';
   }
-  // No code yet — show clickable "unlinked" to open link modal
-  return '<a href="#" onclick="openLinkById(' + r.id + ',\'' + type + '\')" style="font-size:10px;color:#9CA3AF;margin-left:3px;text-decoration:underline;">unlinked</a>';
+  if (r.odoo_employee_id) {
+    // Linked to Odoo (has ID) but no code yet - show green linked badge
+    return '<span style="font-size:10px;background:#D1FAE5;color:#065F46;padding:1px 6px;border-radius:4px;margin-left:3px;cursor:pointer;" onclick="openLinkById('+r.id+',\''+type+'\')" title="Linked · click to update code">✓ linked</span>';
+  }
+  // Not linked
+  return '<a href="#" onclick="openLinkById('+r.id+',\''+type+'\')" style="font-size:10px;color:#9CA3AF;margin-left:3px;">unlinked</a>';
 }
 
 function esc(s) {
