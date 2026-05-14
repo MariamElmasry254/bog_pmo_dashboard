@@ -281,43 +281,74 @@ function tagPhaseLabel(phases, total) {
 }
 
 async function loadOverviewKPIs() {
+  // ── 1. Main overview API (Roadmap + Odoo project) ──
   try {
     const res = await fetch('/api/overview');
     const d = await res.json();
-    document.getElementById('ovPeriod').textContent =
-      `${d.roadmap_start} → ${d.roadmap_end}` + (d.duration_months ? ` (${d.duration_months} months)` : '');
-    document.getElementById('kpiServices').textContent = d.total_services || 0;
-    document.getElementById('kpiMandays').textContent = fmt.num(d.total_mandays || 0);
-    document.getElementById('kpiProgress').textContent = d.progress_pct || 0;
-    const remainingText = d.remaining_mds !== undefined
+
+    // Header: PM + Coordinator + subtitle
+    const set = (id, v) => { const el=document.getElementById(id); if(el && v) el.textContent=v; };
+    set('headerPM',    d.project_manager || '—');
+    set('headerCoord', d.coordinator     || '—');
+    const sub = document.getElementById('headerSubtitle');
+    if (sub) {
+      const parts = [];
+      if (d.roadmap_start) parts.push(d.roadmap_start);
+      if (d.roadmap_end)   parts.push('→ ' + d.roadmap_end);
+      if (d.duration_months) parts.push(`(${d.duration_months} months)`);
+      sub.textContent = parts.join(' ');
+    }
+
+    // Period tag
+    const periodEl = document.getElementById('ovPeriod');
+    if (periodEl) {
+      periodEl.textContent = [d.roadmap_start, d.roadmap_end].filter(Boolean).join(' → ')
+        + (d.duration_months ? ` (${d.duration_months} months)` : '');
+    }
+
+    // Row 1 KPIs
+    const revEl = document.getElementById('kpiRevenue');
+    if (revEl) revEl.textContent = d.project_value_sar
+      ? fmt.money(Math.round(d.project_value_sar))
+      : '—';
+    set('kpiMandays', fmt.num(d.total_mandays || 0));
+    set('kpiProgress', d.progress_pct || '—');
+    set('kpiDays', d.remaining_mds !== undefined
       ? `${fmt.num(d.remaining_mds || 0)} MDs remaining · from Variance`
-      : `${d.days_elapsed || 0} days elapsed · ${d.days_remaining || 0} days remaining`;
-    document.getElementById('kpiDays').textContent = remainingText;
+      : `${d.days_elapsed||0} days elapsed`);
+
+    // Store for phase cost row (filled after effort loads)
+    AppState._overviewData = d;
   } catch (e) {
     console.error('Overview KPIs error:', e);
   }
 
-  // Team members count from Google Sheet (active only)
+  // ── 2. Phase costs + EAC from Variance effort data ──
+  // Load effort for both phases and grab last month current cost + EAC
+  _loadPhaseCostKPIs();
+
+  // ── 3. Team members ──
   try {
     const res = await fetch('/api/team/summary');
     const d = await res.json();
     if (d.success) {
-      document.getElementById('kpiTeamMembers').textContent = d.total || 0;
+      const set = (id,v)=>{const el=document.getElementById(id);if(el)el.textContent=v;};
+      set('kpiTeamMembers', d.total || 0);
       const sub = [];
-      if (d.onsite > 0) sub.push(`${d.onsite} onsite`);
+      if (d.onsite   > 0) sub.push(`${d.onsite} onsite`);
       if (d.offshore > 0) sub.push(`${d.offshore} offshore`);
-      const subText = sub.length ? sub.join(' · ') : '';
-      document.getElementById('kpiTeamSubtext').textContent = subText;
+      set('kpiTeamSubtext', sub.join(' · ') || '');
     } else {
       document.getElementById('kpiTeamMembers').textContent = '—';
-      document.getElementById('kpiTeamSubtext').textContent = 'Sheet not accessible';
-      document.getElementById('kpiTeamSubtext').style.color = 'var(--amber)';
+      const st = document.getElementById('kpiTeamSubtext');
+      if(st){ st.textContent='Sheet not accessible'; st.style.color='var(--amber)'; }
     }
   } catch (e) {
-    document.getElementById('kpiTeamSubtext').textContent = 'Error loading';
+    const st = document.getElementById('kpiTeamSubtext');
+    if(st) st.textContent = 'Error loading';
   }
 
-  // Wire team card click
+  // ── 4. Wire team modal ──
   const card = document.getElementById('kpiTeamMembersCard');
   if (card && !card.dataset.wired) {
     card.dataset.wired = '1';
@@ -325,6 +356,78 @@ async function loadOverviewKPIs() {
     document.getElementById('teamModalClose')?.addEventListener('click', closeTeamModal);
     document.getElementById('teamModalOverlay')?.addEventListener('click', closeTeamModal);
   }
+}
+
+async function _loadPhaseCostKPIs() {
+  // Fetch effort for development + consultation, pick last month with data
+  const fSAR = v => fmt.money(Math.round(v));
+  const set   = (id, v) => { const el=document.getElementById(id); if(el) el.textContent=v||'—'; };
+
+  for (const phase of ['consultation', 'development']) {
+    try {
+      // Use cached AppState if available (loaded by Variance tab)
+      let months   = AppState._effortMonths?.[phase]     || [];
+      let mCosts   = AppState._effortMonthCosts?.[phase]  || {};
+      let mMDs     = AppState._effortMonthMDs?.[phase]    || {};
+
+      if (!months.length) {
+        const res = await fetch(`/api/effort/${phase}/all-months`);
+        const d   = await res.json();
+        months = d.months || [];
+        mCosts = d.month_cost_usd || {};
+        mMDs   = d.month_mds      || {};
+        // Cache for Variance tab
+        if (!AppState._effortMonths)     AppState._effortMonths     = {};
+        if (!AppState._effortMonthCosts) AppState._effortMonthCosts = {};
+        if (!AppState._effortMonthMDs)   AppState._effortMonthMDs   = {};
+        AppState._effortMonths[phase]     = months;
+        AppState._effortMonthCosts[phase] = mCosts;
+        AppState._effortMonthMDs[phase]   = mMDs;
+      }
+
+      // Cumulative cost SAR up to last month with data
+      let cumCostUSD = 0;
+      let lastMonthMDs = 0;
+      months.forEach(m => {
+        const c = mCosts[m.key] || 0;
+        const mds = mMDs[m.key] || 0;
+        if (c > 0 || mds > 0) {
+          cumCostUSD   += c;
+          lastMonthMDs  = mds;
+        }
+      });
+      const cumCostSAR = cumCostUSD * 3.75;
+
+      // EAC remaining MDs from plan_overrides (loaded by overview API)
+      const overviewData = AppState._overviewData || {};
+      const eacMDs = phase === 'development' ? (overviewData.dev_eac_mds || 0)
+                                              : (overviewData.con_eac_mds || 0);
+
+      // Avg cost/MD from actual effort
+      const totalMDs = Object.values(mMDs).reduce((s,v)=>s+v,0);
+      const avgCostPerMD = totalMDs > 0 ? cumCostSAR / totalMDs : 0;
+      const eacCostSAR   = cumCostSAR + eacMDs * avgCostPerMD;
+
+      const pre = phase === 'development' ? 'Dev' : 'Con';
+      set(`kpi${pre}Cost`,    fSAR(cumCostSAR));
+      set(`kpi${pre}EAC`,     fSAR(eacCostSAR));
+      set(`kpi${pre}EACmds`,  eacMDs > 0 ? `${fmt.decimal(eacMDs)} MDs remaining` : 'No remaining MDs');
+    } catch(e) {
+      console.warn(`Phase cost KPI error (${phase}):`, e);
+    }
+  }
+
+  // Total EAC = dev + consultation
+  try {
+    const devEl = document.getElementById('kpiDevEAC');
+    const conEl = document.getElementById('kpiConEAC');
+    const totEl = document.getElementById('kpiTotalEAC');
+    if (devEl && conEl && totEl) {
+      const devV = parseFloat(devEl.textContent.replace(/[^0-9.]/g,'')) || 0;
+      const conV = parseFloat(conEl.textContent.replace(/[^0-9.]/g,'')) || 0;
+      if (devV || conV) totEl.textContent = fmt.money(Math.round(devV + conV));
+    }
+  } catch(e) {}
 }
 
 async function openTeamModal() {
