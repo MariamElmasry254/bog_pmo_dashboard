@@ -173,13 +173,25 @@ function renderProjects() {
 }
 
 async function selectProject(id, name) {
-  const res = await fetch('/project/select', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ project_id: id, project_name: name })
-  });
-  const d = await res.json();
-  if (d.ok) window.location.href = d.redirect || '/';
+  // Visual feedback
+  document.querySelectorAll('.proj-card').forEach(c => c.style.opacity = '0.5');
+  try {
+    const res = await fetch('/project/select', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ project_id: id, project_name: name })
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const d = await res.json();
+    if (d.ok) {
+      window.location.href = d.redirect || '/';
+    } else {
+      alert('Error: ' + (d.error || 'Unknown'));
+    }
+  } catch(e) {
+    alert('Could not open project: ' + e.message);
+    document.querySelectorAll('.proj-card').forEach(c => c.style.opacity = '1');
+  }
 }
 
 loadProjects();
