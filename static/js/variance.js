@@ -366,8 +366,12 @@ function renderBudgetChanges(phaseKey) {
           placeholder="e.g. Third party license" value="${c.reason||''}"
           oninput="_budgetChanges['${phaseKey}'][${i}].reason=this.value; budgetSaveChanges('${phaseKey}')">
       </div>
-      <div style="min-width:90px;">
-        <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; margin-bottom:3px;">Plan / CR ID</div>
+      <div style="min-width:110px;">
+        <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; margin-bottom:3px;">Date</div>
+        <input type="date" style="width:100%; padding:5px 8px; border:1px solid var(--border-strong); border-radius:4px; font-size:12px;"
+          value="${c.change_date||''}"
+          oninput="_budgetChanges['${phaseKey}'][${i}].change_date=this.value; budgetSaveChanges('${phaseKey}')">
+      </div>
         <input type="text" style="width:100%; padding:5px 8px; border:1px solid var(--border-strong); border-radius:4px; font-size:13px;"
           placeholder="CR-001" value="${c.plan_id||''}"
           oninput="_budgetChanges['${phaseKey}'][${i}].plan_id=this.value; budgetSaveChanges('${phaseKey}')">
@@ -836,23 +840,35 @@ async function profRecomputeAll(phaseKey) {
       const d = await res.json();
       if (d.months?.length) {
         months = d.months;
-        const mMDs={}, mCosts={};
-        months.forEach(m => { mMDs[m.key]=0; mCosts[m.key]=0; });
-        (d.employees||[]).forEach(emp => {
-          months.forEach(m => {
-            const cell = emp.months?.[m.key]||{regular:0,ramadan:0,overtime:0};
-            mMDs[m.key] += (cell.regular+cell.overtime)/8 + cell.ramadan/6;
-            const hr=emp.hour_rate||0, otr=emp.overtime_rate||hr*1.5;
-            mCosts[m.key] += (cell.regular+cell.ramadan)*hr + cell.overtime*otr;
+        // Use pre-computed costs from backend (most accurate - uses real rates)
+        if (d.month_cost_usd) {
+          effortMDs   = d.month_mds   || {};
+          effortCosts = d.month_cost_usd;  // USD, multiply by 3.75 for SAR
+        } else {
+          // Fallback: compute from employees
+          const mMDs={}, mCosts={};
+          months.forEach(m => { mMDs[m.key]=0; mCosts[m.key]=0; });
+          (d.employees||[]).forEach(emp => {
+            const hr  = parseFloat(emp.hour_rate)  || 0;
+            const otr = parseFloat(emp.overtime_rate) || hr * 1.5;
+            months.forEach(m => {
+              const cell = emp.months?.[m.key]||{regular:0,ramadan:0,overtime:0};
+              mMDs[m.key] += (cell.regular + cell.overtime) / 8 + cell.ramadan / 6;
+              if (hr > 0) mCosts[m.key] += (cell.regular + cell.ramadan) * hr + cell.overtime * otr;
+              else {
+                const totalH = cell.regular + cell.ramadan + cell.overtime;
+                mCosts[m.key] += (emp.total_cost_usd||0) * (totalH / (emp.total_hours||1));
+              }
+            });
           });
-        });
-        effortMDs=mMDs; effortCosts=mCosts;
+          effortMDs=mMDs; effortCosts=mCosts;
+        }
         if (!AppState._effortMonths) AppState._effortMonths={};
         if (!AppState._effortMonthMDs) AppState._effortMonthMDs={};
         if (!AppState._effortMonthCosts) AppState._effortMonthCosts={};
         AppState._effortMonths[phaseKey]=months;
-        AppState._effortMonthMDs[phaseKey]=mMDs;
-        AppState._effortMonthCosts[phaseKey]=mCosts;
+        AppState._effortMonthMDs[phaseKey]=effortMDs;
+        AppState._effortMonthCosts[phaseKey]=effortCosts;
       }
     } catch(e) { console.warn('Effort fetch error:', e); }
   }
@@ -896,12 +912,12 @@ async function profRecomputeAll(phaseKey) {
     const completionPct = parseFloat(compInp?.value) || 0;
     const remainingMDs  = parseFloat(remInp?.value)  || 0;
 
-    // Current Cost = cumulative cost from effort
+    // Current Cost = cumulative cost from effort (SAR)
     let accCostUSD = 0;
     monthsFinal.forEach(m2 => {
       if (m2.key <= monthKey) accCostUSD += effortCostsFinal[m2.key] || 0;
     });
-    const currentCostSAR = accCostUSD * 3.75;
+    const currentCostSAR = accCostUSD * 3.75;  // effortCosts stored in USD
     // ── All equations per reference sheet ──
     const eacMDs = actualMDs + remainingMDs;
 
@@ -1160,12 +1176,18 @@ async function loadEffortLive(phaseKey, containerId) {
         const cell = emp.months?.[m.key] || { regular: 0, ramadan: 0, overtime: 0 };
         const monthMDs = (cell.regular + cell.overtime) / 8 + cell.ramadan / 6;
         monthMDTotals[m.key] += monthMDs;
-        // Cost for this month = this employee's hours × their rate
-        const hr = emp.hour_rate || 0;
-        const otr = emp.overtime_rate || hr * 1.5;
-        const monthCostUSD = (cell.regular + cell.ramadan) * hr + cell.overtime * otr;
+        // Cost for this month
+        const hr  = parseFloat(emp.hour_rate)  || 0;
+        const otr = parseFloat(emp.overtime_rate) || hr * 1.5;
         if (!monthCostTotals[m.key]) monthCostTotals[m.key] = 0;
-        monthCostTotals[m.key] += monthCostUSD;
+        if (hr > 0) {
+          monthCostTotals[m.key] += (cell.regular + cell.ramadan) * hr + cell.overtime * otr;
+        } else {
+          // Fallback: distribute total_cost_usd proportionally
+          const totalH = cell.regular + cell.ramadan + cell.overtime;
+          const empTotalH = emp.total_hours || 1;
+          monthCostTotals[m.key] += (emp.total_cost_usd || 0) * (totalH / empTotalH);
+        }
       });
 
       // This month MDs for summary strip
