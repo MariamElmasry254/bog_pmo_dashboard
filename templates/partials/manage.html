@@ -499,6 +499,52 @@ function showResult(el, ok, msg) {
 }
 
 // ── Travel CRUD ──────────────────────────────────────────────────────
+let _selectedIds = new Set();
+
+function toggleSelectAll(cb) {
+  _selectedIds.clear();
+  document.querySelectorAll('.row-cb').forEach(el => {
+    el.checked = cb.checked;
+    if (cb.checked) _selectedIds.add(parseInt(el.dataset.id));
+  });
+  updateBulkBar();
+}
+
+function onRowCb(el) {
+  const id = parseInt(el.dataset.id);
+  el.checked ? _selectedIds.add(id) : _selectedIds.delete(id);
+  updateBulkBar();
+}
+
+function updateBulkBar() {
+  const bar = document.getElementById('bulkBar');
+  const cnt = document.getElementById('bulkCount');
+  if (!bar) return;
+  if (_selectedIds.size > 0) {
+    bar.style.display = 'flex';
+    if (cnt) cnt.textContent = _selectedIds.size + ' selected';
+  } else {
+    bar.style.display = 'none';
+  }
+}
+
+async function bulkDelete() {
+  if (!confirm('Delete ' + _selectedIds.size + ' travel records?')) return;
+  for (const id of [..._selectedIds]) {
+    await fetch('/api/global/travel/' + id, {method:'DELETE'});
+  }
+  _selectedIds.clear(); updateBulkBar(); loadTravel();
+}
+
+async function bulkAutoLink() {
+  const resEl = document.getElementById('autoLinkResult');
+  if (resEl) { resEl.style.display='block'; resEl.style.background='#FEF3C7'; resEl.textContent='⏳ Linking…'; }
+  const res = await fetch('/api/global/travel/auto-link', {method:'POST'});
+  const d = await res.json();
+  if (resEl) { resEl.style.background=d.ok?'#D1FAE5':'#FEE2E2'; resEl.textContent=d.ok?'✅ Linked '+d.matched+' · '+d.unmatched+' unmatched':'⚠️ '+d.error; }
+  loadTravel();
+}
+
 async function loadTravel() {
   const q      = document.getElementById('travelSearch').value;
   const filter = (document.getElementById('travelLinkFilter') || {}).value || 'all';
