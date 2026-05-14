@@ -4421,6 +4421,15 @@ def api_effort_all_months(phase_key):
     odoo_data = batch_fetch_employees_from_odoo(all_emp_names)
     logger.info(f"Resolved {len(odoo_data)} of {len(all_emp_names)} employees from Odoo")
 
+    # Build emp_odoo_ids map: emp_name → Odoo employee ID (for travel matching)
+    emp_odoo_ids = {}
+    for ts in timesheets:
+        emp = ts.get('employee_id', [None, ''])
+        emp_name_ts = emp[1] if isinstance(emp, list) and len(emp) > 1 else ''
+        emp_id_ts   = emp[0] if isinstance(emp, list) and len(emp) > 0 else None
+        if emp_name_ts and emp_id_ts and emp_name_ts not in emp_odoo_ids:
+            emp_odoo_ids[emp_name_ts] = emp_id_ts
+
     # ── imports for onsite split logic ──
     import re as _re_effort
     import calendar as _cal
@@ -4514,8 +4523,11 @@ def api_effort_all_months(phase_key):
         # ── Travel periods (match by Odoo ID, code, or name) ──
         emp_travel_periods = []
         en_clean = _re_effort.sub(r'\[[A-Z]\d+\s*\]\s*', '', emp_name).strip().lower()
+        # Extract employee code from timesheet name [E259] Sara Samir
+        _code_m = _re_effort.match(r'^\[([A-Z]\d+)\s*\]', emp_name)
+        emp_code = _code_m.group(1).upper() if _code_m else ''
         # Get Odoo employee ID from timesheet data
-        _emp_odoo_id = emp_odoo_ids.get(emp_name) if 'emp_odoo_ids' in dir() else None
+        _emp_odoo_id = emp_odoo_ids.get(emp_name)
         for tr in travel_records:
             if not tr.get('name') or not tr.get('start_date'):
                 continue
