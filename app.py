@@ -1025,6 +1025,64 @@ def api_promotions_auto_link():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/debug/autolink-test')
+def debug_autolink_test():
+    """Debug: show why auto-link fails - compare travel names vs Odoo names"""
+    try:
+        if not odoo.uid: odoo.connect()
+        import re as _re
+
+        def norm(s):
+            return _re.sub(r"[\s\-_'.]+", '', (s or '').lower().strip())
+
+        # Get Odoo employees
+        all_emps = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'hr.employee', 'search_read',
+            [[('active', '=', True)]],
+            {'fields': ['id', 'name', 'barcode'], 'limit': 2000}
+        )
+        emp_by_norm = {norm(e['name']): e['name'] for e in all_emps}
+        emp_by_fl = {}
+        for e in all_emps:
+            words = e['name'].lower().split()
+            if len(words) >= 2:
+                emp_by_fl[words[0]+words[-1]] = e['name']
+
+        # Get travel records
+        records = _global_get('travel') or []
+
+        results = []
+        for r in records[:50]:  # first 50
+            name = r.get('name','')
+            n = norm(name)
+            words = name.lower().split()
+            fl_key = words[0]+words[-1] if len(words)>=2 else ''
+
+            exact = emp_by_norm.get(n)
+            fl    = emp_by_fl.get(fl_key)
+            results.append({
+                'travel_name': name,
+                'norm':        n,
+                'exact_match': exact,
+                'fl_match':    fl,
+                'linked':      bool(r.get('odoo_employee_id')),
+            })
+
+        # Show sample of Odoo names
+        sample_odoo = [e['name'] for e in all_emps[:20]]
+
+        return jsonify({
+            'odoo_count': len(all_emps),
+            'travel_count': len(records),
+            'sample_odoo_names': sample_odoo,
+            'travel_results': results,
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
+
+
 @app.route('/debug/projects-raw')
 def debug_projects_raw():
     """Debug: show raw Odoo project data to verify fields."""
