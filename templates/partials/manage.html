@@ -242,7 +242,7 @@
           <input type="text" id="tv_name" placeholder="Full name" oninput="onTvNameInput(this)">
           <div id="tvNameSuggestions" style="display:none;position:absolute;top:100%;left:0;right:0;background:white;
                border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.1);z-index:100;max-height:160px;overflow-y:auto;"></div>
-          <input type="hidden" id="tv_odoo_id">
+          <input type="hidden" id="tv_odoo_id"><input type="hidden" id="tv_odoo_code">
         </div>
         <div class="form-field">
           <label>Position / Level</label>
@@ -376,10 +376,11 @@
 
 <script>
 function odooStatus(r) {
-  if (r.odoo_employee_id) {
-    return '<span style="font-size:10px;color:#1E40AF;font-weight:500;">&nbsp;· #' + r.odoo_employee_id + '</span>';
+  const display = r.odoo_employee_code || (r.odoo_employee_id ? '#'+r.odoo_employee_id : null);
+  if (display) {
+    return '<span style="font-size:10px;color:#1E40AF;font-weight:600;">&nbsp;· ' + display + '</span>';
   }
-  return '<span style="font-size:10px;color:#9CA3AF;">&nbsp;· <a href="#" onclick="openOdooLink(' + r.id + ',\'' + r.name.replace(/\'/g, "\\'" ) + '\')" style="color:#9CA3AF;font-size:10px;">unlinked</a></span>';
+  return '<span style="font-size:10px;color:#9CA3AF;">&nbsp;· <a href="#" onclick="openOdooLink(' + r.id + ',\'' + r.name.replace(/\'/g, "\\'" ) + '\')" style="color:#9CA3AF;font-size:10px;text-decoration:underline;">unlinked</a></span>';
 }
 let activeTab = 'travel';
 
@@ -536,7 +537,8 @@ async function addTravel() {
     end_date:         document.getElementById('tv_end').value,
     notes:            document.getElementById('tv_notes').value.trim(),
     status:           'confirmed',
-    odoo_employee_id: parseInt(document.getElementById('tv_odoo_id').value) || null,
+    odoo_employee_id:   parseInt(document.getElementById('tv_odoo_id').value) || null,
+    odoo_employee_code: document.getElementById('tv_odoo_code').value || null,
   };
 
   let res;
@@ -595,7 +597,7 @@ function openOdooLink(travelId, name) {
              border-radius:8px;background:white;display:none;"></div>
         <div style="display:flex;align-items:center;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
           <span style="font-size:12px;color:var(--muted);white-space:nowrap;">Enter ID manually:</span>
-          <input type="number" id="manualOdooId" placeholder="e.g. 247" min="1"
+          <input type="number" id="manualOdooId" placeholder="e.g. E259 or 247" style="letter-spacing:.03em;"
             style="flex:1;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
           <button class="btn btn-primary" style="padding:7px 14px;font-size:12px;" onclick="confirmManualId()">Link</button>
         </div>
@@ -643,9 +645,22 @@ function searchForLink(q) {
 }
 
 async function confirmManualId() {
-  const id = parseInt(document.getElementById('manualOdooId').value);
-  if (!id || id < 1) { alert('Enter a valid Odoo employee ID'); return; }
-  await confirmOdooLink(id, 'Manual #' + id);
+  const raw = (document.getElementById('manualOdooId').value || '').trim();
+  // Accept either numeric ID or employee code like E259
+  const codeMatch = raw.match(/^([ERT]\d+)$/i);
+  if (codeMatch) {
+    // Search by code
+    const code = codeMatch[1].toUpperCase();
+    const res = await fetch('/api/global/employees/search?q='+encodeURIComponent(code));
+    const d   = await res.json();
+    const emp = d.employees && d.employees[0];
+    if (emp) { await confirmOdooLink(emp.id, emp.name, emp.code||code); return; }
+    alert('Employee code ' + code + ' not found in Odoo');
+    return;
+  }
+  const id = parseInt(raw);
+  if (!id || id < 1) { alert('Enter employee code (e.g. E259) or numeric ID'); return; }
+  await confirmOdooLink(id, '', '');
 }
 
 async function autoLinkAll(type) {
@@ -667,7 +682,7 @@ async function autoLinkAll(type) {
   }
 }
 
-async function confirmOdooLink(odooId, odooName) {
+async function confirmOdooLink(odooId, odooName, odooCode) {
   let url, reload;
   if (_linkingTravelId) {
     url = '/api/global/travel/'+_linkingTravelId;
@@ -679,7 +694,7 @@ async function confirmOdooLink(odooId, odooName) {
 
   const res = await fetch(url, {
     method: 'PUT', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({odoo_employee_id: odooId, odoo_employee_name: odooName})
+    body: JSON.stringify({odoo_employee_id: odooId, odoo_employee_name: odooName, odoo_employee_code: odooCode||''})
   });
   const d = await res.json();
   if (d.ok) { closeOdooLink(); reload(); }
@@ -706,17 +721,19 @@ async function searchOdooEmpByName(q) {
     sugEl.innerHTML = emps.map(e =>
       `<div style="padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid #F3F4F6;"
             onmouseover="this.style.background='#F0F9FF'" onmouseout="this.style.background=''"
-            onclick="selectOdooEmp(${e.id}, '${e.name.replace(/'/g,"\\'")}', '${(e.title||'').replace(/'/g,"\\'")}')">
-         <b>${e.name}</b> <span style="color:var(--muted);font-size:11px;">${e.title||''}</span>
+            onclick="selectOdooEmp(${e.id}, '${e.name.replace(/'/g,"\\'")}', '${(e.title||'').replace(/'/g,"\\'")}', '${e.code||''}')">
+         <b>${e.name}</b> <span style="color:#1E40AF;font-size:11px;font-weight:700;">${e.code||''}</span>
+         <span style="color:var(--muted);font-size:11px;"> ${e.title||''}</span>
        </div>`
     ).join('');
     sugEl.style.display = 'block';
   } catch(e) { sugEl.style.display='none'; }
 }
 
-function selectOdooEmp(id, name, title) {
+function selectOdooEmp(id, name, title, code) {
   document.getElementById('tv_name').value    = name;
   document.getElementById('tv_odoo_id').value = id;
+  document.getElementById('tv_odoo_code').value = code || '';
   if (title && !document.getElementById('tv_pos').value) {
     document.getElementById('tv_pos').value = title;
   }
