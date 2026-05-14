@@ -476,15 +476,10 @@ def api_overview():
                 ODOO_DB, odoo.uid, ODOO_PASSWORD,
                 'project.project', 'search_read',
                 [[('name', 'ilike', PROJECT_NAME)]],
-                {'fields': ['id', 'name', 'date_start', 'date',
-                            'user_id',          # Project Manager
-                            'x_coordinator',    # Coordinator (custom field)
-                            'x_project_manager',# Alt PM field
-                            'x_pm',             # Alt PM field
-                            'x_project_value',  # Project value (custom)
-                            'x_collected_value',
-                            'x_project_costs',
-                            'x_contract_number',
+                {'fields': ['id', 'name', 'start_date', 'date',
+                            'user_id',        # Project Manager (many2one res.users)
+                            'coordinator_id', # Coordinator (many2one res.users)
+                            'value',          # Project value (float)
                             ], 'limit': 3}
             )
             if projects:
@@ -501,7 +496,7 @@ def api_overview():
             return v[:10]
         return None
 
-    proj_start = _odoo_date('date_start') or PROJECT_INFO.get('start_date')
+    proj_start = _odoo_date('start_date') or PROJECT_INFO.get('start_date')
     proj_end   = _odoo_date('date')       or PROJECT_INFO.get('end_date')
 
     # Duration in months
@@ -521,25 +516,21 @@ def api_overview():
         uid_field = odoo_project.get('user_id')
         if isinstance(uid_field, list) and len(uid_field) > 1:
             pm_name = uid_field[1]
-        # Try custom coordinator field
-        for coord_field in ['x_coordinator', 'x_pm', 'x_project_manager']:
-            cf = odoo_project.get(coord_field)
-            if cf and isinstance(cf, list) and len(cf) > 1:
-                coord_name = cf[1]
-                break
-            elif cf and isinstance(cf, str):
-                coord_name = cf
-                break
+        # Coordinator from coordinator_id (many2one)
+        cf = odoo_project.get('coordinator_id')
+        if isinstance(cf, list) and len(cf) > 1:
+            coord_name = cf[1]
     except Exception:
         pass
 
-    # Project value from Odoo (custom field x_project_value or x_value)
+    # Project value from Odoo — field name is 'value' (float)
     project_value_sar = 0
-    for vf in ['x_project_value', 'x_value']:
-        v = odoo_project.get(vf)
-        if v and str(v).replace('.','').isdigit():
+    v = odoo_project.get('value')
+    if v:
+        try:
             project_value_sar = float(v)
-            break
+        except (TypeError, ValueError):
+            pass
 
     # Timeline
     time_progress_pct = days_elapsed = days_remaining = 0
