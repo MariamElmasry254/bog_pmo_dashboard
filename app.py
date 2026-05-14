@@ -4580,7 +4580,9 @@ def api_budget_changes_get():
         import json as _j
         try: changes = _j.loads(changes)
         except: changes = []
-    return jsonify({'phase': phase, 'changes': changes if isinstance(changes, list) else []})
+    history = db.get_override('planned_profit_history', '', phase) or {}
+    return jsonify({'phase': phase, 'changes': changes if isinstance(changes, list) else [],
+                    'planned_profit_history': history if isinstance(history, dict) else {}})
 
 
 @app.route('/api/budget-changes', methods=['POST'])
@@ -4589,6 +4591,10 @@ def api_budget_changes_save():
     phase = body.get('phase', 'development')
     changes = body.get('changes', [])
     db.set_override('budget_changes', '', phase, changes)
+    # Save planned profit history if provided
+    history = body.get('planned_profit_history')
+    if history is not None:
+        db.set_override('planned_profit_history', '', phase, history)
     return jsonify({'ok': True})
 
 
