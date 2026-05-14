@@ -1,0 +1,867 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PMO — Travel & Promotions</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --navy:#1B2A4E;--blue:#3B82F6;--green:#10B981;--amber:#F59E0B;--red:#EF4444;
+  --bg:#F5F6FA;--border:#E5E7EB;--text:#111827;--muted:#9CA3AF;--sans:'Inter',sans-serif;
+}
+body{background:var(--bg);font-family:var(--sans);font-size:14px;color:var(--text);}
+/* Header */
+.hdr{background:var(--navy);height:52px;display:flex;align-items:center;gap:16px;padding:0 28px;position:sticky;top:0;z-index:50;}
+.hdr a{color:rgba(255,255,255,.6);text-decoration:none;font-size:12px;font-weight:500;}
+.hdr a:hover{color:#fff;}
+.hdr h1{color:#fff;font-size:15px;font-weight:700;}
+.hdr .sep{color:rgba(255,255,255,.2);}
+.hdr .ml{margin-left:auto;display:flex;gap:8px;}
+.hdr .btn-sm{padding:5px 12px;border-radius:6px;font-size:11px;font-weight:600;border:1px solid rgba(255,255,255,.2);color:rgba(255,255,255,.7);text-decoration:none;}
+.hdr .btn-sm:hover{background:rgba(255,255,255,.1);color:#fff;}
+/* Main */
+.main{max-width:1400px;margin:0 auto;padding:24px 28px;}
+/* Tabs */
+.tabs{display:flex;border-bottom:2px solid var(--border);margin-bottom:24px;}
+.tab-btn{padding:10px 20px;background:none;border:none;cursor:pointer;font-size:13px;font-weight:600;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-2px;transition:all .15s;}
+.tab-btn.active{color:var(--navy);border-bottom-color:var(--navy);}
+.tab-panel{display:none;}
+.tab-panel.active{display:block;}
+.cnt-badge{background:var(--navy);color:#fff;font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;margin-left:6px;}
+/* Upload */
+.upload-box{border:2px dashed var(--border);border-radius:10px;padding:24px;text-align:center;cursor:pointer;background:#fff;transition:all .2s;margin-bottom:12px;}
+.upload-box:hover,.upload-box.drag{border-color:var(--blue);background:#EFF6FF;}
+.upload-box input{display:none;}
+.upload-box .ico{font-size:28px;margin-bottom:6px;}
+.upload-box h3{font-size:14px;font-weight:600;margin-bottom:3px;}
+.upload-box p{font-size:12px;color:var(--muted);}
+.upload-box .hint{font-size:11px;color:var(--blue);margin-top:4px;font-weight:500;}
+/* Result banner */
+.result-bar{display:none;padding:10px 14px;border-radius:8px;font-size:13px;font-weight:500;margin-bottom:12px;}
+.result-bar.ok{background:#D1FAE5;color:#065F46;border:1px solid #A7F3D0;}
+.result-bar.err{background:#FEE2E2;color:#991B1B;border:1px solid #FCA5A5;}
+.result-bar.info{background:#FEF3C7;color:#92400E;border:1px solid #FDE68A;}
+/* Toolbar */
+.toolbar{display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap;}
+.search-inp{flex:1;min-width:180px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;font-family:var(--sans);outline:none;}
+.search-inp:focus{border-color:var(--blue);}
+select.filter-sel{padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;outline:none;}
+/* Buttons */
+.btn{padding:8px 14px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;border:none;transition:background .15s;}
+.btn-primary{background:var(--blue);color:#fff;}.btn-primary:hover{background:#2563EB;}
+.btn-ghost{background:#fff;border:1px solid var(--border);color:var(--text);}.btn-ghost:hover{background:var(--bg);}
+.btn-danger{background:#FEE2E2;color:var(--red);border:1px solid #FECACA;}.btn-danger:hover{background:#FCA5A5;}
+.btn-sm{padding:3px 9px;font-size:11px;}
+/* Bulk bar */
+.bulk-bar{display:none;align-items:center;gap:10px;padding:8px 14px;background:#EFF6FF;border:1px solid #BFDBFE;border-radius:8px;margin-bottom:10px;}
+/* Form */
+.add-form{background:#fff;border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:14px;display:none;}
+.add-form.open{display:block;}
+.form-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-bottom:14px;}
+.form-field label{display:block;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px;}
+.form-field input,.form-field select{width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:var(--sans);outline:none;}
+.form-field input:focus{border-color:var(--blue);}
+/* Table */
+.tbl-wrap{background:#fff;border:1px solid var(--border);border-radius:10px;overflow:hidden;}
+table{width:100%;border-collapse:collapse;}
+th{text-align:left;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;padding:9px 12px;background:var(--bg);border-bottom:1px solid var(--border);}
+td{padding:8px 12px;font-size:13px;border-bottom:1px solid #F3F4F6;vertical-align:middle;}
+tr:last-child td{border-bottom:none;}
+tr:hover td{background:#FAFAFA;}
+.badge{display:inline-block;padding:2px 7px;border-radius:8px;font-size:10px;font-weight:700;}
+.badge-green{background:#D1FAE5;color:#065F46;}
+.badge-blue{background:#DBEAFE;color:#1E40AF;}
+/* Code badge */
+.code-badge{font-size:10px;font-weight:700;color:#1E40AF;background:#DBEAFE;padding:1px 5px;border-radius:4px;margin-left:4px;}
+/* Suggestions */
+.suggestions{position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.1);z-index:100;max-height:180px;overflow-y:auto;display:none;}
+.sug-item{padding:9px 12px;cursor:pointer;border-bottom:1px solid #F3F4F6;}
+.sug-item:hover{background:#EFF6FF;}
+/* PDF zone */
+.pdf-zone{background:#fff;border:1px solid var(--border);border-radius:10px;padding:16px 20px;margin-bottom:12px;}
+.pdf-zone h4{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;}
+/* Modal */
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:200;display:none;align-items:center;justify-content:center;}
+.modal-bg.open{display:flex;}
+.modal{background:#fff;border-radius:12px;padding:28px;width:440px;max-width:92vw;box-shadow:0 20px 60px rgba(0,0,0,.3);}
+</style>
+</head>
+<body>
+
+<div class="hdr">
+  <a href="/projects">← Projects</a>
+  <span class="sep">|</span>
+  <h1>⚙ Global Management</h1>
+  <div class="ml">
+    <a class="btn-sm" href="/">Dashboard</a>
+    <a class="btn-sm" href="/logout">Sign out</a>
+  </div>
+</div>
+
+<div class="main">
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('travel')">
+      ✈ Travel Records <span class="cnt-badge" id="travelCount">…</span>
+    </button>
+    <button class="tab-btn" onclick="switchTab('promotions')">
+      🏆 Promotions <span class="cnt-badge" id="promoCount">…</span>
+    </button>
+  </div>
+
+  <!-- ═══════════════ TRAVEL TAB ═══════════════ -->
+  <div id="tab-travel" class="tab-panel active">
+
+    <!-- PDF Upload -->
+    <div class="pdf-zone">
+      <h4>📄 Parse from Flight Ticket PDF</h4>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <label class="btn btn-ghost" style="cursor:pointer;">
+          📂 Upload Ticket PDF
+          <input type="file" id="ticketFile" accept=".pdf" onchange="parseTicket(this)" style="display:none;">
+        </label>
+        <span id="ticketMsg" style="font-size:13px;color:var(--muted);"></span>
+      </div>
+      <div id="ticketPreview" style="display:none;margin-top:12px;padding:12px;background:#F0FDF4;border:1px solid #A7F3D0;border-radius:8px;">
+        <div style="font-size:11px;font-weight:700;color:#065F46;margin-bottom:8px;">✅ Extracted — review before saving:</div>
+        <div id="ticketFields" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;margin-bottom:10px;"></div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-primary" style="font-size:12px;padding:6px 14px;" onclick="confirmTicket()">Add to Travel</button>
+          <button class="btn btn-ghost" style="font-size:12px;padding:6px 14px;" onclick="document.getElementById('ticketPreview').style.display='none'">Discard</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Excel Upload -->
+    <div class="upload-box" id="travelDrop"
+         onclick="document.getElementById('travelFile').click()"
+         ondragover="event.preventDefault();this.classList.add('drag')"
+         ondragleave="this.classList.remove('drag')"
+         ondrop="handleDrop(event,'travel')">
+      <input type="file" id="travelFile" accept=".xlsx,.xls" onchange="handleFile(this,'travel')">
+      <div class="ico">📂</div>
+      <h3>Upload Travel Excel</h3>
+      <p>Drag & drop or click to browse</p>
+      <div class="hint">Columns: Member / From / To — duplicates auto-skipped</div>
+    </div>
+    <div class="result-bar" id="travelImportResult"></div>
+
+    <!-- Toolbar -->
+    <div class="toolbar">
+      <input class="search-inp" id="travelSearch" placeholder="🔍 Search by name…" oninput="loadTravel()">
+      <select class="filter-sel" id="travelFilter" onchange="loadTravel()">
+        <option value="all">All</option>
+        <option value="linked">✅ Linked</option>
+        <option value="unlinked">⚠ Unlinked</option>
+      </select>
+      <input type="text" class="filter-sel" id="travelPosFilter" placeholder="Filter position…" style="min-width:140px;" oninput="loadTravel()">
+      <input type="date" class="filter-sel" id="travelDateFrom" style="min-width:130px;" onchange="loadTravel()" title="Travel from date">
+      <input type="date" class="filter-sel" id="travelDateTo" style="min-width:130px;" onchange="loadTravel()" title="Travel to date">
+      <button class="btn btn-ghost" onclick="autoLink('travel')">⚡ Auto-Link All</button>
+      <button class="btn btn-ghost" onclick="toggleForm('travelForm')">+ Add Manually</button>
+    </div>
+    <div class="result-bar" id="autoLinkTravelResult"></div>
+
+    <!-- Bulk Bar -->
+    <div class="bulk-bar" id="travelBulkBar">
+      <span id="travelBulkCount" style="font-size:13px;font-weight:600;color:#1E40AF;"></span>
+      <button class="btn btn-danger btn-sm" onclick="bulkDeleteTravel()">🗑 Delete</button>
+      <button class="btn btn-ghost btn-sm" style="margin-left:auto;" onclick="clearSelection('travel')">✕ Clear</button>
+    </div>
+
+    <!-- Add/Edit Form -->
+    <div class="add-form" id="travelForm">
+      <div class="form-grid">
+        <div class="form-field" style="position:relative;">
+          <label>Name * <span style="font-weight:400;color:var(--blue);font-size:9px;cursor:pointer;" onclick="searchOdoo()">🔍 Odoo</span></label>
+          <input type="text" id="tv_name" placeholder="Full name" oninput="onNameInput()">
+          <div class="suggestions" id="nameSuggestions"></div>
+          <input type="hidden" id="tv_odoo_id">
+          <input type="hidden" id="tv_odoo_code">
+        </div>
+        <div class="form-field">
+          <label>Position / Level</label>
+          <input type="text" id="tv_pos" placeholder="e.g. Senior BA">
+        </div>
+        <div class="form-field">
+          <label>Start Date *</label>
+          <input type="date" id="tv_start">
+        </div>
+        <div class="form-field">
+          <label>End Date</label>
+          <input type="date" id="tv_end">
+        </div>
+        <div class="form-field">
+          <label>Notes</label>
+          <input type="text" id="tv_notes" placeholder="Optional">
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-primary" id="travelSaveBtn" onclick="saveTravel()">Save Record</button>
+        <button class="btn btn-ghost" onclick="cancelTravel()">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Table -->
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th style="width:36px;"><input type="checkbox" id="travelSelectAll" onclick="selectAll('travel',this)"></th>
+          <th>Name</th><th>Position</th><th>Start</th><th>End</th><th>Notes</th><th></th>
+        </tr></thead>
+        <tbody id="travelBody">
+          <tr><td colspan="9" style="text-align:center;padding:32px;color:var(--muted);">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ═══════════════ PROMOTIONS TAB ═══════════════ -->
+  <div id="tab-promotions" class="tab-panel">
+
+    <!-- Excel Upload -->
+    <div class="upload-box" id="promoDrop"
+         onclick="document.getElementById('promoFile').click()"
+         ondragover="event.preventDefault();this.classList.add('drag')"
+         ondragleave="this.classList.remove('drag')"
+         ondrop="handleDrop(event,'promotions')">
+      <input type="file" id="promoFile" accept=".xlsx,.xls" onchange="handleFile(this,'promotions')">
+      <div class="ico">📂</div>
+      <h3>Upload Promotions Excel</h3>
+      <p>Drag & drop or click to browse</p>
+      <div class="hint">Columns: Name / Title / Promotion Date — duplicates auto-skipped</div>
+    </div>
+    <div class="result-bar" id="promoImportResult"></div>
+
+    <!-- Toolbar -->
+    <div class="toolbar">
+      <input class="search-inp" id="promoSearch" placeholder="🔍 Search by name…" oninput="loadPromos()">
+      <select class="filter-sel" id="promoYear" onchange="loadPromos()">
+        <option value="">All years</option>
+        <option value="2025">2025</option>
+        <option value="2026">2026</option>
+      </select>
+      <select class="filter-sel" id="promoFilter" onchange="loadPromos()">
+        <option value="all">All</option>
+        <option value="linked">✅ Linked</option>
+        <option value="unlinked">⚠ Unlinked</option>
+      </select>
+      <button class="btn btn-ghost" onclick="autoLink('promotions')">⚡ Auto-Link All</button>
+      <button class="btn btn-ghost" onclick="toggleForm('promoForm')">+ Add Manually</button>
+    </div>
+    <div class="result-bar" id="autoLinkPromoResult"></div>
+
+    <!-- Add/Edit Form -->
+    <div class="add-form" id="promoForm">
+      <div class="form-grid">
+        <div class="form-field">
+          <label>Name *</label>
+          <input type="text" id="pm_name" placeholder="Full name">
+        </div>
+        <div class="form-field">
+          <label>New Title</label>
+          <input type="text" id="pm_title" placeholder="e.g. Senior BA">
+        </div>
+        <div class="form-field">
+          <label>Effective Date</label>
+          <input type="date" id="pm_date">
+        </div>
+        <div class="form-field">
+          <label>Year</label>
+          <input type="number" id="pm_year" placeholder="2026" min="2020" max="2035">
+        </div>
+        <div class="form-field">
+          <label>Notes</label>
+          <input type="text" id="pm_notes" placeholder="Optional">
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-primary" id="promoSaveBtn" onclick="savePromo()">Save Record</button>
+        <button class="btn btn-ghost" onclick="cancelPromo()">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Table -->
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>#</th><th>Name</th><th>New Title</th><th>Effective Date</th><th>Year</th><th>Notes</th><th></th>
+        </tr></thead>
+        <tbody id="promoBody">
+          <tr><td colspan="7" style="text-align:center;padding:32px;color:var(--muted);">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Link Modal -->
+<div class="modal-bg" id="linkModal">
+  <div class="modal">
+    <h3 style="font-size:16px;font-weight:700;margin-bottom:4px;">🔗 Link to Odoo Employee</h3>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:14px;" id="linkModalSub"></p>
+    <input type="text" id="linkSearch" placeholder="Search by name or enter E-code (e.g. E259)…"
+      style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;outline:none;margin-bottom:8px;"
+      oninput="searchLink(this.value)">
+    <div id="linkResults" style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;display:none;"></div>
+    <div style="display:flex;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid var(--border);align-items:center;">
+      <input type="text" id="manualCode" placeholder="Enter E259 or numeric ID"
+        style="flex:1;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;outline:none;">
+      <button class="btn btn-primary btn-sm" onclick="confirmManual()" style="padding:7px 14px;">Link</button>
+    </div>
+    <button class="btn btn-ghost" onclick="closeModal()" style="width:100%;margin-top:10px;">Cancel</button>
+  </div>
+</div>
+
+<script>
+// ─── State ───────────────────────────────────────────────────────────
+let activeTab     = 'travel';
+let _travelSel    = new Set();
+let _editTravel   = null;
+let _editPromo    = null;
+let _linkId       = null;
+let _linkType     = null;  // 'travel' or 'promotions'
+let _parsedTicket = null;
+let _nameTimer    = null;
+let _linkTimer    = null;
+
+// ─── Tabs ─────────────────────────────────────────────────────────────
+function switchTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.tab-btn').forEach((b,i) =>
+    b.classList.toggle('active', ['travel','promotions'][i] === tab));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('tab-'+tab).classList.add('active');
+  if (tab === 'travel') loadTravel();
+  else loadPromos();
+}
+
+function toggleForm(id) {
+  document.getElementById(id).classList.toggle('open');
+}
+
+// ─── Result bars ──────────────────────────────────────────────────────
+function showResult(id, type, msg) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.className = 'result-bar ' + type;  // ok / err / info
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+// ─── Travel: load ────────────────────────────────────────────────────
+async function loadTravel() {
+  const q       = document.getElementById('travelSearch').value;
+  const filter  = document.getElementById('travelFilter').value;
+  const params  = new URLSearchParams();
+  if (q) params.set('q', q);
+  if (filter === 'linked')   params.set('linked', '1');
+  if (filter === 'unlinked') params.set('linked', '0');
+
+  const res = await fetch('/api/global/travel?' + params);
+  const d   = await res.json();
+  // Count updated after client filter
+  // Reset selection
+  _travelSel.clear();
+  const sa = document.getElementById('travelSelectAll');
+  if (sa) sa.checked = false;
+  document.getElementById('travelBulkBar').style.display = 'none';
+
+  let rows = d.records || [];
+  // Client-side: position filter
+  const posF  = (document.getElementById('travelPosFilter')?.value||'').toLowerCase();
+  const dateF = document.getElementById('travelDateFrom')?.value||'';
+  const dateT = document.getElementById('travelDateTo')?.value||'';
+  if (posF) rows = rows.filter(r => (r.position||'').toLowerCase().includes(posF));
+  if (dateF) rows = rows.filter(r => r.start_date && r.start_date >= dateF);
+  if (dateT) rows = rows.filter(r => r.start_date && r.start_date <= dateT);
+  document.getElementById('travelCount').textContent = rows.length;
+  document.getElementById('travelBody').innerHTML = rows.length
+    ? rows.map(r => `
+      <tr id="tr${r.id}">
+        <td><input type="checkbox" class="tcb" data-id="${r.id}" onclick="onTravelCb(this)" style="cursor:pointer;width:15px;height:15px;"></td>
+        <td style="color:var(--muted);font-size:11px;">${r.id}</td>
+        <td>
+          <span style="font-weight:600;">${esc(r.name)}</span>
+          ${codeTag(r,'promotions')}
+        </td>
+        <td style="font-size:12px;">${esc(r.position||'—')}</td>
+        <td style="font-size:12px;">${r.start_date||'—'}</td>
+        <td style="font-size:12px;">${r.end_date||'—'}</td>
+        <td><span class="badge badge-green" style="font-size:10px;">${r.status||'confirmed'}</span></td>
+        <td style="font-size:11px;color:var(--muted);max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(r.notes||'')}</td>
+        <td style="white-space:nowrap;">
+          <button class="btn btn-ghost btn-sm" onclick='openEdit(${JSON.stringify(r).replace(/'/g,"\\'")},"travel")'>✎</button>
+          <button class="btn btn-danger btn-sm" onclick="delTravel(${r.id})">✕</button>
+        </td>
+      </tr>`).join('')
+    : '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--muted);">No records found</td></tr>';
+}
+
+function codeTag(r) {
+  const code = r.odoo_employee_code ? r.odoo_employee_code.toUpperCase() : null;
+  if (code) return `<span class="code-badge">${code}</span>`;
+  if (r.odoo_employee_id) return `<span style="font-size:10px;color:var(--muted);margin-left:3px;">#${r.odoo_employee_id}</span>`;
+  return `<a href="#" onclick="openLink(${r.id},'travel','${esc(r.name)}')" style="font-size:10px;color:var(--muted);margin-left:3px;text-decoration:underline;">unlinked</a>`;
+}
+
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ─── Travel: select all ───────────────────────────────────────────────
+function selectAll(type, cb) {
+  if (type === 'travel') {
+    _travelSel.clear();
+    document.querySelectorAll('.tcb').forEach(el => {
+      el.checked = cb.checked;
+      if (cb.checked) _travelSel.add(parseInt(el.dataset.id));
+    });
+    updateBulkBar();
+  }
+}
+
+function onTravelCb(el) {
+  const id = parseInt(el.dataset.id);
+  el.checked ? _travelSel.add(id) : _travelSel.delete(id);
+  updateBulkBar();
+}
+
+function updateBulkBar() {
+  const bar = document.getElementById('travelBulkBar');
+  const cnt = document.getElementById('travelBulkCount');
+  if (_travelSel.size > 0) {
+    bar.style.display = 'flex';
+    cnt.textContent = _travelSel.size + ' selected';
+  } else {
+    bar.style.display = 'none';
+  }
+}
+
+function clearSelection(type) {
+  if (type === 'travel') {
+    _travelSel.clear();
+    document.querySelectorAll('.tcb').forEach(e => e.checked = false);
+    const sa = document.getElementById('travelSelectAll');
+    if (sa) sa.checked = false;
+    updateBulkBar();
+  }
+}
+
+async function bulkDeleteTravel() {
+  if (!confirm(`Delete ${_travelSel.size} records?`)) return;
+  for (const id of [..._travelSel]) {
+    await fetch('/api/global/travel/' + id, {method:'DELETE'});
+  }
+  _travelSel.clear();
+  loadTravel();
+}
+
+// ─── Travel: CRUD ────────────────────────────────────────────────────
+function openEdit(r, type) {
+  if (type === 'travel') {
+    _editTravel = r;
+    document.getElementById('tv_name').value   = r.name        || '';
+    document.getElementById('tv_pos').value    = r.position    || '';
+    document.getElementById('tv_start').value  = r.start_date  || '';
+    document.getElementById('tv_end').value    = r.end_date    || '';
+    document.getElementById('tv_notes').value  = r.notes       || '';
+    document.getElementById('tv_odoo_id').value   = r.odoo_employee_id   || '';
+    document.getElementById('tv_odoo_code').value = r.odoo_employee_code || '';
+    document.getElementById('travelForm').classList.add('open');
+    document.getElementById('travelSaveBtn').textContent = 'Update Record';
+    document.getElementById('travelForm').scrollIntoView({behavior:'smooth',block:'start'});
+  } else {
+    _editPromo = r;
+    document.getElementById('pm_name').value  = r.name           || '';
+    document.getElementById('pm_title').value = r.new_title      || '';
+    document.getElementById('pm_date').value  = r.effective_date || '';
+    document.getElementById('pm_year').value  = r.year           || '';
+    document.getElementById('pm_notes').value = r.notes          || '';
+    document.getElementById('promoForm').classList.add('open');
+    document.getElementById('promoSaveBtn').textContent = 'Update Record';
+    document.getElementById('promoForm').scrollIntoView({behavior:'smooth',block:'start'});
+  }
+}
+
+function cancelTravel() {
+  _editTravel = null;
+  ['tv_name','tv_pos','tv_start','tv_end','tv_notes','tv_odoo_id','tv_odoo_code']
+    .forEach(id => document.getElementById(id).value = '');
+  document.getElementById('travelForm').classList.remove('open');
+  document.getElementById('travelSaveBtn').textContent = 'Save Record';
+}
+
+async function saveTravel() {
+  const name  = document.getElementById('tv_name').value.trim();
+  const start = document.getElementById('tv_start').value;
+  if (!name || !start) { alert('Name and start date are required'); return; }
+  const body = {
+    name, start_date: start,
+    position:           document.getElementById('tv_pos').value.trim(),
+    end_date:           document.getElementById('tv_end').value,
+    notes:              document.getElementById('tv_notes').value.trim(),
+    status:             'confirmed',
+    odoo_employee_id:   parseInt(document.getElementById('tv_odoo_id').value)   || null,
+    odoo_employee_code: document.getElementById('tv_odoo_code').value.trim()    || null,
+  };
+  const url    = _editTravel ? `/api/global/travel/${_editTravel.id}` : '/api/global/travel';
+  const method = _editTravel ? 'PUT' : 'POST';
+  const res = await fetch(url, {method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  const d   = await res.json();
+  if (d.ok) { cancelTravel(); loadTravel(); }
+  else if (d.error === 'duplicate') alert('Duplicate: same name + start date already exists.');
+  else alert('Error: ' + (d.error||'Unknown'));
+}
+
+async function delTravel(id) {
+  if (!confirm('Delete this record?')) return;
+  const res = await fetch('/api/global/travel/'+id, {method:'DELETE'});
+  const d = await res.json();
+  if (d.ok) loadTravel();
+  else alert('Error: ' + (d.error||'Unknown'));
+}
+
+// ─── Auto-Link ────────────────────────────────────────────────────────
+async function autoLink(type) {
+  const resId = type === 'travel' ? 'autoLinkTravelResult' : 'autoLinkPromoResult';
+  showResult(resId, 'info', '⏳ Matching with Odoo employees…');
+  const res = await fetch(`/api/global/${type}/auto-link`, {method:'POST'});
+  const d   = await res.json();
+  if (d.ok) {
+    showResult(resId, 'ok', `✅ Linked ${d.matched} · ${d.unmatched} unmatched · ${d.total} total`);
+    if (type === 'travel') loadTravel(); else loadPromos();
+  } else {
+    showResult(resId, 'err', '⚠️ ' + (d.error||'Error'));
+  }
+}
+
+// ─── Odoo Name Autocomplete ───────────────────────────────────────────
+function onNameInput() {
+  clearTimeout(_nameTimer);
+  document.getElementById('tv_odoo_id').value = '';
+  document.getElementById('tv_odoo_code').value = '';
+  _nameTimer = setTimeout(() => fetchSuggestions(document.getElementById('tv_name').value), 350);
+}
+
+async function fetchSuggestions(q) {
+  const box = document.getElementById('nameSuggestions');
+  if (!q || q.length < 2) { box.style.display = 'none'; return; }
+  const res = await fetch('/api/global/employees/search?q=' + encodeURIComponent(q));
+  const d   = await res.json();
+  const emps = d.employees || [];
+  if (!emps.length) { box.style.display = 'none'; return; }
+  box.innerHTML = emps.map(e => `
+    <div class="sug-item" onclick="pickEmp(${e.id},'${esc(e.name)}','${e.code||''}','${esc(e.title||'')}')">
+      <span style="font-weight:600;">${esc(e.name)}</span>
+      ${e.code ? `<span class="code-badge">${e.code}</span>` : ''}
+      <span style="color:var(--muted);font-size:11px;"> ${esc(e.title||'')}</span>
+    </div>`).join('');
+  box.style.display = 'block';
+}
+
+function pickEmp(id, name, code, title) {
+  document.getElementById('tv_name').value       = name;
+  document.getElementById('tv_odoo_id').value    = id;
+  document.getElementById('tv_odoo_code').value  = code;
+  if (title && !document.getElementById('tv_pos').value)
+    document.getElementById('tv_pos').value = title;
+  document.getElementById('nameSuggestions').style.display = 'none';
+}
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('#tv_name') && !e.target.closest('#nameSuggestions'))
+    document.getElementById('nameSuggestions').style.display = 'none';
+});
+
+// ─── Link Modal ───────────────────────────────────────────────────────
+function openLink(id, type, name) {
+  _linkId = id; _linkType = type;
+  document.getElementById('linkModalSub').textContent = 'Linking: ' + name;
+  document.getElementById('linkSearch').value = name;
+  document.getElementById('manualCode').value = '';
+  document.getElementById('linkResults').style.display = 'none';
+  document.getElementById('linkModal').classList.add('open');
+  searchLink(name);
+  setTimeout(() => document.getElementById('linkSearch').focus(), 100);
+}
+
+function closeModal() {
+  document.getElementById('linkModal').classList.remove('open');
+  _linkId = null; _linkType = null;
+}
+
+document.getElementById('linkModal').addEventListener('click', e => {
+  if (e.target === document.getElementById('linkModal')) closeModal();
+});
+
+function searchLink(q) {
+  clearTimeout(_linkTimer);
+  _linkTimer = setTimeout(async () => {
+    const box = document.getElementById('linkResults');
+    if (!q || q.length < 2) { box.style.display='none'; return; }
+    const res = await fetch('/api/global/employees/search?q=' + encodeURIComponent(q));
+    const d   = await res.json();
+    const emps = d.employees || [];
+    if (!emps.length) {
+      box.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:13px;">No employees found</div>';
+      box.style.display = 'block'; return;
+    }
+    box.innerHTML = emps.map(e => `
+      <div class="sug-item" onclick="doLink(${e.id},'${esc(e.name)}','${e.code||''}')">
+        <span style="font-weight:600;">${esc(e.name)}</span>
+        ${e.code ? `<span class="code-badge">${e.code}</span>` : ''}
+        <span style="color:var(--muted);font-size:11px;"> ${esc(e.title||'')}</span>
+      </div>`).join('');
+    box.style.display = 'block';
+  }, 300);
+}
+
+async function confirmManual() {
+  const raw = document.getElementById('manualCode').value.trim();
+  if (!raw) return;
+  // If it's a code like E259
+  if (/^[ERT]\d+$/i.test(raw)) {
+    const res = await fetch('/api/global/employees/search?q=' + encodeURIComponent(raw));
+    const d   = await res.json();
+    const emp = d.employees && d.employees[0];
+    if (emp) { doLink(emp.id, emp.name, emp.code||raw.toUpperCase()); return; }
+    alert('Code ' + raw + ' not found in Odoo');
+    return;
+  }
+  const id = parseInt(raw);
+  if (id > 0) doLink(id, '', '');
+  else alert('Enter employee code (E259) or numeric ID');
+}
+
+async function doLink(odooId, odooName, odooCode) {
+  if (!_linkId || !_linkType) return;
+  const res = await fetch(`/api/global/${_linkType}/${_linkId}`, {
+    method: 'PUT', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({odoo_employee_id: odooId, odoo_employee_name: odooName, odoo_employee_code: odooCode})
+  });
+  const d = await res.json();
+  if (d.ok) {
+    closeModal();
+    if (_linkType === 'travel') loadTravel(); else loadPromos();
+  } else alert('Error: ' + (d.error||'Unknown'));
+}
+
+// ─── Excel Import ─────────────────────────────────────────────────────
+function handleDrop(e, type) {
+  e.preventDefault();
+  const id = type === 'travel' ? 'travelDrop' : 'promoDrop';
+  document.getElementById(id).classList.remove('drag');
+  if (e.dataTransfer.files[0]) processExcel(e.dataTransfer.files[0], type);
+}
+function handleFile(input, type) {
+  if (input.files[0]) processExcel(input.files[0], type);
+  input.value = '';
+}
+
+async function processExcel(file, type) {
+  const resId = type === 'travel' ? 'travelImportResult' : 'promoImportResult';
+  showResult(resId, 'info', '⏳ Reading file…');
+  const reader = new FileReader();
+  reader.onload = async e => {
+    try {
+      const wb = XLSX.read(e.target.result, {type:'array', cellDates:true});
+      let rows = [];
+      wb.SheetNames.forEach(sn => {
+        const ws = wb.Sheets[sn];
+        const r  = XLSX.utils.sheet_to_json(ws, {defval:''});
+        rows = rows.concat(r);
+      });
+      if (!rows.length) { showResult(resId,'err','No data found'); return; }
+
+      // Normalize column names
+      const norm = rows.map(r => {
+        const o = {};
+        Object.keys(r).forEach(k => o[k.trim()] = r[k]);
+        return o;
+      });
+
+      let payload, endpoint;
+      if (type === 'travel') {
+        payload = norm.map(r => ({
+          name:       String(r['Member']||r['Name']||r['name']||'').trim(),
+          position:   String(r['Level']||r['Position']||r['position']||'').trim(),
+          start_date: fmtDate(r['From']||r['Start Date']||r['start_date']||''),
+          end_date:   fmtDate(r['To']||r['End Date']||r['end_date']||''),
+          notes: '', status: 'confirmed'
+        })).filter(r => r.name && r.start_date);
+        endpoint = '/api/global/travel/import';
+      } else {
+        payload = norm.map(r => ({
+          name:           String(r['Name']||r['Name ']||'').trim(),
+          new_title:      String(r['Title']||r['Tittle']||r['Title ']||r['Tittle ']||'').trim(),
+          effective_date: fmtDate(r['Promotion Date']||r['Date of Promotion']||r['Promotion Date ']||''),
+          year:           extractYear(r['Promotion Date']||r['Date of Promotion']||'') || new Date().getFullYear(),
+          notes: ''
+        })).filter(r => r.name);
+        endpoint = '/api/global/promotions/import';
+      }
+
+      const res = await fetch(endpoint, {
+        method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+      });
+      const d = await res.json();
+      showResult(resId, 'ok', `✅ Added ${d.added} records · ${d.skipped} duplicates skipped`);
+      if (type === 'travel') loadTravel(); else loadPromos();
+    } catch(err) {
+      showResult(resId, 'err', '⚠️ Error: ' + err.message);
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function fmtDate(v) {
+  if (!v) return '';
+  if (v instanceof Date) return v.toISOString().slice(0,10);
+  const s = String(v).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0,10);
+  const cleaned = s.replace(/(\d+)(st|nd|rd|th)\s*(of\s*)?/i, '$1 ').trim();
+  const d = new Date(cleaned);
+  if (!isNaN(d)) return d.toISOString().slice(0,10);
+  return s;
+}
+function extractYear(v) {
+  const m = String(v||'').match(/\b(20\d{2})\b/);
+  return m ? parseInt(m[1]) : null;
+}
+
+// ─── PDF Ticket Parser ────────────────────────────────────────────────
+async function parseTicket(input) {
+  const file = input.files[0];
+  if (!file) return;
+  input.value = '';
+  document.getElementById('ticketMsg').textContent = '⏳ Reading ticket…';
+  document.getElementById('ticketPreview').style.display = 'none';
+
+  const form = new FormData();
+  form.append('file', file);
+  try {
+    const res = await fetch('/api/global/travel/parse-ticket', {method:'POST', body: form});
+    const d   = await res.json();
+    if (!d.ok) { document.getElementById('ticketMsg').textContent = '⚠️ ' + (d.error||'Parse failed'); return; }
+    _parsedTicket = d;
+    document.getElementById('ticketMsg').textContent = '';
+    document.getElementById('ticketFields').innerHTML = [
+      {l:'Name',       v: d.name        || '—'},
+      {l:'Start Date', v: d.start_date  || '—'},
+      {l:'End Date',   v: d.end_date    || '(enter manually if return ticket)'},
+      {l:'Direction',  v: d.direction   || '—'},
+      {l:'Route',      v: (d.from_city && d.to_city) ? d.from_city+' → '+d.to_city : '—'},
+      {l:'Airline',    v: d.airline     || '—'},
+    ].map(f => `<div style="background:#fff;padding:8px;border-radius:6px;border:1px solid #D1FAE5;">
+      <div style="font-size:9px;font-weight:700;color:#065F46;text-transform:uppercase;letter-spacing:.4px;margin-bottom:2px;">${f.l}</div>
+      <div style="font-size:13px;font-weight:600;">${f.v}</div>
+    </div>`).join('');
+    document.getElementById('ticketPreview').style.display = 'block';
+  } catch(e) {
+    document.getElementById('ticketMsg').textContent = '⚠️ ' + e.message;
+  }
+}
+
+async function confirmTicket() {
+  if (!_parsedTicket) return;
+  const d = _parsedTicket;
+  if (!d.name) { alert('Name not extracted — add manually'); return; }
+  const res = await fetch('/api/global/travel', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({
+      name: d.name, start_date: d.start_date, end_date: d.end_date||'',
+      notes: [d.airline, d.flight, d.from_city, d.to_city].filter(Boolean).join(' '),
+      status: 'confirmed'
+    })
+  });
+  const r = await res.json();
+  if (r.ok) {
+    document.getElementById('ticketPreview').style.display = 'none';
+    document.getElementById('ticketMsg').textContent = '✅ Added: ' + d.name;
+    _parsedTicket = null;
+    loadTravel();
+  } else if (r.error === 'duplicate') {
+    alert('Already exists: ' + d.name + ' on ' + d.start_date);
+  } else alert('Error: ' + (r.error||'Unknown'));
+}
+
+// ─── Promotions: load ─────────────────────────────────────────────────
+async function loadPromos() {
+  const q      = document.getElementById('promoSearch').value;
+  const year   = document.getElementById('promoYear').value;
+  const filter = document.getElementById('promoFilter').value;
+  const params = new URLSearchParams();
+  if (q)    params.set('q', q);
+  if (year) params.set('year', year);
+  if (filter === 'linked')   params.set('linked', '1');
+  if (filter === 'unlinked') params.set('linked', '0');
+
+  const res = await fetch('/api/global/promotions?' + params);
+  const d   = await res.json();
+  document.getElementById('promoCount').textContent = d.total;
+
+  const rows = d.records || [];
+  document.getElementById('promoBody').innerHTML = rows.length
+    ? rows.map(r => `
+      <tr>
+        <td style="color:var(--muted);font-size:11px;">${r.id}</td>
+        <td>
+          <span style="font-weight:600;">${esc(r.name)}</span>
+          ${codeTag(r,'promotions')}
+        </td>
+        <td style="font-size:12px;">${esc(r.new_title||'—')}</td>
+        <td style="font-size:12px;">${r.effective_date||'—'}</td>
+        <td><span class="badge badge-blue" style="font-size:10px;">${r.year||'—'}</span></td>
+        <td style="font-size:11px;color:var(--muted);">${esc(r.notes||'')}</td>
+        <td style="white-space:nowrap;">
+          <button class="btn btn-ghost btn-sm" onclick='openEdit(${JSON.stringify(r).replace(/'/g,"\\'")},"promotions")'>✎</button>
+          <button class="btn btn-danger btn-sm" onclick="delPromo(${r.id})">✕</button>
+        </td>
+      </tr>`).join('')
+    : '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--muted);">No records found</td></tr>';
+}
+
+// ─── Promotions: CRUD ─────────────────────────────────────────────────
+function cancelPromo() {
+  _editPromo = null;
+  ['pm_name','pm_title','pm_date','pm_year','pm_notes'].forEach(id => document.getElementById(id).value='');
+  document.getElementById('promoForm').classList.remove('open');
+  document.getElementById('promoSaveBtn').textContent = 'Save Record';
+}
+
+async function savePromo() {
+  const name = document.getElementById('pm_name').value.trim();
+  if (!name) { alert('Name is required'); return; }
+  const body = {
+    name,
+    new_title:      document.getElementById('pm_title').value.trim(),
+    effective_date: document.getElementById('pm_date').value,
+    year:           parseInt(document.getElementById('pm_year').value) || new Date().getFullYear(),
+    notes:          document.getElementById('pm_notes').value.trim(),
+  };
+  const url    = _editPromo ? `/api/global/promotions/${_editPromo.id}` : '/api/global/promotions';
+  const method = _editPromo ? 'PUT' : 'POST';
+  const res = await fetch(url, {method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  const d   = await res.json();
+  if (d.ok) { cancelPromo(); loadPromos(); }
+  else if (d.error === 'duplicate') alert('Duplicate: same name + year exists.');
+  else alert('Error: ' + (d.error||'Unknown'));
+}
+
+async function delPromo(id) {
+  if (!confirm('Delete this promotion record?')) return;
+  const res = await fetch('/api/global/promotions/'+id, {method:'DELETE'});
+  const d   = await res.json();
+  if (d.ok) loadPromos();
+  else alert('Error: ' + (d.error||'Unknown'));
+}
+
+// ─── Init ─────────────────────────────────────────────────────────────
+loadTravel();
+</script>
+</body>
+</html>
