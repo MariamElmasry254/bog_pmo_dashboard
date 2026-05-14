@@ -3923,10 +3923,28 @@ def api_effort_all_months(phase_key):
         1 if x.get('is_onsite') else 0
     ))
 
+    # Build per-month cost totals for profitability
+    month_cost_totals = {m['key']: 0.0 for m in months}
+    month_md_totals   = {m['key']: 0.0 for m in months}
+    for emp in employees_out:
+        hr  = emp.get('hour_rate') or 0
+        otr = emp.get('overtime_rate') or hr * 1.5
+        for m in months:
+            cell = emp['months'].get(m['key'], {'regular':0,'ramadan':0,'overtime':0})
+            reg, ram, ot = cell['regular'], cell['ramadan'], cell['overtime']
+            month_md_totals[m['key']]   += (reg + ot) / 8 + ram / 6
+            if hr > 0:
+                month_cost_totals[m['key']] += (reg + ram) * hr + ot * otr
+            elif emp.get('total_cost_usd') and emp.get('total_hours', 0) > 0:
+                frac = (reg + ram + ot) / emp['total_hours']
+                month_cost_totals[m['key']] += emp['total_cost_usd'] * frac
+
     return jsonify({
         'phase': phase_key,
         'months': months,
         'employees': employees_out,
+        'month_cost_usd': month_cost_totals,
+        'month_mds': month_md_totals,
         'project_start_month': months[0]['key'] if months else None,
         'total_employees': len(employees_out),
     })
