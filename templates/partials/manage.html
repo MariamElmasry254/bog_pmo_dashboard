@@ -253,7 +253,19 @@ tr:hover td{background:#FAFAFA;}
       <button class="btn btn-ghost" onclick="toggleForm('promoForm')">+ Add Manually</button>
     </div>
     <div class="result-bar" id="autoLinkPromoResult"></div>
+    <!-- Promo Bulk Bar -->
+    <div class="bulk-bar" id="promoBulkBar">
+      <span id="promoBulkCount" style="font-size:13px;font-weight:600;color:#1E40AF;"></span>
+      <button class="btn btn-danger btn-sm" onclick="bulkDeletePromos()">🗑 Delete</button>
+      <button class="btn btn-ghost btn-sm" style="margin-left:auto;" onclick="clearPromoSelection()">✕ Clear</button>
+    </div>
     <div class="result-bar" id="autoLinkPromoResult"></div>
+    <!-- Promo Bulk Bar -->
+    <div class="bulk-bar" id="promoBulkBar">
+      <span id="promoBulkCount" style="font-size:13px;font-weight:600;color:#1E40AF;"></span>
+      <button class="btn btn-danger btn-sm" onclick="bulkDeletePromos()">🗑 Delete</button>
+      <button class="btn btn-ghost btn-sm" style="margin-left:auto;" onclick="clearPromoSelection()">✕ Clear</button>
+    </div>
 
     <!-- Add/Edit Form -->
     <div class="add-form" id="promoForm">
@@ -289,7 +301,7 @@ tr:hover td{background:#FAFAFA;}
     <div class="tbl-wrap">
       <table>
         <thead><tr>
-          <th style="width:36px;"></th>
+          <th style="width:36px;"><input type="checkbox" id="promoSelectAll" onclick="selectAllPromos(this)"></th>
           <th>Name</th><th>New Title / Position</th><th>Effective Date</th><th>Year</th><th>Notes</th><th></th>
         </tr></thead>
         <tbody id="promoBody">
@@ -396,7 +408,7 @@ async function loadTravel() {
           <button class="btn btn-danger btn-sm" onclick="delTravel(${r.id})">✕</button>
         </td>
       </tr>`).join('')
-    : '<tr><td colspan="6" style="text-align:center;padding:32px;color:var(--muted);">No records found</td></tr>';
+    : '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--muted);">No records found</td></tr>';
 }
 
 function codeTag(r, type) {
@@ -828,15 +840,20 @@ async function loadPromos() {
 
   const res = await fetch('/api/global/promotions?' + params);
   const d   = await res.json();
+  // Reset promo selection
+  _promoSel.clear();
+  const psa = document.getElementById('promoSelectAll');
+  if (psa) psa.checked = false;
+  updatePromoBulkBar();
   document.getElementById('promoCount').textContent = d.total;
 
   const rows = d.records || [];
   document.getElementById('promoBody').innerHTML = rows.length
     ? rows.map(r => `
-      <tr>
+      <tr id="pr${r.id}">
+        <td style="width:36px;"><input type="checkbox" class="pcb" data-id="${r.id}" onclick="onPromoCb(this)" style="cursor:pointer;width:15px;height:15px;"></td>
         <td>
-          <span style="font-weight:600;">${esc(r.name)}</span>
-          ${codeTag(r,'promotions')}
+          <div style="font-weight:600;font-size:13px;">${esc(r.name)} ${codeTag(r,'promotions')}</div>
         </td>
         <td style="font-size:12px;">${esc(r.new_title||'—')}</td>
         <td style="font-size:12px;">${r.effective_date||'—'}</td>
@@ -847,10 +864,55 @@ async function loadPromos() {
           <button class="btn btn-danger btn-sm" onclick="delPromo(${r.id})">✕</button>
         </td>
       </tr>`).join('')
-    : '<tr><td colspan="6" style="text-align:center;padding:32px;color:var(--muted);">No records found</td></tr>';
+    : '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--muted);">No records found</td></tr>';
 }
 
 // ─── Promotions: CRUD ─────────────────────────────────────────────────
+let _promoSel = new Set();
+
+function selectAllPromos(cb) {
+  _promoSel.clear();
+  document.querySelectorAll('.pcb').forEach(el => {
+    el.checked = cb.checked;
+    if (cb.checked) _promoSel.add(parseInt(el.dataset.id));
+  });
+  updatePromoBulkBar();
+}
+
+function onPromoCb(el) {
+  const id = parseInt(el.dataset.id);
+  el.checked ? _promoSel.add(id) : _promoSel.delete(id);
+  updatePromoBulkBar();
+}
+
+function updatePromoBulkBar() {
+  const bar = document.getElementById('promoBulkBar');
+  const cnt = document.getElementById('promoBulkCount');
+  if (_promoSel.size > 0) {
+    bar.style.display = 'flex';
+    cnt.textContent = _promoSel.size + ' selected';
+  } else {
+    bar.style.display = 'none';
+  }
+}
+
+function clearPromoSelection() {
+  _promoSel.clear();
+  document.querySelectorAll('.pcb').forEach(e => e.checked = false);
+  const sa = document.getElementById('promoSelectAll');
+  if (sa) sa.checked = false;
+  updatePromoBulkBar();
+}
+
+async function bulkDeletePromos() {
+  if (!confirm(`Delete ${_promoSel.size} promotion records?`)) return;
+  for (const id of [..._promoSel]) {
+    await fetch('/api/global/promotions/' + id, {method:'DELETE'});
+  }
+  _promoSel.clear();
+  loadPromos();
+}
+
 function cancelPromo() {
   _editPromo = null;
   ['pm_name','pm_title','pm_date','pm_year','pm_notes'].forEach(id => document.getElementById(id).value='');
