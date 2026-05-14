@@ -1,39 +1,36 @@
 <section class="tab-panel active" id="overview">
   <!-- ══ SUMMARY SECTION ══ -->
 
-  <!-- Period + Team inline row -->
-  <div style="display:flex;gap:16px;align-items:stretch;margin-bottom:16px;flex-wrap:wrap;">
+  <!-- Period + Team (inline, compact) -->
+  <div style="display:flex;gap:14px;align-items:stretch;margin-bottom:16px;flex-wrap:wrap;">
 
-    <!-- Period tag (left, compact) -->
-    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;
-                padding:14px 20px;display:flex;flex-direction:column;justify-content:center;min-width:260px;">
-      <div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">PERIOD</div>
-      <div style="font-size:15px;font-weight:700;font-family:var(--mono);" id="ovPeriod">—</div>
+    <!-- Period (compact left pill) -->
+    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;
+                padding:10px 18px;display:flex;flex-direction:column;justify-content:center;">
+      <div style="font-size:9px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:3px;">Period</div>
+      <div style="font-size:13px;font-weight:700;font-family:var(--mono);white-space:nowrap;" id="ovPeriod">—</div>
     </div>
 
-    <!-- Team card (right, expandable) -->
-    <div style="flex:1;min-width:320px;background:var(--bg-card);border:1px solid var(--border);
-                border-top:3px solid var(--navy);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;">
-      <div style="display:flex;border-bottom:1px solid var(--border);flex-shrink:0;">
-        <button id="teamTabDev" onclick="switchTeamTab('development')"
-          style="flex:1;padding:8px 12px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
-                 background:var(--navy);color:white;border:none;cursor:pointer;">Development</button>
-        <button id="teamTabCon" onclick="switchTeamTab('consultation')"
-          style="flex:1;padding:8px 12px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
-                 background:var(--bg-subtle);color:var(--text-muted);border:none;cursor:pointer;border-left:1px solid var(--border);">Consultation</button>
+    <!-- Team (clickable summary → opens modal with 2 tabs) -->
+    <button onclick="openTeamModal()" id="kpiTeamCard"
+      style="flex:1;min-width:280px;background:var(--bg-card);border:1px solid var(--border);
+             border-top:3px solid var(--navy);border-radius:8px;padding:10px 18px;
+             display:flex;align-items:center;gap:16px;cursor:pointer;text-align:left;
+             transition:box-shadow .15s;" 
+      onmouseover="this.style.boxShadow='0 2px 12px rgba(0,0,0,0.1)'"
+      onmouseout="this.style.boxShadow=''">
+      <!-- Avatar stack placeholder -->
+      <div style="display:flex;gap:-4px;" id="kpiTeamAvatars"></div>
+      <div>
+        <div style="font-size:9px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:2px;">Team Members</div>
+        <div style="font-size:18px;font-weight:700;color:var(--text);line-height:1;" id="kpiTeamCount">—</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:1px;" id="kpiTeamSubtext">Click to view by phase</div>
       </div>
-      <div style="overflow-y:auto;max-height:130px;padding:8px 12px;" id="kpiTeamList">
-        <div style="color:var(--text-muted);font-size:12px;">Loading…</div>
-      </div>
-      <div style="padding:6px 12px;border-top:1px solid var(--border);display:flex;justify-content:space-between;
-                  align-items:center;background:var(--bg-subtle);flex-shrink:0;">
-        <span style="font-size:11px;color:var(--text-muted);" id="kpiTeamCount">—</span>
-        <button onclick="openTeamModal()" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer;font-weight:500;">Full team →</button>
-      </div>
-    </div>
+      <div style="margin-left:auto;color:var(--text-muted);font-size:18px;">›</div>
+    </button>
   </div>
 
-  <!-- Financial summary: 3 cards side by side -->
+  <!-- Financial cards: Revenue | Current Cost | EAC -->
   <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:14px;">
 
     <!-- A: Revenue -->
@@ -76,20 +73,14 @@
     <div style="background:var(--bg-card);border:1px solid var(--border);border-top:3px solid var(--amber);border-radius:10px;padding:16px 20px;">
       <div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Estimate at Completion</div>
       <div style="font-size:24px;font-weight:700;color:var(--amber);line-height:1;margin-bottom:12px;" id="kpiTotalEAC">—</div>
-      <div style="display:flex;flex-direction:column;gap:5px;border-top:1px solid var(--border);padding-top:10px;">
-        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;">
-          <span style="font-size:10px;font-weight:600;color:var(--blue);text-transform:uppercase;letter-spacing:.3px;white-space:nowrap;">Consultation</span>
-          <div style="text-align:right;">
-            <span style="font-size:12px;font-weight:600;" id="kpiConEAC">—</span>
-            <div style="font-size:10px;color:var(--text-muted);" id="kpiConEACmds"></div>
-          </div>
+      <div style="display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--border);padding-top:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-size:10px;font-weight:600;color:var(--blue);text-transform:uppercase;letter-spacing:.3px;">Consultation</span>
+          <span style="font-size:12px;font-weight:600;" id="kpiConEAC">—</span>
         </div>
-        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;">
-          <span style="font-size:10px;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:.3px;white-space:nowrap;">Development</span>
-          <div style="text-align:right;">
-            <span style="font-size:12px;font-weight:600;" id="kpiDevEAC">—</span>
-            <div style="font-size:10px;color:var(--text-muted);" id="kpiDevEACmds"></div>
-          </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-size:10px;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:.3px;">Development</span>
+          <span style="font-size:12px;font-weight:600;" id="kpiDevEAC">—</span>
         </div>
       </div>
     </div>
