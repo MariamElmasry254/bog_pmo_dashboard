@@ -239,19 +239,20 @@ tr:hover td{background:#FAFAFA;}
     <!-- Toolbar -->
     <div class="toolbar">
       <input class="search-inp" id="promoSearch" placeholder="🔍 Search by name…" oninput="loadPromos()">
-      <select class="filter-sel" id="promoYear" onchange="loadPromos()">
-        <option value="">All years</option>
-        <option value="2025">2025</option>
-        <option value="2026">2026</option>
-      </select>
       <select class="filter-sel" id="promoFilter" onchange="loadPromos()">
         <option value="all">All</option>
         <option value="linked">✅ Linked</option>
         <option value="unlinked">⚠ Unlinked</option>
       </select>
+      <select class="filter-sel" id="promoYear" onchange="loadPromos()">
+        <option value="">All years</option>
+        <option value="2025">2025</option>
+        <option value="2026">2026</option>
+      </select>
       <button class="btn btn-ghost" onclick="autoLink('promotions')">⚡ Auto-Link All</button>
       <button class="btn btn-ghost" onclick="toggleForm('promoForm')">+ Add Manually</button>
     </div>
+    <div class="result-bar" id="autoLinkPromoResult"></div>
     <div class="result-bar" id="autoLinkPromoResult"></div>
 
     <!-- Add/Edit Form -->
@@ -401,13 +402,14 @@ async function loadTravel() {
 function codeTag(r, type) {
   type = type || 'travel';
   // ONLY show employee code (E259/R210/T123) — never show #id
-  const code = r.odoo_employee_code ? r.odoo_employee_code.toUpperCase() : null;
+  // Only show valid employee codes (E/R/T format)
+  const raw_code = (r.odoo_employee_code || '').trim().toUpperCase();
+  const code = /^[ERT]\d+$/.test(raw_code) ? raw_code : null;
   if (code) {
     return '<span class="code-badge">' + code + '</span>';
   }
   // No code yet — show clickable "unlinked" to open link modal
-  const safeName = (r.name || '').replace(/'/g, "\'");
-  return '<a href="#" onclick="openLink(' + r.id + ',\'' + type + '\',\'' + safeName + '\')" style="font-size:10px;color:#9CA3AF;margin-left:3px;text-decoration:underline;">unlinked</a>';
+  return '<a href="#" onclick="openLinkById(' + r.id + ',\'' + type + '\')" style="font-size:10px;color:#9CA3AF;margin-left:3px;text-decoration:underline;">unlinked</a>';
 }
 
 function esc(s) {
@@ -580,6 +582,17 @@ document.addEventListener('click', e => {
 });
 
 // ─── Link Modal ───────────────────────────────────────────────────────
+function openLinkById(id, type) {
+  // Find record name from loaded data
+  const rows = document.querySelectorAll(`[data-id="${id}"]`);
+  let name = '';
+  if (rows.length > 0) {
+    const row = rows[0].closest('tr');
+    if (row) name = row.querySelector('span[style*="font-weight:600"]')?.textContent?.trim() || '';
+  }
+  openLink(id, type, name);
+}
+
 function openLink(id, type, name) {
   _linkId = id; _linkType = type;
   document.getElementById('linkModalSub').textContent = 'Linking: ' + name;
@@ -612,8 +625,9 @@ function searchLink(q) {
       box.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:13px;">No employees found</div>';
       box.style.display = 'block'; return;
     }
-    box.innerHTML = emps.map(e => `
-      <div class="sug-item" onclick="doLink(${e.id},'${esc(e.name)}','${e.code||''}')">
+    window._linkEmps = emps;
+    box.innerHTML = emps.map((e,i) => `
+      <div class="sug-item" data-idx="${i}" onclick="pickLinkEmp(this)">
         <span style="font-weight:600;">${esc(e.name)}</span>
         ${e.code ? `<span class="code-badge">${e.code}</span>` : ''}
         <span style="color:var(--muted);font-size:11px;"> ${esc(e.title||'')}</span>
@@ -637,6 +651,13 @@ async function confirmManual() {
   const id = parseInt(raw);
   if (id > 0) doLink(id, '', '');
   else alert('Enter employee code (E259) or numeric ID');
+}
+
+function pickLinkEmp(el) {
+  const idx = parseInt(el.dataset.idx);
+  const e = (window._linkEmps || [])[idx];
+  if (!e) return;
+  doLink(e.id, e.name, e.code || '');
 }
 
 async function doLink(odooId, odooName, odooCode) {
