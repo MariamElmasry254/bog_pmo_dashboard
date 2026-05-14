@@ -4624,75 +4624,95 @@ def api_estimated_rows_save():
 def api_invoices():
     """Get validated invoices for BOG project from Odoo, split by phase, excluding License."""
     try:
-        odoo = get_odoo_client()
-        if not odoo:
-            return jsonify({'error': 'Odoo not connected'}), 503
+        if not odoo.uid:
+            if not odoo.connect():
+                return jsonify({'error': 'Odoo not connected', 'development': 0, 'consultation': 0, 'support': 0, 'invoices': []}), 503
 
-        # Get sale order lines linked to the BOG project (project_id=228)
-        # account.move (invoices) linked to sale.order
-        # Search validated invoices (state=posted) for this project
-        invoices = odoo.search_read(
-            'account.move',
-            [
-                ('move_type', '=', 'out_invoice'),
-                ('state', '=', 'posted'),
-                ('invoice_line_ids.sale_line_ids.order_id.project_ids', 'in', [PROJECT_ID]),
-            ],
-            ['name', 'invoice_date', 'amount_untaxed', 'amount_total', 'state',
-             'invoice_line_ids', 'invoice_origin'],
-            limit=200
+        # Search validated invoices by invoice_origin containing project name OR by sale order name
+        # In Odoo v14, invoices linked to sales orders have invoice_origin = SO name
+        # First find sale orders for this project
+        sale_orders = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'sale.order', 'search_read',
+            [[('project_ids.name', 'ilike', 'BOG Digital Transformation')]],
+            {'fields': ['name', 'id'], 'limit': 50}
+        )
+        so_names = [so['name'] for so in sale_orders]
+        so_ids   = [so['id']   for so in sale_orders]
+
+        logger.info(f"Found {len(so_ids)} sale orders for BOG: {so_names}")
+
+        # Find posted invoices linked to these SOs
+        domain = [('move_type', '=', 'out_invoice'), ('state', '=', 'posted')]
+        if so_ids:
+            domain.append(('invoice_line_ids.sale_line_ids.order_id', 'in', so_ids))
+        else:
+            # Fallback: search by origin
+            domain.append(('invoice_origin', 'ilike', 'BOG'))
+
+        invoices = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'account.move', 'search_read',
+            [domain],
+            {'fields': ['name', 'invoice_date', 'amount_untaxed', 'invoice_line_ids', 'invoice_origin', 'state'], 'limit': 200}
         )
 
-        # Also get invoice lines with descriptions to categorize
-        result = {'development': 0, 'consultation': 0, 'support': 0, 'other': 0,
-                  'invoices': []}
+        logger.info(f"Found {len(invoices)} invoices for BOG")
+
+        result = {'development': 0.0, 'consultation': 0.0, 'support': 0.0, 'other': 0.0, 'invoices': []}
 
         for inv in invoices:
-            # Get invoice lines
-            lines = odoo.search_read(
-                'account.move.line',
-                [
-                    ('move_id', '=', inv['id']),
-                    ('display_type', 'not in', ['line_section', 'line_note']),
-                    ('exclude_from_invoice_tab', '=', False),
-                ],
-                ['name', 'price_subtotal', 'product_id']
+            line_ids = inv.get('invoice_line_ids', [])
+            if not line_ids:
+                continue
+
+            lines = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'account.move.line', 'search_read',
+                [[('id', 'in', line_ids), ('display_type', 'not in', ['line_section', 'line_note'])]],
+                {'fields': ['name', 'price_subtotal', 'product_id']}
             )
 
-            inv_total = 0
+            inv_dev = inv_con = inv_sup = 0.0
             for line in lines:
-                name = (line.get('name') or '').lower()
-                amount = line.get('price_subtotal', 0) or 0
-
+                name = (line.get('name') or '').lower().strip()
+                amount = float(line.get('price_subtotal') or 0)
                 # Skip license lines
                 if 'license' in name:
                     continue
-
-                inv_total += amount
-
-                # Categorize by description
-                if 'development' in name or 'dev' in name or 'reengineering' in name or 'business re' in name:
+                # Categorize:
+                # Development: "development" or "business re engineering" or "business reengineering"
+                if 'development' in name:
+                    inv_dev += amount
                     result['development'] += amount
-                elif 'consultation' in name or 'consult' in name or 'analysis' in name:
+                # Consultation: "process re engineering" or "consultation" or "analysis"
+                elif 'process re' in name or 'reengineering' in name or 'consultation' in name or 'analysis' in name or 'business re' in name:
+                    inv_con += amount
                     result['consultation'] += amount
-                elif 'support' in name or 'operation' in name:
+                # Support: "operation" or "support"
+                elif 'operation' in name or 'support' in name:
+                    inv_sup += amount
                     result['support'] += amount
                 else:
                     result['other'] += amount
 
+            inv_total = inv_dev + inv_con + inv_sup
             if inv_total > 0:
                 result['invoices'].append({
                     'name': inv['name'],
                     'date': inv.get('invoice_date', ''),
                     'amount_untaxed': inv_total,
+                    'development': inv_dev,
+                    'consultation': inv_con,
+                    'support': inv_sup,
                     'origin': inv.get('invoice_origin', ''),
                 })
 
         return jsonify(result)
 
     except Exception as e:
-        logger.error(f"Invoices API error: {e}")
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Invoices API error: {e}", exc_info=True)
+        return jsonify({'error': str(e), 'development': 0, 'consultation': 0, 'support': 0, 'invoices': []}), 500
 
 
 @app.route('/api/invoices/by-phase/<phase>')
