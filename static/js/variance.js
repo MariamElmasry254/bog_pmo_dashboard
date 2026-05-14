@@ -351,61 +351,146 @@ function renderBudgetChanges(phaseKey) {
   const changes = _budgetChanges[phaseKey] || [];
 
   if (!changes.length) {
-    cont.innerHTML = `<div style="text-align:center; padding:24px; color:var(--text-muted); font-size:13px;">
-      No budget changes recorded yet — click "+ Add Change"
-    </div>`;
+    cont.innerHTML = `
+      <div style="display:flex;flex-direction:column;align-items:center;gap:8px;
+                  padding:32px 16px;color:var(--text-muted);">
+        <div style="font-size:28px;opacity:.4;">📋</div>
+        <div style="font-size:13px;font-weight:500;">No budget changes recorded yet</div>
+        <div style="font-size:11px;opacity:.7;">Click "+ Add Change" to log a CR or budget revision</div>
+      </div>`;
     return;
   }
 
-  const rows = changes.map((c, i) => {
+  const totalDeltaCost = changes.reduce((s,c) => s+(parseFloat(c.delta_cost)||0), 0);
+  const totalDeltaRev  = changes.reduce((s,c) => s+(parseFloat(c.delta_rev) ||0), 0);
+  const fmtDelta = v => {
+    if (!v) return '<span style="color:var(--text-muted);">—</span>';
+    const sign  = v > 0 ? '+' : '';
+    const color = v < 0 ? 'var(--red)' : 'var(--green)';
+    return `<span style="color:${color};font-weight:700;">${sign}${fmt.money(Math.round(v))}</span>`;
+  };
+
+  const cards = changes.map((c, i) => {
     const rev  = parseFloat(c.delta_rev)  || 0;
     const cost = parseFloat(c.delta_cost) || 0;
-    const revStyle  = rev  < 0 ? 'color:var(--red);' : rev  > 0 ? 'color:var(--green);' : '';
-    const costStyle = cost > 0 ? 'color:var(--red);' : cost < 0 ? 'color:var(--green);' : '';
-    return `<tr>
-      <td style="min-width:220px;">
-        <input type="text" class="svc-input" style="width:100%;"
-          placeholder="Reason / Description" value="${(c.reason||'').replace(/"/g,'&quot;')}"
-          oninput="_budgetChanges['${phaseKey}'][${i}].reason=this.value; budgetSaveChanges('${phaseKey}')">
-      </td>
-      <td>
-        <input type="date" class="svc-input" style="width:130px;"
-          value="${c.change_date||''}"
-          oninput="_budgetChanges['${phaseKey}'][${i}].change_date=this.value; budgetSaveChanges('${phaseKey}'); budgetAutoCalc('${phaseKey}')">
-      </td>
-      <td>
-        <input type="text" class="svc-input" style="width:80px;"
-          placeholder="CR-001" value="${(c.plan_id||'').replace(/"/g,'&quot;')}"
-          oninput="_budgetChanges['${phaseKey}'][${i}].plan_id=this.value; budgetSaveChanges('${phaseKey}')">
-      </td>
-      <td class="num">
-        <input type="number" step="1" class="svc-input" style="width:120px;text-align:right;${costStyle}"
-          placeholder="0" value="${c.delta_cost||''}"
-          oninput="_budgetChanges['${phaseKey}'][${i}].delta_cost=parseFloat(this.value)||0; budgetSaveChanges('${phaseKey}'); budgetAutoCalc('${phaseKey}')">
-      </td>
-      <td class="num">
-        <input type="number" step="1" class="svc-input" style="width:120px;text-align:right;${revStyle}"
-          placeholder="0" value="${c.delta_rev||''}"
-          oninput="_budgetChanges['${phaseKey}'][${i}].delta_rev=parseFloat(this.value)||0; budgetSaveChanges('${phaseKey}'); budgetAutoCalc('${phaseKey}')">
-      </td>
-      <td>
-        <button onclick="budgetDeleteChange('${phaseKey}',${i})"
-          style="background:none;border:none;cursor:pointer;color:var(--red);font-size:16px;" title="Delete">🗑</button>
-      </td>
-    </tr>`;
+    const revColor  = rev  < 0 ? 'var(--red)'   : rev  > 0 ? 'var(--green)' : 'var(--text-muted)';
+    const costColor = cost > 0 ? 'var(--red)'   : cost < 0 ? 'var(--green)' : 'var(--text-muted)';
+    const accentColor = (cost > 0 || rev < 0) ? 'var(--amber)' : 'var(--blue)';
+    const crBadge = c.plan_id
+      ? `<span style="display:inline-block;padding:2px 9px;border-radius:12px;
+                      background:var(--blue)18;color:var(--blue);font-size:10px;font-weight:700;
+                      letter-spacing:.4px;border:1px solid var(--blue)30;">
+           ${(c.plan_id||'').replace(/</g,'&lt;')}
+         </span>` : '';
+    const dateBadge = c.change_date
+      ? `<span style="font-size:11px;color:var(--text-muted);">📅 ${c.change_date}</span>` : '';
+
+    const net = cost + rev;
+    const netHtml = (cost !== 0 || rev !== 0) ? (() => {
+      const nc = net < 0 ? 'var(--green)' : net > 0 ? 'var(--red)' : 'var(--text-muted)';
+      const sign = net > 0 ? '+' : '';
+      return `<div style="display:flex;align-items:center;gap:6px;padding:6px 10px;
+                          background:var(--bg-subtle);border-radius:6px;margin-top:8px;">
+                <span style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;">Net Impact</span>
+                <span style="font-size:13px;font-weight:700;color:${nc};margin-left:auto;">${sign}${fmt.money(Math.round(net))} SAR</span>
+              </div>`;
+    })() : '';
+
+    const safeReason = (c.reason||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    const safePlanId = (c.plan_id||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+
+    return `
+      <div style="background:var(--bg-card);border:1px solid var(--border-light);
+                  border-left:3px solid ${accentColor};border-radius:10px;padding:14px 16px;">
+
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+          ${crBadge}
+          ${dateBadge}
+          <button onclick="budgetDeleteChange('${phaseKey}',${i})"
+            style="margin-left:auto;background:none;border:none;cursor:pointer;
+                   color:var(--text-muted);font-size:13px;padding:3px 6px;border-radius:4px;"
+            onmouseover="this.style.color='var(--red)'"
+            onmouseout="this.style.color='var(--text-muted)'" title="Remove">✕</button>
+        </div>
+
+        <div style="margin-bottom:12px;">
+          <label style="display:block;font-size:10px;font-weight:700;color:var(--text-muted);
+                        text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">
+            Reason / Description
+          </label>
+          <input type="text" class="svc-input" style="width:100%;font-size:13px;"
+            placeholder="e.g. Scope change — added reporting module"
+            value="${safeReason}"
+            oninput="_budgetChanges['${phaseKey}'][${i}].reason=this.value; budgetSaveChanges('${phaseKey}')">
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+          <div>
+            <label style="display:block;font-size:10px;font-weight:700;color:var(--text-muted);
+                          text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Date</label>
+            <input type="date" class="svc-input" style="width:100%;font-size:13px;"
+              value="${c.change_date||''}"
+              oninput="_budgetChanges['${phaseKey}'][${i}].change_date=this.value;
+                       budgetSaveChanges('${phaseKey}'); budgetAutoCalc('${phaseKey}')">
+          </div>
+          <div>
+            <label style="display:block;font-size:10px;font-weight:700;color:var(--text-muted);
+                          text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Plan / CR ID</label>
+            <input type="text" class="svc-input" style="width:100%;font-size:13px;"
+              placeholder="CR-001" value="${safePlanId}"
+              oninput="_budgetChanges['${phaseKey}'][${i}].plan_id=this.value; budgetSaveChanges('${phaseKey}')">
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div>
+            <label style="display:block;font-size:10px;font-weight:700;color:var(--text-muted);
+                          text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">
+              Δ Cost (SAR)
+              <span style="font-weight:400;text-transform:none;"> + = increase</span>
+            </label>
+            <input type="number" step="1" class="svc-input"
+              style="width:100%;font-size:14px;font-weight:600;text-align:right;color:${costColor};"
+              placeholder="0" value="${c.delta_cost||''}"
+              oninput="_budgetChanges['${phaseKey}'][${i}].delta_cost=parseFloat(this.value)||0;
+                       budgetSaveChanges('${phaseKey}'); budgetAutoCalc('${phaseKey}');
+                       this.style.color=parseFloat(this.value)>0?'var(--red)':parseFloat(this.value)<0?'var(--green)':'var(--text-muted)'">
+          </div>
+          <div>
+            <label style="display:block;font-size:10px;font-weight:700;color:var(--text-muted);
+                          text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">
+              Δ Revenue (SAR)
+              <span style="font-weight:400;text-transform:none;"> − = reduction</span>
+            </label>
+            <input type="number" step="1" class="svc-input"
+              style="width:100%;font-size:14px;font-weight:600;text-align:right;color:${revColor};"
+              placeholder="0" value="${c.delta_rev||''}"
+              oninput="_budgetChanges['${phaseKey}'][${i}].delta_rev=parseFloat(this.value)||0;
+                       budgetSaveChanges('${phaseKey}'); budgetAutoCalc('${phaseKey}');
+                       this.style.color=parseFloat(this.value)<0?'var(--red)':parseFloat(this.value)>0?'var(--green)':'var(--text-muted)'">
+          </div>
+        </div>
+        ${netHtml}
+      </div>`;
   }).join('');
 
-  cont.innerHTML = `<table class="data-table">
-    <thead><tr>
-      <th>Reason / Description</th>
-      <th>Date</th>
-      <th>Plan / CR ID</th>
-      <th class="num">Δ Cost (SAR)</th>
-      <th class="num">Δ Revenue (SAR)</th>
-      <th></th>
-    </tr></thead>
-    <tbody>${rows}</tbody>
-  </table>`;
+  const summaryBar = `
+    <div style="display:flex;gap:16px;padding:10px 14px;background:var(--bg-subtle);
+                border-radius:8px;border:1px solid var(--border-light);flex-wrap:wrap;align-items:center;">
+      <span style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;">
+        ${changes.length} Change${changes.length!==1?'s':''}
+      </span>
+      <div style="display:flex;align-items:center;gap:6px;margin-left:auto;">
+        <span style="font-size:11px;color:var(--text-muted);">Σ Δ Cost:</span>
+        ${fmtDelta(totalDeltaCost)}
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <span style="font-size:11px;color:var(--text-muted);">Σ Δ Revenue:</span>
+        ${fmtDelta(totalDeltaRev)}
+      </div>
+    </div>`;
+
+  cont.innerHTML = `<div style="display:flex;flex-direction:column;gap:10px;">${cards}${summaryBar}</div>`;
 }
 
 // Auto-save revenue input
@@ -718,7 +803,7 @@ async function _doBuildProfTable(phaseKey, wrap, months) {
           <th colspan="2" style="text-align:center;background:#1B2A4E;color:#93C5FD;border-left:3px solid #60A5FA;">% Completion & Remaining</th>
           <th colspan="8" style="text-align:center;background:#1B2A4E;color:#6EE7B7;border-left:3px solid #10B981;">Cost Variance</th>
           <th colspan="6" style="text-align:center;background:#1B2A4E;color:#FCA5A5;border-left:3px solid #EF4444;">Profitability</th>
-          <th colspan="5" style="text-align:center;background:#1B2A4E;color:#C4B5FD;border-left:3px solid #8B5CF6;">Progress &amp; Virtual Invoice</th>
+          <th colspan="6" style="text-align:center;background:#1B2A4E;color:#C4B5FD;border-left:3px solid #8B5CF6;">Progress &amp; Virtual Invoice</th>
         </tr>
         <tr style="font-size:10px;background:#f8fafc;">
           <th class="num" style="border-left:3px solid #3B82F6;">Revenue SAR</th>
@@ -744,6 +829,7 @@ async function _doBuildProfTable(phaseKey, wrap, months) {
           <th class="num" style="border-left:3px solid #8B5CF6;">Total Recog. Revenue</th>
           <th class="num">Progress %</th>
           <th class="num">Production</th>
+          <th class="num">Total Issued SAR</th>
           <th class="num">Acc. VI SAR</th>
           <th class="num">This Month VI SAR</th>
         </tr>
@@ -793,6 +879,7 @@ async function _doBuildProfTable(phaseKey, wrap, months) {
             <td class="num" style="border-left:3px solid #8B5CF6;"><span class="pc-rev-todate-${monthKey}">—</span></td>
             <td class="num"><span class="pc-progress-${monthKey}">—</span></td>
             <td class="num"><span class="pc-production-${monthKey}">—</span></td>
+            <td class="num"><span class="pc-issued-${monthKey}">—</span></td>
             <td class="num"><span class="pc-vi-acc-${monthKey}">—</span></td>
             <td class="num"><span class="pc-vi-month-${monthKey}">—</span></td>
           </tr>`;
@@ -925,6 +1012,25 @@ async function profRecomputeAll(phaseKey) {
   const effortCostsFinal = AppState._effortMonthCosts?.[phaseKey] || {};
   const monthsFinal      = AppState._effortMonths?.[phaseKey]     || [];
 
+  // ── 4. Issued Invoices: load monthly_cumulative per phase (once, cached) ──
+  if (!AppState._invoiceCumulative) AppState._invoiceCumulative = {};
+  if (!AppState._invoiceCumulative[phaseKey]) {
+    try {
+      const invRes = await fetch(`/api/invoices/by-phase/${phaseKey}`);
+      if (invRes.ok) {
+        const invData = await invRes.json();
+        // monthly_cumulative[YYYY-MM].total = cumulative issued SAR up to that month
+        const cum = {};
+        const mc = invData.monthly_cumulative || {};
+        for (const [mk, v] of Object.entries(mc)) {
+          cum[mk] = v.total || 0;
+        }
+        AppState._invoiceCumulative[phaseKey] = cum;
+      }
+    } catch(e) { console.warn('Invoice load error:', e); }
+    if (!AppState._invoiceCumulative[phaseKey]) AppState._invoiceCumulative[phaseKey] = {};
+  }
+
   const table = document.getElementById(`profit-table-${phaseKey}`);
   if (!table) return;
   const rows = table.querySelectorAll('tr[data-month-key]');
@@ -1031,28 +1137,29 @@ async function profRecomputeAll(phaseKey) {
     const recognizedRev  = totalRevSAR * (completionPct / 100);  // = Revenue to Date
     const progressPct2   = estAtCompletion > 0 ? currentCostSAR / estAtCompletion * 100 : 0;
 
-    // Virtual Invoice — needs previous month values
+    // Virtual Invoice
+    // Issued invoices: use cumulative up to this month from API (not total)
     const prevMonthKey = months[idx - 1]?.key;
     const prevRecogRev = prevMonthKey ? (AppState._profRecogRev?.[phaseKey]?.[prevMonthKey] || 0) : 0;
     const prevAccVI    = prevMonthKey ? (AppState._profAccVI?.[phaseKey]?.[prevMonthKey] || 0) : 0;
-    // Load issued invoices from Odoo (cached per phase)
-    if (!AppState._issuedInvoices) AppState._issuedInvoices = {};
-    let totalIssuedInvoices = AppState._issuedInvoices[phaseKey] || 0;
-    if (!totalIssuedInvoices) {
-      try {
-        const invRes = await fetch(`/api/invoices/by-phase/${phaseKey}`);
-        if (invRes.ok) {
-          const invData = await invRes.json();
-          totalIssuedInvoices = invData.total_sar || 0;
-          AppState._issuedInvoices[phaseKey] = totalIssuedInvoices;
-        }
-      } catch(e) {}
+
+    // _invoiceCumulative[phaseKey] = { 'YYYY-MM': cumulativeIssuedSAR }
+    // Loaded once before the row loop (see profRecomputeAll)
+    const invCum = AppState._invoiceCumulative?.[phaseKey] || {};
+    // Find the cumulative issued amount up to this month
+    // Use exact month match or last available month <= monthKey
+    let issuedUpToMonth = 0;
+    const cumMonths = Object.keys(invCum).sort();
+    for (const mk of cumMonths) {
+      if (mk <= monthKey) issuedUpToMonth = invCum[mk];
     }
 
-    const production   = recognizedRev - prevRecogRev;
-    const accVI        = recognizedRev - totalIssuedInvoices;
-    const thisMonthVI  = accVI - prevAccVI;
-    const viPlusIssued = accVI + totalIssuedInvoices;
+    const production  = recognizedRev - prevRecogRev;
+    // Acc. VI = Recognized Revenue to Date − Cumulative Issued Invoices up to this month
+    const accVI       = recognizedRev - issuedUpToMonth;
+    const thisMonthVI = accVI - prevAccVI;
+    // VI + Issued = total billing picture
+    const viPlusIssued = accVI + issuedUpToMonth;
 
     // Save for next month's calculation
     if (!AppState._profRecogRev) AppState._profRecogRev = {};
@@ -1065,8 +1172,11 @@ async function profRecomputeAll(phaseKey) {
     setSpan(`pc-rev-todate-${monthKey}`,   completionPct > 0 ? fSAR(recognizedRev) : '—');
     setSpan(`pc-progress-${monthKey}`,     progressPct2 > 0 ? `${fmt.decimal(progressPct2)}%` : '—');
     setSpan(`pc-production-${monthKey}`,   production !== 0 ? fSAR(production) : '—');
-    setSpan(`pc-vi-acc-${monthKey}`,       accVI !== 0 ? fSAR(accVI) : '—');
+    setSpan(`pc-vi-acc-${monthKey}`,       fSAR(accVI));
     setSpan(`pc-vi-month-${monthKey}`,     thisMonthVI !== 0 ? fSAR(thisMonthVI) : '—');
+    // Show issued invoices column if it exists
+    const issuedEl = tr.querySelector(`.pc-issued-${monthKey}`);
+    if (issuedEl) issuedEl.textContent = issuedUpToMonth > 0 ? fSAR(issuedUpToMonth) : '—';
 
     latestData = { completionPct, remainingMDs, eacMDs, cpi, profitAtComp, totalRevSAR };
     prevViAcc = viAcc;
