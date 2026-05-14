@@ -1,3 +1,33 @@
+// Hide Travel & Promotions tabs from variance - they've moved to /manage
+(function hideLegacyTabs() {
+  const hidePhases = ['travel', 'promotions'];
+  function doHide() {
+    document.querySelectorAll('[data-phase]').forEach(el => {
+      if (hidePhases.includes(el.dataset.phase)) {
+        el.style.display = 'none';
+      }
+    });
+    // Also hide by text content
+    document.querySelectorAll('.phase-tab, .sub-tab, [data-phase]').forEach(el => {
+      const txt = (el.textContent || '').toLowerCase();
+      if (txt.includes('travel') || txt.includes('promotion')) {
+        el.style.display = 'none';
+      }
+    });
+  }
+  // Run on DOM ready and after any dynamic render
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', doHide);
+  } else {
+    doHide();
+  }
+  // Also observe for dynamic additions
+  const obs = new MutationObserver(doHide);
+  obs.observe(document.body, {childList: true, subtree: true});
+  setTimeout(doHide, 500); // fallback
+})();
+
+
 function profFillFromTasks(phaseKey) {
   const remMD = AppState._taskRemainingMDs && AppState._taskRemainingMDs[phaseKey];
   if (!remMD) {
