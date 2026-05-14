@@ -4,26 +4,20 @@
     <strong id="ovPeriod">—</strong>
   </div>
 
-  <!-- KPIs from Roadmap (PPT) -->
+  <!-- Row 1: Project overview KPIs -->
   <div class="kpi-strip">
     <div class="kpi-card kpi-blue">
       <div class="kpi-bar"></div>
-      <div class="kpi-label">TOTAL SERVICES</div>
-      <div class="kpi-value"><span id="kpiServices">—</span><span class="kpi-unit">in roadmap</span></div>
-      <div class="kpi-foot">From Roadmap (PPT)</div>
-    </div>
-    <div class="kpi-card kpi-green">
-      <div class="kpi-bar"></div>
-      <div class="kpi-label">TOTAL MANDAYS</div>
-      <div class="kpi-value"><span id="kpiMandays">—</span><span class="kpi-unit">MD</span></div>
-      <div class="kpi-foot">Roadmap baseline</div>
+      <div class="kpi-label">TOTAL REVENUE</div>
+      <div class="kpi-value" style="font-size:22px;"><span id="kpiRevenue">—</span></div>
+      <div class="kpi-foot">SAR · from Odoo project</div>
     </div>
     <div class="kpi-card kpi-navy clickable" id="kpiTeamMembersCard" data-action="open-team">
       <div class="kpi-bar"></div>
       <div class="kpi-label">TEAM MEMBERS</div>
       <div class="kpi-value"><span id="kpiTeamMembers">—</span><span class="kpi-unit">members</span></div>
       <div class="kpi-foot">
-        <span id="kpiTeamSubtext">Loading from Google Sheet…</span>
+        <span id="kpiTeamSubtext">Loading…</span>
         <span class="kpi-link">View team →</span>
       </div>
     </div>
@@ -32,6 +26,41 @@
       <div class="kpi-label">PROJECT PROGRESS</div>
       <div class="kpi-value"><span id="kpiProgress">—</span><span class="kpi-unit">%</span></div>
       <div class="kpi-foot" id="kpiDays">—</div>
+    </div>
+    <div class="kpi-card kpi-green">
+      <div class="kpi-bar"></div>
+      <div class="kpi-label">TOTAL MANDAYS</div>
+      <div class="kpi-value"><span id="kpiMandays">—</span><span class="kpi-unit">MD</span></div>
+      <div class="kpi-foot">Roadmap baseline</div>
+    </div>
+  </div>
+
+  <!-- Row 2: Phase cost summary -->
+  <div class="kpi-strip" style="margin-top:12px;">
+    <div class="kpi-card compact" style="border-top:3px solid var(--blue);flex:1;">
+      <div class="kpi-label" style="font-size:10px;">CONSULTATION — CURRENT COST</div>
+      <div class="kpi-value" style="font-size:20px;"><span id="kpiConCost">—</span></div>
+      <div class="kpi-foot" style="font-size:10px;">SAR · last month actual</div>
+    </div>
+    <div class="kpi-card compact" style="border-top:3px solid var(--blue);flex:1;">
+      <div class="kpi-label" style="font-size:10px;">CONSULTATION — EAC</div>
+      <div class="kpi-value" style="font-size:20px;"><span id="kpiConEAC">—</span></div>
+      <div class="kpi-foot" style="font-size:10px;"><span id="kpiConEACmds"></span></div>
+    </div>
+    <div class="kpi-card compact" style="border-top:3px solid var(--green);flex:1;">
+      <div class="kpi-label" style="font-size:10px;">DEVELOPMENT — CURRENT COST</div>
+      <div class="kpi-value" style="font-size:20px;"><span id="kpiDevCost">—</span></div>
+      <div class="kpi-foot" style="font-size:10px;">SAR · last month actual</div>
+    </div>
+    <div class="kpi-card compact" style="border-top:3px solid var(--green);flex:1;">
+      <div class="kpi-label" style="font-size:10px;">DEVELOPMENT — EAC</div>
+      <div class="kpi-value" style="font-size:20px;"><span id="kpiDevEAC">—</span></div>
+      <div class="kpi-foot" style="font-size:10px;"><span id="kpiDevEACmds"></span></div>
+    </div>
+    <div class="kpi-card compact" style="border-top:3px solid var(--amber);flex:1;">
+      <div class="kpi-label" style="font-size:10px;">TOTAL EAC</div>
+      <div class="kpi-value" style="font-size:20px;"><span id="kpiTotalEAC">—</span></div>
+      <div class="kpi-foot" style="font-size:10px;">Consultation + Development</div>
     </div>
   </div>
 
