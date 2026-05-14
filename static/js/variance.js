@@ -351,148 +351,109 @@ function renderBudgetChanges(phaseKey) {
   const changes = _budgetChanges[phaseKey] || [];
 
   if (!changes.length) {
-    cont.innerHTML = `
-      <div style="display:flex;flex-direction:column;align-items:center;gap:8px;
-                  padding:32px 16px;color:var(--text-muted);">
-        <div style="font-size:28px;opacity:.4;">📋</div>
-        <div style="font-size:13px;font-weight:500;">No budget changes recorded yet</div>
-        <div style="font-size:11px;opacity:.7;">Click "+ Add Change" to log a CR or budget revision</div>
-      </div>`;
+    cont.innerHTML = `<p style="color:var(--text-muted);font-size:12px;padding:12px 0;">No changes yet — click "+ Add Change"</p>`;
     return;
   }
 
   const totalDeltaCost = changes.reduce((s,c) => s+(parseFloat(c.delta_cost)||0), 0);
   const totalDeltaRev  = changes.reduce((s,c) => s+(parseFloat(c.delta_rev) ||0), 0);
-  const fmtDelta = v => {
-    if (!v) return '<span style="color:var(--text-muted);">—</span>';
-    const sign  = v > 0 ? '+' : '';
-    const color = v < 0 ? 'var(--red)' : 'var(--green)';
-    return `<span style="color:${color};font-weight:700;">${sign}${fmt.money(Math.round(v))}</span>`;
-  };
 
-  const cards = changes.map((c, i) => {
+  const LBL = `display:block;font-size:11px;font-weight:600;color:var(--text-muted);
+               text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px;`;
+
+  const rows = changes.map((c, i) => {
     const rev  = parseFloat(c.delta_rev)  || 0;
     const cost = parseFloat(c.delta_cost) || 0;
-    const revColor  = rev  < 0 ? 'var(--red)'   : rev  > 0 ? 'var(--green)' : 'var(--text-muted)';
-    const costColor = cost > 0 ? 'var(--red)'   : cost < 0 ? 'var(--green)' : 'var(--text-muted)';
-    const accentColor = (cost > 0 || rev < 0) ? 'var(--amber)' : 'var(--blue)';
-    const crBadge = c.plan_id
-      ? `<span style="display:inline-block;padding:2px 9px;border-radius:12px;
-                      background:var(--blue)18;color:var(--blue);font-size:10px;font-weight:700;
-                      letter-spacing:.4px;border:1px solid var(--blue)30;">
-           ${(c.plan_id||'').replace(/</g,'&lt;')}
-         </span>` : '';
-    const dateBadge = c.change_date
-      ? `<span style="font-size:11px;color:var(--text-muted);">📅 ${c.change_date}</span>` : '';
-
+    const revColor  = rev  < 0 ? 'color:var(--red)' : rev  > 0 ? 'color:var(--green)' : '';
+    const costColor = cost > 0 ? 'color:var(--red)' : cost < 0 ? 'color:var(--green)' : '';
     const net = cost + rev;
-    const netHtml = (cost !== 0 || rev !== 0) ? (() => {
-      const nc = net < 0 ? 'var(--green)' : net > 0 ? 'var(--red)' : 'var(--text-muted)';
-      const sign = net > 0 ? '+' : '';
-      return `<div style="display:flex;align-items:center;gap:6px;padding:6px 10px;
-                          background:var(--bg-subtle);border-radius:6px;margin-top:8px;">
-                <span style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;">Net Impact</span>
-                <span style="font-size:13px;font-weight:700;color:${nc};margin-left:auto;">${sign}${fmt.money(Math.round(net))} SAR</span>
-              </div>`;
-    })() : '';
+    const netColor  = net < 0 ? 'var(--green)' : net > 0 ? 'var(--red)' : 'var(--text-muted)';
+    const netSign   = net > 0 ? '+' : '';
+    const accent    = (cost > 0 || rev < 0) ? 'var(--amber)' : 'var(--blue)';
 
-    const safeReason = (c.reason||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-    const safePlanId = (c.plan_id||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    const safeR = (c.reason ||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+    const safeP = (c.plan_id||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;');
 
-    return `
-      <div style="background:var(--bg-card);border:1px solid var(--border-light);
-                  border-left:3px solid ${accentColor};border-radius:10px;padding:14px 16px;">
+    return `<div style="border-left:3px solid ${accent};padding:10px 12px;margin-bottom:8px;
+                         background:var(--bg-subtle);border-radius:0 6px 6px 0;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
 
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
-          ${crBadge}
-          ${dateBadge}
+        <!-- Left block: Reason + grid of fields -->
+        <div style="flex:1;min-width:0;">
+          <div style="margin-bottom:8px;">
+            <label style="${LBL}">Reason / Description</label>
+            <input type="text" class="svc-input" style="width:100%;font-size:12px;"
+              placeholder="e.g. Third party license"
+              value="${safeR}"
+              oninput="_budgetChanges['${phaseKey}'][${i}].reason=this.value;budgetSaveChanges('${phaseKey}')">
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 100px 130px 130px;gap:8px;align-items:end;">
+            <div>
+              <label style="${LBL}">Plan / CR ID</label>
+              <input type="text" class="svc-input" style="font-size:12px;width:100%;"
+                placeholder="CR-001" value="${safeP}"
+                oninput="_budgetChanges['${phaseKey}'][${i}].plan_id=this.value;budgetSaveChanges('${phaseKey}')">
+            </div>
+            <div>
+              <label style="${LBL}">Date</label>
+              <input type="date" class="svc-input" style="font-size:12px;width:100%;"
+                value="${c.change_date||''}"
+                oninput="_budgetChanges['${phaseKey}'][${i}].change_date=this.value;
+                         budgetSaveChanges('${phaseKey}');budgetAutoCalc('${phaseKey}')">
+            </div>
+            <div>
+              <label style="${LBL}">Δ Cost (SAR)</label>
+              <input type="number" step="1" class="svc-input"
+                style="font-size:12px;width:100%;text-align:right;${costColor};"
+                placeholder="0" value="${c.delta_cost||''}"
+                oninput="_budgetChanges['${phaseKey}'][${i}].delta_cost=parseFloat(this.value)||0;
+                         budgetSaveChanges('${phaseKey}');budgetAutoCalc('${phaseKey}');
+                         this.style.color=parseFloat(this.value)>0?'var(--red)':parseFloat(this.value)<0?'var(--green)':''">
+            </div>
+            <div>
+              <label style="${LBL}">Δ Revenue (SAR)</label>
+              <input type="number" step="1" class="svc-input"
+                style="font-size:12px;width:100%;text-align:right;${revColor};"
+                placeholder="0" value="${c.delta_rev||''}"
+                oninput="_budgetChanges['${phaseKey}'][${i}].delta_rev=parseFloat(this.value)||0;
+                         budgetSaveChanges('${phaseKey}');budgetAutoCalc('${phaseKey}');
+                         this.style.color=parseFloat(this.value)<0?'var(--red)':parseFloat(this.value)>0?'var(--green)':''">
+            </div>
+          </div>
+        </div>
+
+        <!-- Right block: net impact + delete -->
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0;">
           <button onclick="budgetDeleteChange('${phaseKey}',${i})"
-            style="margin-left:auto;background:none;border:none;cursor:pointer;
-                   color:var(--text-muted);font-size:13px;padding:3px 6px;border-radius:4px;"
+            style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:12px;
+                   padding:2px 4px;line-height:1;" title="Remove"
             onmouseover="this.style.color='var(--red)'"
-            onmouseout="this.style.color='var(--text-muted)'" title="Remove">✕</button>
+            onmouseout="this.style.color='var(--text-muted)'">✕</button>
+          ${(cost !== 0 || rev !== 0) ? `
+          <div style="text-align:right;margin-top:auto;">
+            <div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.3px;">Net</div>
+            <div style="font-size:13px;font-weight:700;color:${netColor};">${netSign}${fmt.money(Math.round(net))}</div>
+          </div>` : ''}
         </div>
-
-        <div style="margin-bottom:12px;">
-          <label style="display:block;font-size:10px;font-weight:700;color:var(--text-muted);
-                        text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">
-            Reason / Description
-          </label>
-          <input type="text" class="svc-input" style="width:100%;font-size:13px;"
-            placeholder="e.g. Scope change — added reporting module"
-            value="${safeReason}"
-            oninput="_budgetChanges['${phaseKey}'][${i}].reason=this.value; budgetSaveChanges('${phaseKey}')">
-        </div>
-
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
-          <div>
-            <label style="display:block;font-size:10px;font-weight:700;color:var(--text-muted);
-                          text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Date</label>
-            <input type="date" class="svc-input" style="width:100%;font-size:13px;"
-              value="${c.change_date||''}"
-              oninput="_budgetChanges['${phaseKey}'][${i}].change_date=this.value;
-                       budgetSaveChanges('${phaseKey}'); budgetAutoCalc('${phaseKey}')">
-          </div>
-          <div>
-            <label style="display:block;font-size:10px;font-weight:700;color:var(--text-muted);
-                          text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Plan / CR ID</label>
-            <input type="text" class="svc-input" style="width:100%;font-size:13px;"
-              placeholder="CR-001" value="${safePlanId}"
-              oninput="_budgetChanges['${phaseKey}'][${i}].plan_id=this.value; budgetSaveChanges('${phaseKey}')">
-          </div>
-        </div>
-
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-          <div>
-            <label style="display:block;font-size:10px;font-weight:700;color:var(--text-muted);
-                          text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">
-              Δ Cost (SAR)
-              <span style="font-weight:400;text-transform:none;"> + = increase</span>
-            </label>
-            <input type="number" step="1" class="svc-input"
-              style="width:100%;font-size:14px;font-weight:600;text-align:right;color:${costColor};"
-              placeholder="0" value="${c.delta_cost||''}"
-              oninput="_budgetChanges['${phaseKey}'][${i}].delta_cost=parseFloat(this.value)||0;
-                       budgetSaveChanges('${phaseKey}'); budgetAutoCalc('${phaseKey}');
-                       this.style.color=parseFloat(this.value)>0?'var(--red)':parseFloat(this.value)<0?'var(--green)':'var(--text-muted)'">
-          </div>
-          <div>
-            <label style="display:block;font-size:10px;font-weight:700;color:var(--text-muted);
-                          text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">
-              Δ Revenue (SAR)
-              <span style="font-weight:400;text-transform:none;"> − = reduction</span>
-            </label>
-            <input type="number" step="1" class="svc-input"
-              style="width:100%;font-size:14px;font-weight:600;text-align:right;color:${revColor};"
-              placeholder="0" value="${c.delta_rev||''}"
-              oninput="_budgetChanges['${phaseKey}'][${i}].delta_rev=parseFloat(this.value)||0;
-                       budgetSaveChanges('${phaseKey}'); budgetAutoCalc('${phaseKey}');
-                       this.style.color=parseFloat(this.value)<0?'var(--red)':parseFloat(this.value)>0?'var(--green)':'var(--text-muted)'">
-          </div>
-        </div>
-        ${netHtml}
-      </div>`;
-  }).join('');
-
-  const summaryBar = `
-    <div style="display:flex;gap:16px;padding:10px 14px;background:var(--bg-subtle);
-                border-radius:8px;border:1px solid var(--border-light);flex-wrap:wrap;align-items:center;">
-      <span style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;">
-        ${changes.length} Change${changes.length!==1?'s':''}
-      </span>
-      <div style="display:flex;align-items:center;gap:6px;margin-left:auto;">
-        <span style="font-size:11px;color:var(--text-muted);">Σ Δ Cost:</span>
-        ${fmtDelta(totalDeltaCost)}
-      </div>
-      <div style="display:flex;align-items:center;gap:6px;">
-        <span style="font-size:11px;color:var(--text-muted);">Σ Δ Revenue:</span>
-        ${fmtDelta(totalDeltaRev)}
       </div>
     </div>`;
+  }).join('');
 
-  cont.innerHTML = `<div style="display:flex;flex-direction:column;gap:10px;">${cards}${summaryBar}</div>`;
+  // Summary row
+  const fD = v => {
+    if (!v) return '<span style="color:var(--text-muted)">—</span>';
+    const s = v>0?'+':'', c = v<0?'var(--red)':'var(--green)';
+    return `<b style="color:${c}">${s}${fmt.money(Math.round(v))}</b>`;
+  };
+  const summary = `<div style="display:flex;gap:20px;padding:8px 12px;background:var(--bg-card);
+                               border:1px solid var(--border-light);border-radius:6px;font-size:12px;align-items:center;">
+    <span style="color:var(--text-muted);font-size:11px;">${changes.length} change${changes.length!==1?'s':''}</span>
+    <span style="margin-left:auto;color:var(--text-muted);">Σ Δ Cost: ${fD(totalDeltaCost)}</span>
+    <span style="color:var(--text-muted);">Σ Δ Revenue: ${fD(totalDeltaRev)}</span>
+  </div>`;
+
+  cont.innerHTML = rows + summary;
 }
-
 // Auto-save revenue input
 async function budgetSaveRevenue(phaseKey) {
   const revEl = document.getElementById(`inp-rev-${phaseKey}`);
