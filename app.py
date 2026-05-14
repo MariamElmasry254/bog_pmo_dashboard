@@ -2395,6 +2395,30 @@ def api_budget_overrides_get(phase):
     return jsonify({'phase': phase, 'overrides': overrides})
 
 
+@app.route('/api/overview/financials')
+def api_overview_financials():
+    """Returns approved revenue per phase (from budget overrides) for the Overview summary."""
+    phases = ['development', 'consultation', 'support']
+    result = {}
+    total_rev = 0.0
+    for phase in phases:
+        try:
+            overrides = db.get_namespace_overrides('budget', phase) or {}
+            rev = overrides.get('approved.revenue_sar')
+            rev_val = float(rev) if rev is not None else 0.0
+            # Also add budget changes delta
+            changes_raw = db.get_override('budget_changes', '', phase)
+            if isinstance(changes_raw, list):
+                for ch in changes_raw:
+                    rev_val += float(ch.get('delta_rev') or 0)
+            result[phase] = round(rev_val, 2)
+            total_rev += rev_val
+        except Exception as _e:
+            result[phase] = 0.0
+    result['total'] = round(total_rev, 2)
+    return jsonify(result)
+
+
 @app.route('/api/variance/budget-override/<phase>/<path:path>', methods=['DELETE'])
 def api_budget_override_delete(phase, path):
     """Delete a specific override."""
