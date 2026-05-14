@@ -4596,7 +4596,100 @@ def api_estimated_rows_save():
     return jsonify({'ok': True, 'phase': phase, 'count': len(rows)})
 
 
-@app.route('/api/travel', methods=['GET'])
+@app.route('/api/invoices')
+def api_invoices():
+    """Get validated invoices for BOG project from Odoo, split by phase, excluding License."""
+    try:
+        odoo = get_odoo_client()
+        if not odoo:
+            return jsonify({'error': 'Odoo not connected'}), 503
+
+        # Get sale order lines linked to the BOG project (project_id=228)
+        # account.move (invoices) linked to sale.order
+        # Search validated invoices (state=posted) for this project
+        invoices = odoo.search_read(
+            'account.move',
+            [
+                ('move_type', '=', 'out_invoice'),
+                ('state', '=', 'posted'),
+                ('invoice_line_ids.sale_line_ids.order_id.project_ids', 'in', [PROJECT_ID]),
+            ],
+            ['name', 'invoice_date', 'amount_untaxed', 'amount_total', 'state',
+             'invoice_line_ids', 'invoice_origin'],
+            limit=200
+        )
+
+        # Also get invoice lines with descriptions to categorize
+        result = {'development': 0, 'consultation': 0, 'support': 0, 'other': 0,
+                  'invoices': []}
+
+        for inv in invoices:
+            # Get invoice lines
+            lines = odoo.search_read(
+                'account.move.line',
+                [
+                    ('move_id', '=', inv['id']),
+                    ('display_type', 'not in', ['line_section', 'line_note']),
+                    ('exclude_from_invoice_tab', '=', False),
+                ],
+                ['name', 'price_subtotal', 'product_id']
+            )
+
+            inv_total = 0
+            for line in lines:
+                name = (line.get('name') or '').lower()
+                amount = line.get('price_subtotal', 0) or 0
+
+                # Skip license lines
+                if 'license' in name:
+                    continue
+
+                inv_total += amount
+
+                # Categorize by description
+                if 'development' in name or 'dev' in name or 'reengineering' in name or 'business re' in name:
+                    result['development'] += amount
+                elif 'consultation' in name or 'consult' in name or 'analysis' in name:
+                    result['consultation'] += amount
+                elif 'support' in name or 'operation' in name:
+                    result['support'] += amount
+                else:
+                    result['other'] += amount
+
+            if inv_total > 0:
+                result['invoices'].append({
+                    'name': inv['name'],
+                    'date': inv.get('invoice_date', ''),
+                    'amount_untaxed': inv_total,
+                    'origin': inv.get('invoice_origin', ''),
+                })
+
+        return jsonify(result)
+
+    except Exception as e:
+        logger.error(f"Invoices API error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/invoices/by-phase/<phase>')
+def api_invoices_by_phase(phase):
+    """Get total issued invoices for a specific phase (excl. License)."""
+    try:
+        data = api_invoices().get_json()
+        if 'error' in data:
+            return jsonify(data), 500
+        phase_map = {
+            'development': data.get('development', 0),
+            'consultation': data.get('consultation', 0),
+            'support': data.get('support', 0),
+        }
+        total = phase_map.get(phase, 0)
+        return jsonify({'phase': phase, 'total_sar': total, 'invoices': data.get('invoices', [])})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+
 def api_travel_list():
     records = load_travel()
     today_str = date.today().isoformat()
