@@ -101,9 +101,14 @@ def active_project_name():
     return session.get('project_name', PROJECT_NAME)
 
 def active_db_prefix():
-    """Returns DB namespace prefix for this project: 'proj_{id}' or '' for default."""
+    """Returns DB namespace prefix for this project.
+    BOG Digital Transformation (id=228) uses empty prefix to preserve legacy data.
+    All other projects use 'proj_{id}_' prefix for isolation.
+    """
     pid = session.get('project_id')
-    return f'proj_{pid}' if pid else ''
+    if not pid or str(pid) == '228':
+        return ''  # BOG legacy — no prefix
+    return f'proj_{pid}'
 
 def proj_get_override(namespace, subkey, key):
     """Get DB override with project prefix."""
