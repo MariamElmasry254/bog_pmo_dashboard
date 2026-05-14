@@ -352,51 +352,60 @@ function renderBudgetChanges(phaseKey) {
 
   if (!changes.length) {
     cont.innerHTML = `<div style="text-align:center; padding:24px; color:var(--text-muted); font-size:13px;">
-      No budget changes recorded yet — click "+ Add Change" to add one
+      No budget changes recorded yet — click "+ Add Change"
     </div>`;
     return;
   }
 
-  cont.innerHTML = changes.map((c, i) => {
-    const rev = parseFloat(c.delta_rev) || 0;
+  const rows = changes.map((c, i) => {
+    const rev  = parseFloat(c.delta_rev)  || 0;
     const cost = parseFloat(c.delta_cost) || 0;
-    const revColor = rev < 0 ? 'var(--red)' : rev > 0 ? 'var(--green)' : 'var(--text-muted)';
-    const costColor = cost > 0 ? 'var(--red)' : cost < 0 ? 'var(--green)' : 'var(--text-muted)';
-    return `
-    <div style="display:grid; grid-template-columns:1fr auto auto auto auto; gap:12px; align-items:center;
-      padding:12px 16px; border:1px solid var(--border-strong); border-radius:8px; margin-bottom:8px; background:white;">
-      <div>
-        <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; margin-bottom:3px;">Reason / Description</div>
-        <input type="text" style="width:100%; padding:5px 8px; border:1px solid var(--border-strong); border-radius:4px; font-size:13px;"
-          placeholder="e.g. Third party license" value="${c.reason||''}"
+    const revStyle  = rev  < 0 ? 'color:var(--red);' : rev  > 0 ? 'color:var(--green);' : '';
+    const costStyle = cost > 0 ? 'color:var(--red);' : cost < 0 ? 'color:var(--green);' : '';
+    return `<tr>
+      <td style="min-width:220px;">
+        <input type="text" class="svc-input" style="width:100%;"
+          placeholder="Reason / Description" value="${(c.reason||'').replace(/"/g,'&quot;')}"
           oninput="_budgetChanges['${phaseKey}'][${i}].reason=this.value; budgetSaveChanges('${phaseKey}')">
-      </div>
-      <div style="min-width:110px;">
-        <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; margin-bottom:3px;">Date</div>
-        <input type="date" style="width:100%; padding:5px 8px; border:1px solid var(--border-strong); border-radius:4px; font-size:12px;"
+      </td>
+      <td>
+        <input type="date" class="svc-input" style="width:130px;"
           value="${c.change_date||''}"
-          oninput="_budgetChanges['${phaseKey}'][${i}].change_date=this.value; budgetSaveChanges('${phaseKey}')">
-      </div>
-        <input type="text" style="width:100%; padding:5px 8px; border:1px solid var(--border-strong); border-radius:4px; font-size:13px;"
-          placeholder="CR-001" value="${c.plan_id||''}"
+          oninput="_budgetChanges['${phaseKey}'][${i}].change_date=this.value; budgetSaveChanges('${phaseKey}'); budgetAutoCalc('${phaseKey}')">
+      </td>
+      <td>
+        <input type="text" class="svc-input" style="width:80px;"
+          placeholder="CR-001" value="${(c.plan_id||'').replace(/"/g,'&quot;')}"
           oninput="_budgetChanges['${phaseKey}'][${i}].plan_id=this.value; budgetSaveChanges('${phaseKey}')">
-      </div>
-      <div style="min-width:130px;">
-        <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; margin-bottom:3px;">Δ Cost (SAR)</div>
-        <input type="number" step="1" style="width:100%; padding:5px 8px; border:1px solid var(--border-strong); border-radius:4px; font-size:13px; text-align:right; color:${costColor};"
+      </td>
+      <td class="num">
+        <input type="number" step="1" class="svc-input" style="width:120px;text-align:right;${costStyle}"
           placeholder="0" value="${c.delta_cost||''}"
           oninput="_budgetChanges['${phaseKey}'][${i}].delta_cost=parseFloat(this.value)||0; budgetSaveChanges('${phaseKey}'); budgetAutoCalc('${phaseKey}')">
-      </div>
-      <div style="min-width:130px;">
-        <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; margin-bottom:3px;">Δ Revenue (SAR)</div>
-        <input type="number" step="1" style="width:100%; padding:5px 8px; border:1px solid var(--border-strong); border-radius:4px; font-size:13px; text-align:right; color:${revColor};"
+      </td>
+      <td class="num">
+        <input type="number" step="1" class="svc-input" style="width:120px;text-align:right;${revStyle}"
           placeholder="0" value="${c.delta_rev||''}"
           oninput="_budgetChanges['${phaseKey}'][${i}].delta_rev=parseFloat(this.value)||0; budgetSaveChanges('${phaseKey}'); budgetAutoCalc('${phaseKey}')">
-      </div>
-      <button onclick="budgetDeleteChange('${phaseKey}',${i})"
-        style="background:none; border:1px solid var(--border-strong); border-radius:6px; padding:6px 10px; cursor:pointer; color:var(--red); font-size:13px;" title="Delete">🗑</button>
-    </div>`;
+      </td>
+      <td>
+        <button onclick="budgetDeleteChange('${phaseKey}',${i})"
+          style="background:none;border:none;cursor:pointer;color:var(--red);font-size:16px;" title="Delete">🗑</button>
+      </td>
+    </tr>`;
   }).join('');
+
+  cont.innerHTML = `<table class="data-table">
+    <thead><tr>
+      <th>Reason / Description</th>
+      <th>Date</th>
+      <th>Plan / CR ID</th>
+      <th class="num">Δ Cost (SAR)</th>
+      <th class="num">Δ Revenue (SAR)</th>
+      <th></th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
 }
 
 // Auto-save revenue input
@@ -947,11 +956,12 @@ async function profRecomputeAll(phaseKey) {
     const expectedOverrun = (completionPct > 0 && totalEstMDs > 0 && actualMDs > 0)
       ? (actualMDs / totalEstMDs) / (completionPct / 100) - 1 : null;
 
-    // Running avg cost per MD from actual effort (not planned rate)
-    const runningAvgCostPerMD = actualMDs > 0 ? currentCostSAR / actualMDs : effortAvgCostPerMD;
+    // Avg cost per MD for this month = Current Cost SAR / Actual MDs to Date (running)
+    // This is the "current effort average" - changes each month as more data comes in
+    const thisMonthAvgCostPerMD = actualMDs > 0 ? currentCostSAR / actualMDs : (effortAvgCostPerMD || costPerMD);
 
-    // Est Cost to Complete = Remaining MDs × Avg Cost per MD from Current Effort
-    const estCostToComplete = remainingMDs * effortAvgCostPerMD;
+    // Est Cost to Complete = Remaining MDs × this month's avg cost per MD
+    const estCostToComplete = remainingMDs * thisMonthAvgCostPerMD;
     const estAtCompletion   = estCostToComplete + currentCostSAR;
     const cpi               = estAtCompletion > 0 ? totalEstCostSAR / estAtCompletion : 0;
     const costVarianceSAR   = totalEstCostSAR - estAtCompletion;
