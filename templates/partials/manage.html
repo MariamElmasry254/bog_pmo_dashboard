@@ -156,6 +156,36 @@
   <!-- ══════════ TRAVEL TAB ══════════ -->
   <div id="tab-travel" class="tab-panel active">
 
+    <!-- PDF Ticket Upload -->
+    <div class="upload-zone" style="border-color:var(--amber);"
+         onclick="document.getElementById('ticketFile').click()"
+         ondragover="event.preventDefault()" ondragleave="" ondrop="handleTicketDrop(event)">
+      <input type="file" id="ticketFile" accept=".pdf" onchange="handleTicket(this)">
+      <div class="icon">✈️</div>
+      <h3>Upload Airline Ticket PDF</h3>
+      <p>Auto-extracts: passenger name, departure & return dates</p>
+      <div class="hint" style="color:var(--amber);">Saudia · EgyptAir · Flynas</div>
+    </div>
+    <div class="import-result" id="ticketResult"></div>
+
+    <div id="ticketForm" style="display:none;background:white;border:1px solid var(--amber);border-radius:10px;padding:20px;margin-bottom:16px;">
+      <div style="font-size:12px;font-weight:700;color:var(--amber);margin-bottom:12px;">✈️ Ticket Parsed — Review &amp; Save</div>
+      <div class="form-grid">
+        <div class="form-field"><label>Name *</label>
+          <input type="text" id="tk_name">
+          <div id="tk_hint" style="font-size:10px;color:var(--green);margin-top:3px;"></div>
+        </div>
+        <div class="form-field"><label>Position (from Odoo)</label><input type="text" id="tk_pos"></div>
+        <div class="form-field"><label>Departure ★</label><input type="date" id="tk_start"></div>
+        <div class="form-field"><label>Return (empty = one-way)</label><input type="date" id="tk_end"></div>
+        <div class="form-field"><label>Route</label><input type="text" id="tk_route" readonly style="color:var(--muted)"></div>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-primary" onclick="saveTicketAsTravel()">Save Travel Record</button>
+        <button class="btn btn-ghost" onclick="document.getElementById('ticketForm').style.display='none'">Cancel</button>
+      </div>
+    </div>
+
     <!-- Excel Upload -->
     <div class="upload-zone" id="travelDrop" onclick="document.getElementById('travelFile').click()"
          ondragover="event.preventDefault();this.classList.add('drag')"
@@ -421,6 +451,7 @@ async function loadTravel() {
       <td><span class="badge badge-green">${r.status||'confirmed'}</span></td>
       <td style="color:var(--muted)">${r.notes||''}</td>
       <td>
+        <button class="btn btn-ghost" style="padding:3px 8px;font-size:11px;margin-right:4px;" onclick="editTravel(${r.id})">✎</button>
         <button class="btn btn-danger" style="padding:3px 8px;font-size:11px;" onclick="deleteTravel(${r.id})">✕</button>
       </td>
     </tr>`).join('') :
@@ -514,6 +545,93 @@ async function deletePromo(id) {
   if (!confirm('Delete this promotion record?')) return;
   await fetch('/api/global/promotions/'+id, {method:'DELETE'});
   loadPromos();
+}
+
+// ── PDF Ticket Parsing ───────────────────────────────────────────────
+function handleTicketDrop(e) {
+  e.preventDefault();
+  if (e.dataTransfer.files[0]) parseTicket(e.dataTransfer.files[0]);
+}
+function handleTicket(inp) {
+  if (inp.files[0]) parseTicket(inp.files[0]);
+  inp.value = '';
+}
+async function parseTicket(file) {
+  const rEl = document.getElementById('ticketResult');
+  showResult(rEl, true, '⏳ Reading ticket…');
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const res = await fetch('/api/global/travel/parse-ticket', {method:'POST', body:fd});
+    const d = await res.json();
+    if (d.error) { showResult(rEl, false, 'Error: '+d.error); return; }
+    document.getElementById('tk_name').value  = d.name || '';
+    document.getElementById('tk_start').value = d.departure_date || '';
+    document.getElementById('tk_end').value   = d.return_date || '';
+    document.getElementById('tk_route').value = (d.from_city&&d.to_city) ? d.from_city+' → '+d.to_city : '';
+    const hint = document.getElementById('tk_hint');
+    if (d.odoo_matches && d.odoo_matches.length) {
+      const b = d.odoo_matches[0];
+      hint.textContent = '✅ Odoo match: '+b.name+(b.job?' ('+b.job+')':'');
+      document.getElementById('tk_name').value = b.name;
+      document.getElementById('tk_pos').value  = b.job||'';
+    } else {
+      hint.textContent = d.name ? '⚠️ No Odoo match — verify name' : '⚠️ Could not extract name';
+    }
+    document.getElementById('ticketForm').style.display = 'block';
+    rEl.style.display = 'none';
+  } catch(e) { showResult(rEl, false, 'Error: '+e.message); }
+}
+async function saveTicketAsTravel() {
+  const name = document.getElementById('tk_name').value.trim();
+  const start= document.getElementById('tk_start').value;
+  if (!name||!start) { alert('Name and departure date required'); return; }
+  const res = await fetch('/api/global/travel', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({name, start_date:start,
+      end_date:  document.getElementById('tk_end').value||'',
+      position:  document.getElementById('tk_pos').value||'',
+      notes:     document.getElementById('tk_route').value||'',
+      status:'confirmed'})
+  });
+  const d = await res.json();
+  if (d.ok) {
+    document.getElementById('ticketForm').style.display='none';
+    showResult(document.getElementById('ticketResult'), true, '✅ Travel record saved!');
+    loadTravel();
+  } else if (d.error==='duplicate') {
+    alert('Duplicate — already has a record for that date. Edit the existing one instead.');
+  } else { alert('Error: '+(d.error||'Unknown')); }
+}
+
+// ── Inline Edit ──────────────────────────────────────────────────────
+async function editTravel(id) {
+  const res = await fetch('/api/global/travel');
+  const d = await res.json();
+  const r = (d.records||[]).find(x => x.id===id);
+  if (!r) return;
+  const row = document.querySelector(`[onclick="editTravel(${id})"]`).closest('tr');
+  row.innerHTML = `
+    <td style="color:var(--muted)">${id}</td>
+    <td><input class="cell-edit" id="en_${id}" value="${(r.name||'').replace(/"/g,'&quot;')}"></td>
+    <td><input class="cell-edit" id="ep_${id}" value="${(r.position||'').replace(/"/g,'&quot;')}"></td>
+    <td><input type="date" class="cell-edit" id="es_${id}" value="${r.start_date||''}"></td>
+    <td><input type="date" class="cell-edit" id="ee_${id}" value="${r.end_date||''}"></td>
+    <td><select class="cell-edit" id="est_${id}">
+      <option ${r.status==='confirmed'?'selected':''}>confirmed</option>
+      <option ${r.status==='cancelled'?'selected':''}>cancelled</option></select></td>
+    <td><input class="cell-edit" id="eno_${id}" value="${(r.notes||'').replace(/"/g,'&quot;')}"></td>
+    <td style="white-space:nowrap;">
+      <button class="btn btn-primary" style="padding:3px 8px;font-size:11px;margin-right:4px;" onclick="saveEdit(${id})">✓</button>
+      <button class="btn btn-ghost" style="padding:3px 8px;font-size:11px;" onclick="loadTravel()">✕</button>
+    </td>`;
+}
+async function saveEdit(id) {
+  const g = s => document.getElementById(s+id)?.value||'';
+  await fetch('/api/global/travel/'+id, {method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({name:g('en_'), position:g('ep_'), start_date:g('es_'),
+      end_date:g('ee_'), status:g('est_'), notes:g('eno_')})});
+  loadTravel();
 }
 
 // Init
