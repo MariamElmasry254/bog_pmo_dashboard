@@ -4620,37 +4620,44 @@ def api_estimated_rows_save():
     return jsonify({'ok': True, 'phase': phase, 'count': len(rows)})
 
 
-def _categorize_invoice_line(product_name, desc_name):
+def _categorize_invoice_line_by_desc(desc_name):
     """
-    Categorize a single invoice line into: consultation | development | support | license | other.
+    Categorize a BOG invoice line using ONLY the line description.
+    The description is the reliable field — product is too generic.
 
-    Rules (in priority order):
-      1. license   → skip  (product OR desc contains 'license')
-      2. consultation → desc OR product contains any re-engineering / analysis / consultation keyword
-      3. support   → desc OR product contains 'operation' or 'support'
-      4. development → desc OR product contains 'development'
-      5. other     → everything else (should be near-zero after correct mapping)
+    Rules (exact match priority, then keyword):
+      "Business Re Engineering"  → consultation
+      "Development"              → development
+      "Operation and Support"    → support
+      "License"                  → license (skip)
+      anything else              → other
 
-    Key insight: product="Development", desc="Business Re Engineering" → CONSULTATION
-    because the description carries the phase sub-type and takes priority.
+    Keywords (case-insensitive):
+      consultation: business re, process re, reengineering, re-engineering,
+                    consultation, analysis, roadmap, assessment, design phase
+      support:      operation, support
+      development:  development
+      license:      license
     """
-    p = (product_name or '').lower().strip()
-    d = (desc_name   or '').lower().strip()
+    d = (desc_name or '').lower().strip()
+    if not d:
+        return 'other'
 
     CONSULT_KW = ['business re', 'process re', 'reengineering', 're-engineering',
-                  'consultation', 'analysis', 'roadmap', 'assessment']
-    SUPPORT_KW = ['operation', 'support']
+                  'consultation', 'analysis', 'roadmap', 'assessment', 'design phase']
+    SUPPORT_KW = ['operation and support', 'operation & support', 'support phase',
+                  'operation', 'support']
     DEV_KW     = ['development']
     LIC_KW     = ['license']
 
-    if any(k in p for k in LIC_KW) or any(k in d for k in LIC_KW):
+    if any(k in d for k in LIC_KW):
         return 'license'
-    # Description wins for sub-type (e.g. "Business Re Engineering" inside a Development SO line)
-    if any(k in d for k in CONSULT_KW) or any(k in p for k in CONSULT_KW):
+    if any(k in d for k in CONSULT_KW):
         return 'consultation'
-    if any(k in d for k in SUPPORT_KW) or any(k in p for k in SUPPORT_KW):
+    # Support checked before dev because "operation and support" has no dev keyword
+    if any(k in d for k in SUPPORT_KW):
         return 'support'
-    if any(k in d for k in DEV_KW) or any(k in p for k in DEV_KW):
+    if any(k in d for k in DEV_KW):
         return 'development'
     return 'other'
 
@@ -4658,11 +4665,20 @@ def _categorize_invoice_line(product_name, desc_name):
 @app.route('/api/invoices')
 def api_invoices():
     """
-    Get all validated (posted) invoices for BOG Digital Transformation 25.
-    - Linked via sale orders tied to the project (S00166, S00201, S00204, …)
-    - Amounts are amount_untaxed (excl. VAT / taxes)
-    - License lines are excluded from all phase totals
-    - Returns: per-invoice list + phase totals + monthly breakdown + cumulative per month
+    Get all validated (posted) invoices whose lines belong to project
+    "BOG Digital Transformation 25", categorized by line description only.
+
+    Strategy:
+      1. Find the Odoo project by name → get its id
+      2. Find all account.move.line linked to tasks/analytic of that project
+         (via sale_line_ids.order_id.project_ids OR analytic_account_id)
+         — actually simplest: find posted invoices linked to the known SO list
+           S00201, S00166, S00204 + any SO whose project_ids contains our project id.
+      3. For each invoice line, categorize by description ONLY.
+      4. Only lines that categorize as dev/consultation/support are included;
+         license lines and truly-other lines are excluded from totals.
+
+    Returns: phase totals + per-invoice list + monthly + monthly_cumulative
     """
     try:
         if not odoo.uid:
@@ -4671,59 +4687,46 @@ def api_invoices():
                                 'development': 0, 'consultation': 0, 'support': 0,
                                 'invoices': [], 'monthly': {}}), 503
 
-        # ── Step 1: find all sale orders linked to our project ──────────────────
-        # Try two strategies and union the results to be safe
+        # ── Step 1: find the project id ─────────────────────────────────────────
+        projects = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.project', 'search_read',
+            [[('name', 'ilike', PROJECT_NAME)]],
+            {'fields': ['id', 'name'], 'limit': 5}
+        )
+        project_ids = [p['id'] for p in projects]
+        logger.info(f"BOG projects found: {[(p['id'], p['name']) for p in projects]}")
+
+        # ── Step 2: find all SOs linked to this project ─────────────────────────
         so_ids = set()
-        so_names = []
-
-        # Strategy A: via project_ids many2many on sale.order
-        try:
-            sos_a = odoo.models.execute_kw(
-                ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                'sale.order', 'search_read',
-                [[('project_ids.name', 'ilike', PROJECT_NAME)]],
-                {'fields': ['name', 'id'], 'limit': 100}
-            )
-            for so in sos_a:
-                so_ids.add(so['id'])
-                so_names.append(so['name'])
-        except Exception as _e:
-            logger.warning(f"SO strategy A failed: {_e}")
-
-        # Strategy B: via analytic account / project name on the SO itself
-        try:
-            sos_b = odoo.models.execute_kw(
-                ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                'sale.order', 'search_read',
-                [[('name', 'in', ['S00166', 'S00201', 'S00204'])]],
-                {'fields': ['name', 'id'], 'limit': 20}
-            )
-            for so in sos_b:
-                if so['id'] not in so_ids:
+        so_names_found = []
+        if project_ids:
+            try:
+                sos = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'sale.order', 'search_read',
+                    [[('project_ids', 'in', project_ids)]],
+                    {'fields': ['name', 'id'], 'limit': 200}
+                )
+                for so in sos:
                     so_ids.add(so['id'])
-                    so_names.append(so['name'])
-        except Exception as _e:
-            logger.warning(f"SO strategy B failed: {_e}")
+                    so_names_found.append(so['name'])
+            except Exception as _e:
+                logger.warning(f"SO lookup by project_ids failed: {_e}")
 
-        so_ids = list(so_ids)
-        logger.info(f"BOG sale orders found: {so_names} (ids={so_ids})")
+        logger.info(f"SOs for BOG project: {so_names_found}")
 
-        # ── Step 2: find all posted invoices for these SOs ──────────────────────
-        if so_ids:
-            domain = [
-                ('move_type', '=', 'out_invoice'),
-                ('state',     '=', 'posted'),
-                ('invoice_line_ids.sale_line_ids.order_id', 'in', so_ids),
-            ]
-        else:
-            # Fallback: match by invoice_origin (SO name appears there)
-            logger.warning("No SOs found — falling back to invoice_origin search")
-            domain = [
-                ('move_type',     '=', 'out_invoice'),
-                ('state',         '=', 'posted'),
-                ('invoice_origin', 'ilike', 'BOG'),
-            ]
+        # ── Step 3: get posted invoices for those SOs ───────────────────────────
+        if not so_ids:
+            return jsonify({'error': 'No sale orders found for project',
+                            'development': 0, 'consultation': 0, 'support': 0,
+                            'invoices': [], 'monthly': {}, 'monthly_cumulative': {}}), 404
 
+        domain = [
+            ('move_type', '=', 'out_invoice'),
+            ('state',     '=', 'posted'),
+            ('invoice_line_ids.sale_line_ids.order_id', 'in', list(so_ids)),
+        ]
         invoices_raw = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'account.move', 'search_read',
@@ -4733,17 +4736,19 @@ def api_invoices():
              'limit': 500,
              'order': 'invoice_date asc'}
         )
-        logger.info(f"Raw invoices from Odoo: {len(invoices_raw)}")
+        logger.info(f"Posted invoices for BOG: {len(invoices_raw)}")
 
-        # ── Step 3: categorize each invoice line ────────────────────────────────
+        # ── Step 4: fetch & categorize invoice lines by description only ─────────
         result = {
-            'development': 0.0,
-            'consultation': 0.0,
-            'support': 0.0,
-            'other': 0.0,
-            'invoices': [],          # per-invoice detail
-            'monthly': {},           # {'2026-03': {development, consultation, support, total}}
-            'monthly_cumulative': {} # cumulative up to each month
+            'development':       0.0,
+            'consultation':      0.0,
+            'support':           0.0,
+            'license_excluded':  0.0,   # informational — not in totals
+            'other_unmatched':   0.0,   # lines with unknown desc — for debugging
+            'invoices':          [],
+            'monthly':           {},
+            'monthly_cumulative': {},
+            'sale_orders':       so_names_found,
         }
 
         for inv in invoices_raw:
@@ -4755,44 +4760,45 @@ def api_invoices():
                 ODOO_DB, odoo.uid, ODOO_PASSWORD,
                 'account.move.line', 'search_read',
                 [[('id', 'in', line_ids),
-                  ('display_type', 'not in', ['line_section', 'line_note'])]],
-                {'fields': ['name', 'price_subtotal', 'product_id']}
+                  ('display_type', 'not in', ['line_section', 'line_note']),
+                  # Only lines linked to our SOs (filters out lines from other projects
+                  # that share the same invoice header)
+                  ('sale_line_ids.order_id', 'in', list(so_ids))]],
+                {'fields': ['name', 'price_subtotal']}
             )
 
-            inv_dev = inv_con = inv_sup = inv_lic = 0.0
+            inv_dev = inv_con = inv_sup = inv_lic = inv_other = 0.0
             for line in lines:
-                pid = line.get('product_id')
-                product_name = (pid[1] if isinstance(pid, list) and len(pid) > 1 else '') or ''
-                desc_name    = line.get('name') or ''
-                amount       = float(line.get('price_subtotal') or 0)
+                desc   = line.get('name') or ''
+                amount = float(line.get('price_subtotal') or 0)
+                cat    = _categorize_invoice_line_by_desc(desc)
 
-                cat = _categorize_invoice_line(product_name, desc_name)
-                logger.info(f"  [{inv['name']}] product='{product_name}' desc='{desc_name}' → {cat} ({amount})")
+                logger.info(f"  [{inv['name']}] desc='{desc}' → {cat} ({amount:.2f})")
 
-                if   cat == 'license':      inv_lic += amount
-                elif cat == 'consultation': inv_con += amount;  result['consultation'] += amount
-                elif cat == 'support':      inv_sup += amount;  result['support']      += amount
-                elif cat == 'development':  inv_dev += amount;  result['development']  += amount
-                else:                       result['other'] += amount
+                if   cat == 'license':      inv_lic   += amount; result['license_excluded'] += amount
+                elif cat == 'consultation': inv_con   += amount; result['consultation']     += amount
+                elif cat == 'support':      inv_sup   += amount; result['support']          += amount
+                elif cat == 'development':  inv_dev   += amount; result['development']      += amount
+                else:                       inv_other += amount; result['other_unmatched']  += amount
 
-            inv_total = inv_dev + inv_con + inv_sup  # excl. license
+            inv_total = inv_dev + inv_con + inv_sup   # excl. license & other
             inv_date  = inv.get('invoice_date', '') or ''
-            month_key = inv_date[:7] if inv_date else 'unknown'  # '2026-03'
+            month_key = inv_date[:7] if inv_date else 'unknown'
 
             if inv_total > 0:
                 result['invoices'].append({
-                    'name':          inv['name'],
-                    'date':          inv_date,
-                    'month':         month_key,
-                    'amount_untaxed': inv_total,
-                    'development':   round(inv_dev, 2),
-                    'consultation':  round(inv_con, 2),
-                    'support':       round(inv_sup, 2),
-                    'license':       round(inv_lic, 2),
-                    'origin':        inv.get('invoice_origin', ''),
+                    'name':           inv['name'],
+                    'date':           inv_date,
+                    'month':          month_key,
+                    'amount_untaxed': round(inv_total, 2),
+                    'development':    round(inv_dev,   2),
+                    'consultation':   round(inv_con,   2),
+                    'support':        round(inv_sup,   2),
+                    'license':        round(inv_lic,   2),
+                    'other':          round(inv_other, 2),
+                    'origin':         inv.get('invoice_origin', ''),
                 })
 
-            # Accumulate monthly (even if inv_total==0, skip unknowns)
             if month_key != 'unknown' and inv_total > 0:
                 m = result['monthly'].setdefault(month_key,
                         {'development': 0.0, 'consultation': 0.0, 'support': 0.0, 'total': 0.0})
@@ -4801,10 +4807,9 @@ def api_invoices():
                 m['support']      += inv_sup
                 m['total']        += inv_total
 
-        # ── Step 4: build cumulative per month ──────────────────────────────────
-        sorted_months = sorted(result['monthly'].keys())
+        # ── Step 5: cumulative per month ────────────────────────────────────────
         cum_dev = cum_con = cum_sup = cum_tot = 0.0
-        for mk in sorted_months:
+        for mk in sorted(result['monthly'].keys()):
             m = result['monthly'][mk]
             cum_dev += m['development']
             cum_con += m['consultation']
@@ -4817,15 +4822,16 @@ def api_invoices():
                 'total':        round(cum_tot, 2),
             }
 
-        # Round totals
-        result['development']  = round(result['development'],  2)
-        result['consultation'] = round(result['consultation'], 2)
-        result['support']      = round(result['support'],      2)
-        result['other']        = round(result['other'],        2)
-        result['total']        = round(result['development'] + result['consultation'] + result['support'], 2)
+        result['development']      = round(result['development'],      2)
+        result['consultation']     = round(result['consultation'],      2)
+        result['support']          = round(result['support'],          2)
+        result['license_excluded'] = round(result['license_excluded'], 2)
+        result['other_unmatched']  = round(result['other_unmatched'],  2)
+        result['total']            = round(result['development'] + result['consultation'] + result['support'], 2)
 
-        logger.info(f"Invoice totals — dev:{result['development']} con:{result['consultation']} "
-                    f"sup:{result['support']} other:{result['other']}")
+        logger.info(f"Invoice totals — dev:{result['development']} "
+                    f"con:{result['consultation']} sup:{result['support']} "
+                    f"lic_excl:{result['license_excluded']} other:{result['other_unmatched']}")
 
         return jsonify(result)
 
@@ -4833,7 +4839,7 @@ def api_invoices():
         logger.error(f"Invoices API error: {e}", exc_info=True)
         return jsonify({'error': str(e),
                         'development': 0, 'consultation': 0, 'support': 0,
-                        'invoices': [], 'monthly': {}}), 500
+                        'invoices': [], 'monthly': {}, 'monthly_cumulative': {}}), 500
 
 
 @app.route('/api/invoices/by-phase/<phase>')
@@ -4881,44 +4887,38 @@ def api_invoices_by_phase(phase):
 @app.route('/debug/invoices')
 def debug_invoices():
     """
-    Debug endpoint: shows every invoice line with its raw product/desc and assigned category.
-    Visit /debug/invoices in browser to verify categorization.
+    Debug: shows every invoice line with its desc and category.
+    Also shows which SOs were found for the project.
+    Visit /debug/invoices in browser to verify.
     """
     try:
         if not odoo.uid:
             if not odoo.connect():
                 return jsonify({'error': 'Odoo not connected'}), 503
 
+        projects = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.project', 'search_read',
+            [[('name', 'ilike', PROJECT_NAME)]],
+            {'fields': ['id', 'name'], 'limit': 5}
+        )
+        project_ids = [p['id'] for p in projects]
+
         so_ids = set()
         so_names = []
-        try:
+        if project_ids:
             sos = odoo.models.execute_kw(
                 ODOO_DB, odoo.uid, ODOO_PASSWORD,
                 'sale.order', 'search_read',
-                [[('project_ids.name', 'ilike', PROJECT_NAME)]],
-                {'fields': ['name', 'id'], 'limit': 100}
+                [[('project_ids', 'in', project_ids)]],
+                {'fields': ['name', 'id'], 'limit': 200}
             )
             for so in sos:
                 so_ids.add(so['id']); so_names.append(so['name'])
-        except Exception as _e:
-            pass
-
-        try:
-            sos2 = odoo.models.execute_kw(
-                ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                'sale.order', 'search_read',
-                [[('name', 'in', ['S00166', 'S00201', 'S00204'])]],
-                {'fields': ['name', 'id'], 'limit': 20}
-            )
-            for so in sos2:
-                if so['id'] not in so_ids:
-                    so_ids.add(so['id']); so_names.append(so['name'])
-        except Exception:
-            pass
 
         so_ids = list(so_ids)
-        domain = [('move_type','=','out_invoice'),('state','=','posted'),
-                  ('invoice_line_ids.sale_line_ids.order_id','in',so_ids)]
+        domain = [('move_type','=','out_invoice'), ('state','=','posted'),
+                  ('invoice_line_ids.sale_line_ids.order_id','in', so_ids)]
         invoices_raw = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'account.move', 'search_read', [domain],
@@ -4926,29 +4926,28 @@ def debug_invoices():
              'limit': 500, 'order': 'invoice_date asc'}
         )
 
-        out = {'sale_orders': so_names, 'invoice_count': len(invoices_raw), 'detail': []}
+        out = {'projects': [(p['id'],p['name']) for p in projects],
+               'sale_orders': so_names,
+               'invoice_count': len(invoices_raw),
+               'detail': []}
+
         for inv in invoices_raw:
             line_ids = inv.get('invoice_line_ids', [])
             lines_raw = odoo.models.execute_kw(
                 ODOO_DB, odoo.uid, ODOO_PASSWORD,
                 'account.move.line', 'search_read',
-                [[('id','in',line_ids),('display_type','not in',['line_section','line_note'])]],
-                {'fields': ['name','price_subtotal','product_id']}
+                [[('id','in',line_ids),
+                  ('display_type','not in',['line_section','line_note']),
+                  ('sale_line_ids.order_id','in',so_ids)]],
+                {'fields': ['name','price_subtotal']}
             ) if line_ids else []
 
             parsed_lines = []
             for line in lines_raw:
-                pid = line.get('product_id')
-                product_name = (pid[1] if isinstance(pid, list) and len(pid) > 1 else '') or ''
-                desc_name    = line.get('name') or ''
-                amount       = float(line.get('price_subtotal') or 0)
-                cat          = _categorize_invoice_line(product_name, desc_name)
-                parsed_lines.append({
-                    'product': product_name,
-                    'desc':    desc_name,
-                    'amount':  amount,
-                    'category': cat,
-                })
+                desc   = line.get('name') or ''
+                amount = float(line.get('price_subtotal') or 0)
+                cat    = _categorize_invoice_line_by_desc(desc)
+                parsed_lines.append({'desc': desc, 'amount': amount, 'category': cat})
 
             out['detail'].append({
                 'name':    inv['name'],
