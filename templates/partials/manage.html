@@ -468,10 +468,7 @@ async function loadTravel() {
   document.getElementById('travelBody').innerHTML = rows.length ? rows.map(r => `
     <tr>
       <td style="color:var(--muted)">${r.id}</td>
-      <td style="font-weight:600">
-        ${r.name}
-        ${r.odoo_employee_id ? '<span style="font-size:9px;background:#DBEAFE;color:#1E40AF;padding:1px 5px;border-radius:8px;margin-left:4px;font-weight:700;">Odoo</span>' : ''}
-      </td>
+      <td style="font-weight:600">${r.name} ${odooStatus(r)}</td>
       <td>${r.position||'—'}</td>
       <td>${r.start_date||'—'}</td>
       <td>${r.end_date||'—'}</td>
@@ -735,10 +732,7 @@ async function loadPromos() {
   document.getElementById('promoBody').innerHTML = rows.length ? rows.map(r => `
     <tr>
       <td style="color:var(--muted)">${r.id}</td>
-      <td style="font-weight:600">
-        ${r.name}
-        ${r.odoo_employee_id ? '<span style="font-size:9px;background:#DBEAFE;color:#1E40AF;padding:1px 5px;border-radius:8px;margin-left:4px;font-weight:700;">Odoo</span>' : ''}
-      </td>
+      <td style="font-weight:600">${r.name} ${odooStatus(r)}</td>
       <td>${r.new_title||'—'}</td>
       <td>${r.effective_date||'—'}</td>
       <td><span class="badge badge-blue">${r.year||'—'}</span></td>
