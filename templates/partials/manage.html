@@ -229,9 +229,12 @@
     <!-- Add Form -->
     <div class="add-form" id="travelForm">
       <div class="form-grid">
-        <div class="form-field">
-          <label>Name *</label>
-          <input type="text" id="tv_name" placeholder="Full name">
+        <div class="form-field" style="position:relative;">
+          <label>Name * <span style="font-weight:400;color:var(--blue);font-size:9px;cursor:pointer;" onclick="searchOdooEmp()">🔍 Search in Odoo</span></label>
+          <input type="text" id="tv_name" placeholder="Full name" oninput="onTvNameInput(this)">
+          <div id="tvNameSuggestions" style="display:none;position:absolute;top:100%;left:0;right:0;background:white;
+               border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.1);z-index:100;max-height:160px;overflow-y:auto;"></div>
+          <input type="hidden" id="tv_odoo_id">
         </div>
         <div class="form-field">
           <label>Position / Level</label>
@@ -465,7 +468,10 @@ async function loadTravel() {
   document.getElementById('travelBody').innerHTML = rows.length ? rows.map(r => `
     <tr>
       <td style="color:var(--muted)">${r.id}</td>
-      <td style="font-weight:600">${r.name}</td>
+      <td style="font-weight:600">
+        ${r.name}
+        ${r.odoo_employee_id ? '<span style="font-size:9px;background:#DBEAFE;color:#1E40AF;padding:1px 5px;border-radius:8px;margin-left:4px;font-weight:700;">Odoo</span>' : ''}
+      </td>
       <td>${r.position||'—'}</td>
       <td>${r.start_date||'—'}</td>
       <td>${r.end_date||'—'}</td>
@@ -485,10 +491,11 @@ async function addTravel() {
   if (!name || !start) { alert('Name and start date required'); return; }
   const body = {
     name, start_date: start,
-    position: document.getElementById('tv_pos').value.trim(),
-    end_date:  document.getElementById('tv_end').value,
-    notes:     document.getElementById('tv_notes').value.trim(),
-    status: 'confirmed'
+    position:         document.getElementById('tv_pos').value.trim(),
+    end_date:         document.getElementById('tv_end').value,
+    notes:            document.getElementById('tv_notes').value.trim(),
+    status:           'confirmed',
+    odoo_employee_id: parseInt(document.getElementById('tv_odoo_id').value) || null,
   };
 
   let res;
@@ -523,7 +530,50 @@ async function deleteTravel(id) {
   loadTravel();
 }
 
-// ── PDF Ticket Parser ────────────────────────────────────────────────
+// ── Odoo Employee Search ─────────────────────────────────────────────
+let _empSearchTimer = null;
+
+function onTvNameInput(inp) {
+  document.getElementById('tv_odoo_id').value = '';
+  clearTimeout(_empSearchTimer);
+  _empSearchTimer = setTimeout(() => searchOdooEmpByName(inp.value), 400);
+}
+
+async function searchOdooEmpByName(q) {
+  const sugEl = document.getElementById('tvNameSuggestions');
+  if (!q || q.length < 2) { sugEl.style.display='none'; return; }
+  try {
+    const res = await fetch('/api/global/employees/search?q='+encodeURIComponent(q));
+    const d   = await res.json();
+    const emps = d.employees || [];
+    if (!emps.length) { sugEl.style.display='none'; return; }
+    sugEl.innerHTML = emps.map(e =>
+      `<div style="padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid #F3F4F6;"
+            onmouseover="this.style.background='#F0F9FF'" onmouseout="this.style.background=''"
+            onclick="selectOdooEmp(${e.id}, '${e.name.replace(/'/g,"\\'")}', '${(e.title||'').replace(/'/g,"\\'")}')">
+         <b>${e.name}</b> <span style="color:var(--muted);font-size:11px;">${e.title||''}</span>
+       </div>`
+    ).join('');
+    sugEl.style.display = 'block';
+  } catch(e) { sugEl.style.display='none'; }
+}
+
+function selectOdooEmp(id, name, title) {
+  document.getElementById('tv_name').value    = name;
+  document.getElementById('tv_odoo_id').value = id;
+  if (title && !document.getElementById('tv_pos').value) {
+    document.getElementById('tv_pos').value = title;
+  }
+  document.getElementById('tvNameSuggestions').style.display = 'none';
+}
+
+// Close suggestions on outside click
+document.addEventListener('click', e => {
+  if (!e.target.closest('#tv_name') && !e.target.closest('#tvNameSuggestions'))
+    document.getElementById('tvNameSuggestions').style.display = 'none';
+});
+
+// ── PDF Ticket Parser ─────────────────────────────────────────────────
 let _parsedTicket = null;
 
 async function parseTicket(input) {
@@ -604,7 +654,10 @@ async function loadPromos() {
   document.getElementById('promoBody').innerHTML = rows.length ? rows.map(r => `
     <tr>
       <td style="color:var(--muted)">${r.id}</td>
-      <td style="font-weight:600">${r.name}</td>
+      <td style="font-weight:600">
+        ${r.name}
+        ${r.odoo_employee_id ? '<span style="font-size:9px;background:#DBEAFE;color:#1E40AF;padding:1px 5px;border-radius:8px;margin-left:4px;font-weight:700;">Odoo</span>' : ''}
+      </td>
       <td>${r.new_title||'—'}</td>
       <td>${r.effective_date||'—'}</td>
       <td><span class="badge badge-blue">${r.year||'—'}</span></td>
