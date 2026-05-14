@@ -893,125 +893,136 @@ def api_search_employees():
 
 @app.route('/api/global/travel/auto-link', methods=['POST'])
 def api_travel_auto_link():
-    """Auto-match unlinked travel records to Odoo employees by fuzzy name."""
+    """Auto-match travel records to Odoo employees. Runs on ALL records (updates existing links too)."""
     try:
         if not odoo.uid: odoo.connect()
         records = _global_get('travel') or []
         import re as _re
+
         def norm(s):
-            return _re.sub(r"[\s\-_'.]+",'', (s or '').lower().strip())
-        
+            return _re.sub(r"[\s\-_'.]+", '', (s or '').lower().strip())
+
+        def valid_code(s):
+            s = (s or '').strip().upper()
+            return s if (s and _re.match(r'^[ERT]\d+$', s)) else None
+
         all_emps = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'hr.employee', 'search_read',
-            [[('active','=',True)]],
-            {'fields':['id','name','barcode'], 'limit':2000}
+            [[('active', '=', True)]],
+            {'fields': ['id', 'name', 'barcode', 'identification_id'], 'limit': 2000}
         )
-        # Build multiple indexes
-        emp_by_norm = {}   # normalized full name → emp
-        emp_by_fl   = {}   # first+last word → emp
-        emp_by_barcode = {} # barcode (E259) → emp
-        for e in all_emps:
-            n = norm(e['name'])
-            emp_by_norm[n] = e
-            words = e['name'].lower().split()
-            if len(words) >= 2:
-                emp_by_fl[words[0]+words[-1]] = e
-            bc = (e.get('barcode') or '').strip().upper()
-            # Only use barcodes that match employee code format (E123, R123, T123)
-            import re as _re_bc
-            if bc and _re_bc.match(r'^[ERT]\d+$', bc):
-                emp_by_barcode[bc] = e
-                e['_valid_code'] = bc
 
-        matched = unmatched = 0
-        for r in records:
-            if r.get('odoo_employee_id'):
-                continue
-            # Try by code first (E259 format stored in position or notes)
-            code = ''
-            import re as _re2
-            for field in ['position','notes','name']:
-                m = _re2.search(r'\b([ERT]\d+)\b', r.get(field,''), _re2.IGNORECASE)
-                if m: code = m.group(1).upper(); break
-
-            found = emp_by_barcode.get(code) if code else None
-
-            if not found:
-                n = norm(r.get('name',''))
-                found = emp_by_norm.get(n)
-
-            if not found:
-                words = r.get('name','').lower().split()
-                if len(words) >= 2:
-                    found = emp_by_fl.get(words[0]+words[-1])
-
-            if found:
-                r['odoo_employee_id']   = found['id']
-                r['odoo_employee_name'] = found['name']
-                r['odoo_employee_code'] = (found.get('barcode') or '').strip() or None
-                matched += 1
-            else:
-                unmatched += 1
-
-        _global_set('travel', records)
-        return jsonify({'ok':True,'matched':matched,'unmatched':unmatched,'total':len(records)})
-    except Exception as e:
-        return jsonify({'error':str(e)}), 500
-
-
-@app.route('/api/global/promotions/auto-link', methods=['POST'])
-def api_promotions_auto_link():
-    """Auto-match unlinked promotion records to Odoo employees by fuzzy name."""
-    try:
-        if not odoo.uid: odoo.connect()
-        records = _global_get('promotions') or []
-        import re as _re
-        def norm(s):
-            return _re.sub(r"[\s\-_'.]+",'', (s or '').lower().strip())
-        all_emps = odoo.models.execute_kw(
-            ODOO_DB, odoo.uid, ODOO_PASSWORD,
-            'hr.employee', 'search_read',
-            [[('active','=',True)]],
-            {'fields':['id','name','barcode'], 'limit':2000}
-        )
+        # Build indexes
         emp_by_norm = {}
         emp_by_fl   = {}
-        emp_by_barcode = {}
+        emp_by_code = {}
         for e in all_emps:
             emp_by_norm[norm(e['name'])] = e
             words = e['name'].lower().split()
             if len(words) >= 2:
-                emp_by_fl[words[0]+words[-1]] = e
-            bc = (e.get('barcode') or '').strip().upper()
-            # Only use barcodes that match employee code format (E123, R123, T123)
-            import re as _re_bc
-            if bc and _re_bc.match(r'^[ERT]\d+$', bc):
-                emp_by_barcode[bc] = e
-                e['_valid_code'] = bc
+                emp_by_fl[words[0] + words[-1]] = e
+            # Valid code from barcode or identification_id
+            code = valid_code(e.get('barcode')) or valid_code(e.get('identification_id'))
+            if code:
+                emp_by_code[code] = e
+                e['_code'] = code
 
-        matched = unmatched = 0
+        matched = already = unmatched = 0
         for r in records:
-            if r.get('odoo_employee_id'):
-                continue
-            n = norm(r.get('name',''))
-            found = emp_by_norm.get(n)
+            # Find best match
+            found = None
+            # 1. Code in record name/notes/position
+            for field in ['name', 'position', 'notes']:
+                m = _re.search(r'\b([ERT]\d+)\b', r.get(field, ''), _re.IGNORECASE)
+                if m:
+                    found = emp_by_code.get(m.group(1).upper())
+                    if found: break
+            # 2. Exact name
             if not found:
-                words = r.get('name','').lower().split()
+                found = emp_by_norm.get(norm(r.get('name', '')))
+            # 3. First+last name
+            if not found:
+                words = r.get('name', '').lower().split()
                 if len(words) >= 2:
-                    found = emp_by_fl.get(words[0]+words[-1])
+                    found = emp_by_fl.get(words[0] + words[-1])
+
             if found:
+                new_code = found.get('_code') or None
+                old_id = r.get('odoo_employee_id')
                 r['odoo_employee_id']   = found['id']
                 r['odoo_employee_name'] = found['name']
-                r['odoo_employee_code'] = (found.get('barcode') or '').strip() or None
-                matched += 1
+                r['odoo_employee_code'] = new_code
+                if old_id == found['id']:
+                    already += 1
+                else:
+                    matched += 1
+            else:
+                unmatched += 1
+
+        _global_set('travel', records)
+        return jsonify({'ok': True, 'matched': matched, 'already': already,
+                        'unmatched': unmatched, 'total': len(records)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/global/promotions/auto-link', methods=['POST'])
+def api_promotions_auto_link():
+    """Auto-match promotion records to Odoo employees. Runs on ALL records."""
+    try:
+        if not odoo.uid: odoo.connect()
+        records = _global_get('promotions') or []
+        import re as _re
+
+        def norm(s):
+            return _re.sub(r"[\s\-_'.]+", '', (s or '').lower().strip())
+
+        def valid_code(s):
+            s = (s or '').strip().upper()
+            return s if (s and _re.match(r'^[ERT]\d+$', s)) else None
+
+        all_emps = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'hr.employee', 'search_read',
+            [[('active', '=', True)]],
+            {'fields': ['id', 'name', 'barcode', 'identification_id'], 'limit': 2000}
+        )
+        emp_by_norm = {}
+        emp_by_fl   = {}
+        emp_by_code = {}
+        for e in all_emps:
+            emp_by_norm[norm(e['name'])] = e
+            words = e['name'].lower().split()
+            if len(words) >= 2:
+                emp_by_fl[words[0] + words[-1]] = e
+            code = valid_code(e.get('barcode')) or valid_code(e.get('identification_id'))
+            if code:
+                emp_by_code[code] = e
+                e['_code'] = code
+
+        matched = already = unmatched = 0
+        for r in records:
+            found = emp_by_norm.get(norm(r.get('name', '')))
+            if not found:
+                words = r.get('name', '').lower().split()
+                if len(words) >= 2:
+                    found = emp_by_fl.get(words[0] + words[-1])
+            if found:
+                old_id = r.get('odoo_employee_id')
+                r['odoo_employee_id']   = found['id']
+                r['odoo_employee_name'] = found['name']
+                r['odoo_employee_code'] = found.get('_code') or None
+                if old_id == found['id']: already += 1
+                else: matched += 1
             else:
                 unmatched += 1
 
         _global_set('promotions', records)
-        return jsonify({'ok':True,'matched':matched,'unmatched':unmatched,'total':len(records)})
+        return jsonify({'ok': True, 'matched': matched, 'already': already,
+                        'unmatched': unmatched, 'total': len(records)})
     except Exception as e:
-        return jsonify({'error':str(e)}), 500
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/debug/projects-raw')
