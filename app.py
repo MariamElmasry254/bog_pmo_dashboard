@@ -893,14 +893,25 @@ def api_search_employees():
 
 @app.route('/api/global/travel/auto-link', methods=['POST'])
 def api_travel_auto_link():
-    """Auto-match travel records to Odoo employees. Runs on ALL records (updates existing links too)."""
+    """Auto-match travel records to Odoo employees with fuzzy matching."""
     try:
         if not odoo.uid: odoo.connect()
         records = _global_get('travel') or []
         import re as _re
+        import unicodedata
 
         def norm(s):
-            return _re.sub(r"[\s\-_'.]+", '', (s or '').lower().strip())
+            """Aggressive normalization: remove spaces, dashes, normalize Arabic transliterations"""
+            s = (s or '').lower().strip()
+            # Normalize common transliteration variants
+            s = s.replace('abdel', 'abd').replace('abdal', 'abd').replace('abder', 'abd')
+            s = s.replace('elh', 'elh').replace('el-', 'el').replace('al-', 'al')
+            s = _re.sub(r"[\s\-_'.]+", '', s)
+            return s
+
+        def norm2(s):
+            """Lighter norm: just lowercase + remove spaces"""
+            return _re.sub(r'\s+', '', (s or '').lower().strip())
 
         def valid_code(s):
             s = (s or '').strip().upper()
@@ -913,16 +924,19 @@ def api_travel_auto_link():
             {'fields': ['id', 'name', 'barcode', 'identification_id'], 'limit': 2000}
         )
 
-        # Build indexes
-        emp_by_norm = {}
-        emp_by_fl   = {}
-        emp_by_code = {}
+        # Build multiple indexes for different matching strategies
+        emp_by_norm  = {}   # aggressive norm
+        emp_by_norm2 = {}   # light norm (just remove spaces)
+        emp_by_fl    = {}   # first word + last word
+        emp_by_code  = {}   # E/R/T code
+        emp_list     = all_emps  # for fuzzy scan
+
         for e in all_emps:
-            emp_by_norm[norm(e['name'])] = e
+            emp_by_norm[norm(e['name'])]   = e
+            emp_by_norm2[norm2(e['name'])] = e
             words = e['name'].lower().split()
             if len(words) >= 2:
                 emp_by_fl[words[0] + words[-1]] = e
-            # Valid code from barcode or identification_id
             code = valid_code(e.get('barcode')) or valid_code(e.get('identification_id'))
             if code:
                 emp_by_code[code] = e
@@ -930,22 +944,49 @@ def api_travel_auto_link():
 
         matched = already = unmatched = 0
         for r in records:
-            # Find best match
             found = None
-            # 1. Code in record name/notes/position
+            rname = r.get('name', '').strip()
+
+            # 1. Code in record fields
             for field in ['name', 'position', 'notes']:
                 m = _re.search(r'\b([ERT]\d+)\b', r.get(field, ''), _re.IGNORECASE)
                 if m:
                     found = emp_by_code.get(m.group(1).upper())
                     if found: break
-            # 2. Exact name
+
+            # 2. Exact normalized name
             if not found:
-                found = emp_by_norm.get(norm(r.get('name', '')))
-            # 3. First+last name
+                found = emp_by_norm.get(norm(rname))
+
+            # 3. Light norm (just spaces removed)
             if not found:
-                words = r.get('name', '').lower().split()
+                found = emp_by_norm2.get(norm2(rname))
+
+            # 4. First + last word
+            if not found:
+                words = rname.lower().split()
                 if len(words) >= 2:
                     found = emp_by_fl.get(words[0] + words[-1])
+
+            # 5. Fuzzy: first word match + last word similar (handles spelling variants)
+            if not found and len(rname.split()) >= 2:
+                rwords = rname.lower().split()
+                r_first = rwords[0]
+                r_last  = rwords[-1]
+                for e in emp_list:
+                    ewords = e['name'].lower().split()
+                    if len(ewords) < 2: continue
+                    e_first = ewords[0]
+                    e_last  = ewords[-1]
+                    # First word must match exactly OR be very similar
+                    if r_first != e_first:
+                        continue
+                    # Last word: check if one contains the other (handles Abdulhamed vs AbdelHamed)
+                    rl = r_last.replace('el','').replace('ul','').replace('al','')
+                    el = e_last.replace('el','').replace('ul','').replace('al','')
+                    if rl == el or r_last in e_last or e_last in r_last:
+                        found = e
+                        break
 
             if found:
                 new_code = found.get('_code') or None
@@ -969,14 +1010,17 @@ def api_travel_auto_link():
 
 @app.route('/api/global/promotions/auto-link', methods=['POST'])
 def api_promotions_auto_link():
-    """Auto-match promotion records to Odoo employees. Runs on ALL records."""
+    """Auto-match promotion records to Odoo employees with fuzzy matching."""
     try:
         if not odoo.uid: odoo.connect()
         records = _global_get('promotions') or []
         import re as _re
 
         def norm(s):
-            return _re.sub(r"[\s\-_'.]+", '', (s or '').lower().strip())
+            s = (s or '').lower().strip()
+            s = s.replace('abdel', 'abd').replace('abdal', 'abd')
+            s = _re.sub(r"[\s\-_'.]+", '', s)
+            return s
 
         def valid_code(s):
             s = (s or '').strip().upper()
@@ -990,24 +1034,35 @@ def api_promotions_auto_link():
         )
         emp_by_norm = {}
         emp_by_fl   = {}
-        emp_by_code = {}
+        emp_list    = all_emps
         for e in all_emps:
             emp_by_norm[norm(e['name'])] = e
             words = e['name'].lower().split()
             if len(words) >= 2:
-                emp_by_fl[words[0] + words[-1]] = e
+                emp_by_fl[words[0]+words[-1]] = e
             code = valid_code(e.get('barcode')) or valid_code(e.get('identification_id'))
             if code:
-                emp_by_code[code] = e
                 e['_code'] = code
 
         matched = already = unmatched = 0
         for r in records:
-            found = emp_by_norm.get(norm(r.get('name', '')))
+            rname = r.get('name','').strip()
+            found = emp_by_norm.get(norm(rname))
             if not found:
-                words = r.get('name', '').lower().split()
+                words = rname.lower().split()
                 if len(words) >= 2:
-                    found = emp_by_fl.get(words[0] + words[-1])
+                    found = emp_by_fl.get(words[0]+words[-1])
+            if not found and len(rname.split()) >= 2:
+                rwords = rname.lower().split()
+                for e in emp_list:
+                    ewords = e['name'].lower().split()
+                    if len(ewords) < 2: continue
+                    if rwords[0] != ewords[0]: continue
+                    rl = rwords[-1].replace('el','').replace('ul','').replace('al','')
+                    el = ewords[-1].replace('el','').replace('ul','').replace('al','')
+                    if rl == el or rwords[-1] in ewords[-1] or ewords[-1] in rwords[-1]:
+                        found = e; break
+
             if found:
                 old_id = r.get('odoo_employee_id')
                 r['odoo_employee_id']   = found['id']
