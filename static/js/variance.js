@@ -683,7 +683,7 @@ async function _doBuildProfTable(phaseKey, wrap, months) {
           <th colspan="2" style="text-align:center;background:#1B2A4E;color:#93C5FD;border-left:3px solid #60A5FA;">% Completion & Remaining</th>
           <th colspan="8" style="text-align:center;background:#1B2A4E;color:#6EE7B7;border-left:3px solid #10B981;">Cost Variance</th>
           <th colspan="6" style="text-align:center;background:#1B2A4E;color:#FCA5A5;border-left:3px solid #EF4444;">Profitability</th>
-          <th colspan="6" style="text-align:center;background:#1B2A4E;color:#C4B5FD;border-left:3px solid #8B5CF6;">Progress &amp; Virtual Invoice</th>
+          <th colspan="5" style="text-align:center;background:#1B2A4E;color:#C4B5FD;border-left:3px solid #8B5CF6;">Progress &amp; Virtual Invoice</th>
         </tr>
         <tr style="font-size:10px;background:#f8fafc;">
           <th class="num" style="border-left:3px solid #3B82F6;">Revenue SAR</th>
@@ -706,9 +706,8 @@ async function _doBuildProfTable(phaseKey, wrap, months) {
           <th class="num">Profit %</th>
           <th class="num">Prof. Var SAR</th>
           <th class="num">Prof. Var %</th>
-          <th class="num" style="border-left:3px solid #8B5CF6;">Revenue to Date</th>
+          <th class="num" style="border-left:3px solid #8B5CF6;">Total Recog. Revenue</th>
           <th class="num">Progress %</th>
-          <th class="num">Total Recog. Revenue</th>
           <th class="num">Production</th>
           <th class="num">Acc. VI SAR</th>
           <th class="num">This Month VI SAR</th>
@@ -758,7 +757,6 @@ async function _doBuildProfTable(phaseKey, wrap, months) {
             <td class="num"><span class="pc-prof-var-pct-${monthKey}">—</span></td>
             <td class="num" style="border-left:3px solid #8B5CF6;"><span class="pc-rev-todate-${monthKey}">—</span></td>
             <td class="num"><span class="pc-progress-${monthKey}">—</span></td>
-            <td class="num"><span class="pc-recog-rev-${monthKey}">—</span></td>
             <td class="num"><span class="pc-production-${monthKey}">—</span></td>
             <td class="num"><span class="pc-vi-acc-${monthKey}">—</span></td>
             <td class="num"><span class="pc-vi-month-${monthKey}">—</span></td>
@@ -961,7 +959,19 @@ async function profRecomputeAll(phaseKey) {
     const prevMonthKey = months[idx - 1]?.key;
     const prevRecogRev = prevMonthKey ? (AppState._profRecogRev?.[phaseKey]?.[prevMonthKey] || 0) : 0;
     const prevAccVI    = prevMonthKey ? (AppState._profAccVI?.[phaseKey]?.[prevMonthKey] || 0) : 0;
-    const totalIssuedInvoices = 0; // TODO: from Odoo
+    // Load issued invoices from Odoo (cached per phase)
+    if (!AppState._issuedInvoices) AppState._issuedInvoices = {};
+    let totalIssuedInvoices = AppState._issuedInvoices[phaseKey] || 0;
+    if (!totalIssuedInvoices) {
+      try {
+        const invRes = await fetch(`/api/invoices/by-phase/${phaseKey}`);
+        if (invRes.ok) {
+          const invData = await invRes.json();
+          totalIssuedInvoices = invData.total_sar || 0;
+          AppState._issuedInvoices[phaseKey] = totalIssuedInvoices;
+        }
+      } catch(e) {}
+    }
 
     const production   = recognizedRev - prevRecogRev;
     const accVI        = recognizedRev - totalIssuedInvoices;
@@ -976,9 +986,8 @@ async function profRecomputeAll(phaseKey) {
     AppState._profRecogRev[phaseKey][monthKey] = recognizedRev;
     AppState._profAccVI[phaseKey][monthKey]    = accVI;
 
-    setSpan(`pc-rev-todate-${monthKey}`,   recognizedRev > 0 ? fSAR(recognizedRev) : '—');
+    setSpan(`pc-rev-todate-${monthKey}`,   completionPct > 0 ? fSAR(recognizedRev) : '—');
     setSpan(`pc-progress-${monthKey}`,     progressPct2 > 0 ? `${fmt.decimal(progressPct2)}%` : '—');
-    setSpan(`pc-recog-rev-${monthKey}`,    recognizedRev > 0 ? fSAR(recognizedRev) : '—');
     setSpan(`pc-production-${monthKey}`,   production !== 0 ? fSAR(production) : '—');
     setSpan(`pc-vi-acc-${monthKey}`,       accVI !== 0 ? fSAR(accVI) : '—');
     setSpan(`pc-vi-month-${monthKey}`,     thisMonthVI !== 0 ? fSAR(thisMonthVI) : '—');
