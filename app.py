@@ -455,30 +455,98 @@ def index():
 
 @app.route('/api/overview')
 def api_overview():
-    """KPIs from Roadmap (PPT) only"""
+    """KPIs from Roadmap + Odoo project details"""
     roadmap_services = ROADMAP or []
-    total_services_roadmap = len(roadmap_services)
     total_wd_roadmap = sum(s.get('wd') or 0 for s in roadmap_services)
 
-    # Distinct teams in roadmap
     teams = set()
     for s in roadmap_services:
         if s.get('team'):
             teams.add(s['team'])
 
-    proj_start = PROJECT_INFO.get('start_date')
-    proj_end = PROJECT_INFO.get('end_date')
-    duration_months = PROJECT_INFO.get('duration_months')
     milestones_count = len(MILESTONES) if MILESTONES else 0
 
-    # Time progress (timeline-based)
-    time_progress_pct = 0
-    days_elapsed = 0
-    days_remaining = 0
+    # ── Fetch live project data from Odoo ──────────────────────────────
+    odoo_project = {}
+    try:
+        if not odoo.uid:
+            odoo.connect()
+        if odoo.uid:
+            projects = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.project', 'search_read',
+                [[('name', 'ilike', PROJECT_NAME)]],
+                {'fields': ['id', 'name', 'date_start', 'date',
+                            'user_id',          # Project Manager
+                            'x_coordinator',    # Coordinator (custom field)
+                            'x_project_manager',# Alt PM field
+                            'x_pm',             # Alt PM field
+                            'x_project_value',  # Project value (custom)
+                            'x_collected_value',
+                            'x_project_costs',
+                            'x_contract_number',
+                            ], 'limit': 3}
+            )
+            if projects:
+                # Prefer exact match
+                proj = next((p for p in projects if 'BOG Digital Transformation 25' in (p.get('name') or '')), projects[0])
+                odoo_project = proj
+    except Exception as _e:
+        logger.warning(f"Odoo project fetch for overview failed: {_e}")
+
+    # Project start/end: Odoo wins, fallback to roadmap_data
+    def _odoo_date(field):
+        v = odoo_project.get(field)
+        if isinstance(v, str) and len(v) >= 10:
+            return v[:10]
+        return None
+
+    proj_start = _odoo_date('date_start') or PROJECT_INFO.get('start_date')
+    proj_end   = _odoo_date('date')       or PROJECT_INFO.get('end_date')
+
+    # Duration in months
+    duration_months = PROJECT_INFO.get('duration_months')
     try:
         if proj_start and proj_end:
             ps = datetime.strptime(proj_start, '%Y-%m-%d').date()
-            pe = datetime.strptime(proj_end, '%Y-%m-%d').date()
+            pe = datetime.strptime(proj_end,   '%Y-%m-%d').date()
+            duration_months = round((pe - ps).days / 30.44, 0)
+    except Exception:
+        pass
+
+    # Project Manager & Coordinator from Odoo
+    pm_name = ''
+    coord_name = ''
+    try:
+        uid_field = odoo_project.get('user_id')
+        if isinstance(uid_field, list) and len(uid_field) > 1:
+            pm_name = uid_field[1]
+        # Try custom coordinator field
+        for coord_field in ['x_coordinator', 'x_pm', 'x_project_manager']:
+            cf = odoo_project.get(coord_field)
+            if cf and isinstance(cf, list) and len(cf) > 1:
+                coord_name = cf[1]
+                break
+            elif cf and isinstance(cf, str):
+                coord_name = cf
+                break
+    except Exception:
+        pass
+
+    # Project value from Odoo (custom field x_project_value or x_value)
+    project_value_sar = 0
+    for vf in ['x_project_value', 'x_value']:
+        v = odoo_project.get(vf)
+        if v and str(v).replace('.','').isdigit():
+            project_value_sar = float(v)
+            break
+
+    # Timeline
+    time_progress_pct = days_elapsed = days_remaining = 0
+    try:
+        if proj_start and proj_end:
+            ps = datetime.strptime(proj_start, '%Y-%m-%d').date()
+            pe = datetime.strptime(proj_end,   '%Y-%m-%d').date()
             today = date.today()
             total = (pe - ps).days
             elapsed = max(0, (today - ps).days)
@@ -489,57 +557,60 @@ def api_overview():
     except Exception:
         pass
 
-    # PROJECT PROGRESS = % Completion from Variance (Development phase)
-    # Read latest entry from plan_overrides.json
-    project_progress = 0
-    project_remaining = 0
+    # Project Progress + Remaining MDs from Variance overrides
+    project_progress = project_remaining = 0
+    dev_eac = con_eac = 0  # EAC per phase from plan overrides
     try:
         overrides = load_plan_overrides()
         plan_overrides = overrides.get('plan_overrides', {}) or {}
-        # Try development phase first, then any phase if not found
-        phase_data = plan_overrides.get('development', {}) or {}
-        if not phase_data:
-            # Take any phase that has data
-            for phase_key, phase_val in plan_overrides.items():
-                if isinstance(phase_val, dict) and phase_val:
-                    phase_data = phase_val
-                    break
-
-        if phase_data:
-            # Get the latest month_key (sorted)
+        for phase_key in ['development', 'consultation', 'support']:
+            phase_data = plan_overrides.get(phase_key, {}) or {}
+            if not phase_data:
+                continue
             sorted_months = sorted(phase_data.keys(), reverse=True)
-            for month_key in sorted_months:
-                month_data = phase_data.get(month_key, {}) or {}
-                # Take % completion if present
-                if 'completion' in month_data and project_progress == 0:
-                    project_progress = float(month_data['completion'])
-                # Take remaining if present
-                if 'remaining' in month_data and project_remaining == 0:
-                    project_remaining = float(month_data['remaining'])
-                # Stop once we have both
-                if project_progress and project_remaining:
+            ph_comp = ph_rem = 0
+            for mk in sorted_months:
+                md = phase_data.get(mk, {}) or {}
+                if 'completion' in md and not ph_comp:
+                    ph_comp = float(md['completion'])
+                if 'remaining' in md and not ph_rem:
+                    ph_rem = float(md['remaining'])
+                if ph_comp and ph_rem:
                     break
+            if phase_key == 'development':
+                project_progress  = ph_comp
+                project_remaining = ph_rem
+                dev_eac = ph_rem  # simplified: remaining MDs = EAC delta
+            elif phase_key == 'consultation':
+                con_eac = ph_rem
     except Exception as e:
-        logger.warning(f"Could not read variance overrides for overview: {e}")
+        logger.warning(f"Could not read variance overrides: {e}")
 
+    # Current Cost per phase — from effort API cached data (best effort)
+    # We don't re-fetch here to keep this fast; JS will fill in from AppState
     return jsonify({
-        'project_name': PROJECT_NAME,
-        'phase': PROJECT_INFO.get('phase'),
-        'roadmap_start': proj_start,
-        'roadmap_end': proj_end,
-        'duration_months': duration_months,
-        'total_services': total_services_roadmap,
-        'total_mandays': total_wd_roadmap,
-        'teams_count': len(teams),
-        'teams': sorted(teams),
-        'milestones_count': milestones_count,
-        # Project Progress now from Variance (% Completion)
-        'progress_pct': round(project_progress, 1),
-        'remaining_mds': round(project_remaining, 1),
-        # Timeline metrics (kept for reference)
+        'project_name':      PROJECT_NAME,
+        'phase':             PROJECT_INFO.get('phase'),
+        'roadmap_start':     proj_start,
+        'roadmap_end':       proj_end,
+        'duration_months':   int(duration_months) if duration_months else None,
+        'total_mandays':     total_wd_roadmap,
+        'teams_count':       len(teams),
+        'teams':             sorted(teams),
+        'milestones_count':  milestones_count,
+        # Odoo live
+        'project_manager':   pm_name,
+        'coordinator':       coord_name,
+        'project_value_sar': project_value_sar,
+        # Variance
+        'progress_pct':      round(project_progress, 1),
+        'remaining_mds':     round(project_remaining, 1),
+        'dev_eac_mds':       round(dev_eac, 1),
+        'con_eac_mds':       round(con_eac, 1),
+        # Timeline
         'time_progress_pct': time_progress_pct,
-        'days_elapsed': days_elapsed,
-        'days_remaining': days_remaining,
+        'days_elapsed':      days_elapsed,
+        'days_remaining':    days_remaining,
     })
 
 
