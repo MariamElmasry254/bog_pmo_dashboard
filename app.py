@@ -517,6 +517,22 @@ def project_select():
     return jsonify({'ok': True, 'redirect': '/'})
 
 
+@app.route('/debug/projects-raw')
+def debug_projects_raw():
+    """Debug: show raw Odoo project data to verify fields."""
+    try:
+        if not odoo.uid: odoo.connect()
+        projects = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.project', 'search_read', [[]],
+            {'fields': ['id', 'name', 'stage_id', 'active', 'user_id', 'date_start', 'end_date'],
+             'limit': 20, 'order': 'name asc'}
+        )
+        return jsonify({'count': len(projects), 'projects': projects})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/projects/list')
 def api_projects_list():
     """Fetch all projects from Odoo with stage, PM, dates, value."""
@@ -524,24 +540,49 @@ def api_projects_list():
         if not odoo.uid:
             if not odoo.connect():
                 return jsonify({'error': 'Odoo not connected', 'projects': []}), 503
+        # Fetch projects — use minimal safe fields first, then try optional ones
+        safe_fields = ['id', 'name', 'user_id', 'date_start', 'end_date', 'stage_id']
         projects = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'project.project', 'search_read',
-            [[('active', '=', True)]],
-            {'fields': ['id', 'name', 'user_id', 'date_start', 'end_date',
-                        'last_update_status',   # stage color: on_track / at_risk / off_track
-                        'description',
-                        'value',                # project value SAR
-                        'coordinator_id',
-                        ],
-             'limit': 200,
-             'order': 'name asc'}
+            [[]],   # all projects (active filter may differ by Odoo version)
+            {'fields': safe_fields, 'limit': 300, 'order': 'name asc'}
         )
+
+        # Try to get extra fields separately (optional — may not exist in v14)
+        extra_map = {}
+        try:
+            extras = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.project', 'search_read',
+                [[]],
+                {'fields': ['id', 'value', 'coordinator_id', 'last_update_status'], 'limit': 300}
+            )
+            extra_map = {e['id']: e for e in extras}
+        except Exception as _ex:
+            logger.warning(f"Optional project fields unavailable: {_ex}")
 
         result = []
         for p in projects:
-            pm = p.get('user_id')
-            coord = p.get('coordinator_id')
+            pm    = p.get('user_id')
+            ex    = extra_map.get(p['id'], {})
+            coord = ex.get('coordinator_id') or []
+            stage = p.get('stage_id')
+            stage_name = (stage[1] if isinstance(stage, list) and len(stage) > 1 else '') or ''
+
+            # Map stage name to status color
+            sn_lower = stage_name.lower()
+            if any(k in sn_lower for k in ['progress', 'active', 'ongoing', 'in progress']):
+                status = 'on_track'
+            elif any(k in sn_lower for k in ['closing', 'receive', 'confirmation', 'release']):
+                status = 'at_risk'
+            elif any(k in sn_lower for k in ['completed', 'closed', 'done', 'finish']):
+                status = 'completed'
+            elif any(k in sn_lower for k in ['draft', 'new', 'pending']):
+                status = 'draft'
+            else:
+                status = ex.get('last_update_status') or 'on_track'
+
             result.append({
                 'id':          p['id'],
                 'name':        p['name'],
@@ -549,8 +590,9 @@ def api_projects_list():
                 'coordinator': coord[1] if isinstance(coord, list) and len(coord) > 1 else '',
                 'date_start':  (p.get('date_start') or '')[:10],
                 'end_date':    (p.get('end_date')   or '')[:10],
-                'status':      p.get('last_update_status') or 'on_track',
-                'value':       float(p.get('value') or 0),
+                'status':      status,
+                'stage_name':  stage_name,
+                'value':       float(ex.get('value') or 0),
             })
         return jsonify({'projects': result})
     except Exception as e:
