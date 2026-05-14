@@ -1,0 +1,52 @@
+<section class="tab-panel" id="missing">
+  <div class="page-header">
+    <div>
+      <span class="page-eyebrow">COMPLIANCE</span>
+      <h2 class="page-title">Missing Hours</h2>
+    </div>
+  </div>
+
+  <div class="filters-bar">
+    <div class="filter-group">
+      <label class="filter-label">DATE RANGE</label>
+      <input type="date" id="msFrom" class="search-input" style="width: 150px;">
+      <span class="filter-sep">→</span>
+      <input type="date" id="msTo" class="search-input" style="width: 150px;">
+    </div>
+    <div class="filter-group">
+      <label class="filter-label">EMPLOYEE</label>
+      <input type="text" id="msSearch" placeholder="Search by name..." class="search-input" style="width: 220px;">
+    </div>
+    <div class="filter-group" style="margin-left: auto;">
+      <button id="msApply" class="btn-primary">Apply</button>
+      <button id="msReset" class="btn-ghost">Reset (last 30 days)</button>
+    </div>
+  </div>
+
+  <div class="banner banner-info">
+    <strong>Logic:</strong>
+    Default view: last 30 days · 8h/day expected (Sun–Thu) ·
+    If an employee logged time on <b>another project</b>, those hours count toward their daily 8h —
+    a day shows as missing only when total across <em>all projects</em> is under 8h.
+  </div>
+
+  <div class="card">
+    <h3 class="card-title">Compliance Summary <span class="muted-text">— click "See details" for daily breakdown</span></h3>
+    <div class="table-scroll">
+      <table class="data-table" id="msTable">
+        <thead>
+          <tr>
+            <th>Employee</th>
+            <th class="num">Working Days</th>
+            <th class="num">Logged (this proj)</th>
+            <th class="num">Logged (all proj)</th>
+            <th class="num">Missing Hours</th>
+            <th>Compliance</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</section>
