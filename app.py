@@ -873,9 +873,13 @@ def api_search_employees():
         for e in employees:
             job = e.get('job_id')
             # Try barcode first, then identification_id for the employee code
-            code = (e.get('barcode') or '').strip()
+            import re as _re_emp
+            raw_bc = (e.get('barcode') or '').strip()
+            # Only use barcode if it's a valid employee code format
+            code = raw_bc if (raw_bc and _re_emp.match(r'^[ERT]\d+$', raw_bc)) else ''
             if not code:
-                code = (e.get('identification_id') or '').strip()
+                id_code = (e.get('identification_id') or '').strip()
+                code = id_code if (id_code and _re_emp.match(r'^[ERT]\d+$', id_code)) else ''
             result.append({
                 'id':    e['id'],
                 'name':  e['name'],
@@ -914,8 +918,11 @@ def api_travel_auto_link():
             if len(words) >= 2:
                 emp_by_fl[words[0]+words[-1]] = e
             bc = (e.get('barcode') or '').strip().upper()
-            if bc:
+            # Only use barcodes that match employee code format (E123, R123, T123)
+            import re as _re_bc
+            if bc and _re_bc.match(r'^[ERT]\d+$', bc):
                 emp_by_barcode[bc] = e
+                e['_valid_code'] = bc
 
         matched = unmatched = 0
         for r in records:
@@ -977,8 +984,11 @@ def api_promotions_auto_link():
             if len(words) >= 2:
                 emp_by_fl[words[0]+words[-1]] = e
             bc = (e.get('barcode') or '').strip().upper()
-            if bc:
+            # Only use barcodes that match employee code format (E123, R123, T123)
+            import re as _re_bc
+            if bc and _re_bc.match(r'^[ERT]\d+$', bc):
                 emp_by_barcode[bc] = e
+                e['_valid_code'] = bc
 
         matched = unmatched = 0
         for r in records:
