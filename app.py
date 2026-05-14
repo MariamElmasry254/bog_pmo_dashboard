@@ -696,16 +696,11 @@ def api_global_promos_get():
     _seed_if_empty('promotions', PROMO_SEED)
     records = _global_get('promotions') or []
     year = request.args.get('year')
-    linked_filter = request.args.get('linked')
     if year:
         records = [r for r in records if str(r.get('year','')) == year]
     q = (request.args.get('q') or '').lower()
     if q:
         records = [r for r in records if q in (r.get('name') or '').lower()]
-    if linked_filter == '1':
-        records = [r for r in records if r.get('odoo_employee_id')]
-    elif linked_filter == '0':
-        records = [r for r in records if not r.get('odoo_employee_id')]
     return jsonify({'records': records, 'total': len(records)})
 
 
@@ -872,16 +867,20 @@ def api_search_employees():
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'hr.employee', 'search_read',
             [[('name', 'ilike', q), ('active', '=', True)]],
-            {'fields': ['id', 'name', 'job_title', 'job_id', 'barcode'], 'limit': 20}
+            {'fields': ['id', 'name', 'job_title', 'job_id', 'barcode', 'identification_id'], 'limit': 20}
         )
         result = []
         for e in employees:
             job = e.get('job_id')
+            # Try barcode first, then identification_id for the employee code
+            code = (e.get('barcode') or '').strip()
+            if not code:
+                code = (e.get('identification_id') or '').strip()
             result.append({
-                'id':     e['id'],
-                'name':   e['name'],
-                'code':   (e.get('barcode') or '').strip(),
-                'title':  e.get('job_title') or (job[1] if isinstance(job, list) and len(job)>1 else ''),
+                'id':    e['id'],
+                'name':  e['name'],
+                'code':  code,
+                'title': e.get('job_title') or (job[1] if isinstance(job, list) and len(job)>1 else ''),
             })
         return jsonify({'employees': result})
     except Exception as ex:
