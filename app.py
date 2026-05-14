@@ -559,8 +559,8 @@ def project_select():
         return jsonify({'error': 'project_name required'}), 400
     session['project_id']   = project_id
     session['project_name'] = project_name
-    # Clear cached data so new project loads fresh
-    return jsonify({'ok': True, 'redirect': '/'})
+    # Force redirect to overview tab (add hash)
+    return jsonify({'ok': True, 'redirect': '/#overview'})
 
 
 
@@ -805,15 +805,16 @@ def api_search_employees():
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'hr.employee', 'search_read',
             [[('name', 'ilike', q), ('active', '=', True)]],
-            {'fields': ['id', 'name', 'job_title', 'job_id'], 'limit': 20}
+            {'fields': ['id', 'name', 'job_title', 'job_id', 'barcode'], 'limit': 20}
         )
         result = []
         for e in employees:
             job = e.get('job_id')
             result.append({
-                'id':    e['id'],
-                'name':  e['name'],
-                'title': e.get('job_title') or (job[1] if isinstance(job, list) and len(job)>1 else ''),
+                'id':     e['id'],
+                'name':   e['name'],
+                'code':   (e.get('barcode') or '').strip(),
+                'title':  e.get('job_title') or (job[1] if isinstance(job, list) and len(job)>1 else ''),
             })
         return jsonify({'employees': result})
     except Exception as ex:
@@ -875,6 +876,7 @@ def api_travel_auto_link():
             if found:
                 r['odoo_employee_id']   = found['id']
                 r['odoo_employee_name'] = found['name']
+                r['odoo_employee_code'] = (found.get('barcode') or '').strip() or None
                 matched += 1
             else:
                 unmatched += 1
@@ -925,6 +927,7 @@ def api_promotions_auto_link():
             if found:
                 r['odoo_employee_id']   = found['id']
                 r['odoo_employee_name'] = found['name']
+                r['odoo_employee_code'] = (found.get('barcode') or '').strip() or None
                 matched += 1
             else:
                 unmatched += 1
