@@ -1,127 +1,128 @@
 <section class="tab-panel active" id="overview">
-  <div class="period-tag">
-    <span>PERIOD</span>
-    <strong id="ovPeriod">—</strong>
-  </div>
-
   <!-- ══ SUMMARY SECTION ══ -->
 
-  <!-- Row 1: Revenue card + Current Cost card + Team card -->
-  <div style="display:grid;grid-template-columns:1fr 1fr 1.3fr;gap:16px;margin-bottom:14px;">
+  <!-- Period + Team inline row -->
+  <div style="display:flex;gap:16px;align-items:stretch;margin-bottom:16px;flex-wrap:wrap;">
 
-    <!-- A: Total Revenue + phase breakdown -->
-    <div class="kpi-card" style="border-top:3px solid var(--blue);padding:20px 22px;">
-      <div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Total Revenue</div>
-      <div style="font-size:30px;font-weight:700;line-height:1;margin-bottom:3px;" id="kpiRevenue">—</div>
-      <div style="font-size:11px;color:var(--text-muted);margin-bottom:16px;">SAR · from Odoo project</div>
-      <div style="border-top:1px solid var(--border);padding-top:12px;display:flex;flex-direction:column;gap:7px;">
-        <div style="display:flex;justify-content:space-between;align-items:baseline;">
-          <span style="font-size:10px;font-weight:600;color:var(--blue);text-transform:uppercase;letter-spacing:.3px;">Consultation</span>
-          <span style="font-size:13px;font-weight:600;" id="kpiConRev">—</span>
-        </div>
-        <div style="display:flex;justify-content:space-between;align-items:baseline;">
-          <span style="font-size:10px;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:.3px;">Development</span>
-          <span style="font-size:13px;font-weight:600;" id="kpiDevRev">—</span>
-        </div>
-        <div style="display:flex;justify-content:space-between;align-items:baseline;">
-          <span style="font-size:10px;font-weight:600;color:var(--amber);text-transform:uppercase;letter-spacing:.3px;">Support</span>
-          <span style="font-size:13px;font-weight:600;" id="kpiSupRev">—</span>
-        </div>
-      </div>
+    <!-- Period tag (left, compact) -->
+    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:10px;
+                padding:14px 20px;display:flex;flex-direction:column;justify-content:center;min-width:260px;">
+      <div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">PERIOD</div>
+      <div style="font-size:15px;font-weight:700;font-family:var(--mono);" id="ovPeriod">—</div>
     </div>
 
-    <!-- B: Current Cost + EAC -->
-    <div class="kpi-card" style="border-top:3px solid var(--amber);padding:20px 22px;">
-      <!-- Current Cost -->
-      <div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Current Cost</div>
-      <div style="font-size:30px;font-weight:700;line-height:1;margin-bottom:3px;" id="kpiTotalCost">—</div>
-      <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;">SAR · cumulative actual</div>
-      <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:14px;">
-        <div style="display:flex;justify-content:space-between;align-items:baseline;">
-          <span style="font-size:10px;font-weight:600;color:var(--blue);text-transform:uppercase;letter-spacing:.3px;">Consultation</span>
-          <span style="font-size:13px;font-weight:600;" id="kpiConCost">—</span>
-        </div>
-        <div style="display:flex;justify-content:space-between;align-items:baseline;">
-          <span style="font-size:10px;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:.3px;">Development</span>
-          <span style="font-size:13px;font-weight:600;" id="kpiDevCost">—</span>
-        </div>
-      </div>
-      <!-- EAC -->
-      <div style="border-top:1px solid var(--border);padding-top:12px;">
-        <div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Estimate at Completion</div>
-        <div style="font-size:22px;font-weight:700;color:var(--amber);line-height:1;margin-bottom:8px;" id="kpiTotalEAC">—</div>
-        <div style="display:flex;flex-direction:column;gap:5px;">
-          <div style="display:flex;justify-content:space-between;align-items:baseline;">
-            <span style="font-size:10px;color:var(--blue);font-weight:600;text-transform:uppercase;letter-spacing:.3px;">Consultation</span>
-            <div style="text-align:right;">
-              <span style="font-size:12px;font-weight:600;" id="kpiConEAC">—</span>
-              <span style="font-size:10px;color:var(--text-muted);margin-left:4px;" id="kpiConEACmds"></span>
-            </div>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:baseline;">
-            <span style="font-size:10px;color:var(--green);font-weight:600;text-transform:uppercase;letter-spacing:.3px;">Development</span>
-            <div style="text-align:right;">
-              <span style="font-size:12px;font-weight:600;" id="kpiDevEAC">—</span>
-              <span style="font-size:10px;color:var(--text-muted);margin-left:4px;" id="kpiDevEACmds"></span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- C: Team — tabs Dev / Consultation -->
-    <div class="kpi-card" style="border-top:3px solid var(--navy);padding:0;overflow:hidden;display:flex;flex-direction:column;">
+    <!-- Team card (right, expandable) -->
+    <div style="flex:1;min-width:320px;background:var(--bg-card);border:1px solid var(--border);
+                border-top:3px solid var(--navy);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;">
       <div style="display:flex;border-bottom:1px solid var(--border);flex-shrink:0;">
         <button id="teamTabDev" onclick="switchTeamTab('development')"
-          style="flex:1;padding:9px 12px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
-                 background:var(--navy);color:white;border:none;cursor:pointer;transition:all .15s;">Development</button>
+          style="flex:1;padding:8px 12px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
+                 background:var(--navy);color:white;border:none;cursor:pointer;">Development</button>
         <button id="teamTabCon" onclick="switchTeamTab('consultation')"
-          style="flex:1;padding:9px 12px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
-                 background:var(--bg-subtle);color:var(--text-muted);border:none;cursor:pointer;
-                 border-left:1px solid var(--border);transition:all .15s;">Consultation</button>
+          style="flex:1;padding:8px 12px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
+                 background:var(--bg-subtle);color:var(--text-muted);border:none;cursor:pointer;border-left:1px solid var(--border);">Consultation</button>
       </div>
-      <div style="flex:1;overflow-y:auto;padding:10px 14px;max-height:200px;" id="kpiTeamList">
+      <div style="overflow-y:auto;max-height:130px;padding:8px 12px;" id="kpiTeamList">
         <div style="color:var(--text-muted);font-size:12px;">Loading…</div>
       </div>
-      <div style="padding:7px 14px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:var(--bg-subtle);flex-shrink:0;">
+      <div style="padding:6px 12px;border-top:1px solid var(--border);display:flex;justify-content:space-between;
+                  align-items:center;background:var(--bg-subtle);flex-shrink:0;">
         <span style="font-size:11px;color:var(--text-muted);" id="kpiTeamCount">—</span>
         <button onclick="openTeamModal()" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer;font-weight:500;">Full team →</button>
       </div>
     </div>
   </div>
 
-  <!-- Row 2: Progress per phase -->
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:24px;">
+  <!-- Financial summary: 3 cards side by side -->
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:14px;">
 
-    <!-- Consultation Progress -->
-    <div class="kpi-card" style="border-top:3px solid var(--blue);padding:18px 22px;">
-      <div style="font-size:10px;font-weight:700;color:var(--blue);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;">Consultation — Progress</div>
-      <div style="display:flex;align-items:baseline;gap:4px;margin-bottom:8px;">
-        <span style="font-size:34px;font-weight:700;line-height:1;" id="kpiConProgress">—</span>
-        <span style="font-size:14px;color:var(--text-muted);">%</span>
-      </div>
-      <div style="height:5px;background:var(--border);border-radius:3px;margin-bottom:10px;overflow:hidden;">
-        <div id="kpiConProgressBar" style="height:100%;background:var(--blue);border-radius:3px;width:0%;transition:width .6s;"></div>
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <span style="font-size:11px;color:var(--text-muted);">Remaining MDs · from Variance</span>
-        <span style="font-size:14px;font-weight:700;" id="kpiConRemaining">—</span>
+    <!-- A: Revenue -->
+    <div style="background:var(--bg-card);border:1px solid var(--border);border-top:3px solid var(--blue);border-radius:10px;padding:16px 20px;">
+      <div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Total Revenue</div>
+      <div style="font-size:24px;font-weight:700;line-height:1;margin-bottom:12px;" id="kpiRevenue">—</div>
+      <div style="display:flex;flex-direction:column;gap:5px;border-top:1px solid var(--border);padding-top:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-size:10px;font-weight:600;color:var(--blue);text-transform:uppercase;letter-spacing:.3px;">Consultation</span>
+          <span style="font-size:12px;font-weight:600;" id="kpiConRev">—</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-size:10px;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:.3px;">Development</span>
+          <span style="font-size:12px;font-weight:600;" id="kpiDevRev">—</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-size:10px;font-weight:600;color:var(--amber);text-transform:uppercase;letter-spacing:.3px;">Support</span>
+          <span style="font-size:12px;font-weight:600;" id="kpiSupRev">—</span>
+        </div>
       </div>
     </div>
 
-    <!-- Development Progress -->
-    <div class="kpi-card" style="border-top:3px solid var(--green);padding:18px 22px;">
-      <div style="font-size:10px;font-weight:700;color:var(--green);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;">Development — Progress</div>
-      <div style="display:flex;align-items:baseline;gap:4px;margin-bottom:8px;">
-        <span style="font-size:34px;font-weight:700;line-height:1;" id="kpiDevProgress">—</span>
-        <span style="font-size:14px;color:var(--text-muted);">%</span>
+    <!-- B: Current Cost -->
+    <div style="background:var(--bg-card);border:1px solid var(--border);border-top:3px solid var(--green);border-radius:10px;padding:16px 20px;">
+      <div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Current Cost</div>
+      <div style="font-size:24px;font-weight:700;line-height:1;margin-bottom:12px;" id="kpiTotalCost">—</div>
+      <div style="display:flex;flex-direction:column;gap:5px;border-top:1px solid var(--border);padding-top:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-size:10px;font-weight:600;color:var(--blue);text-transform:uppercase;letter-spacing:.3px;">Consultation</span>
+          <span style="font-size:12px;font-weight:600;" id="kpiConCost">—</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-size:10px;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:.3px;">Development</span>
+          <span style="font-size:12px;font-weight:600;" id="kpiDevCost">—</span>
+        </div>
       </div>
-      <div style="height:5px;background:var(--border);border-radius:3px;margin-bottom:10px;overflow:hidden;">
+    </div>
+
+    <!-- C: EAC -->
+    <div style="background:var(--bg-card);border:1px solid var(--border);border-top:3px solid var(--amber);border-radius:10px;padding:16px 20px;">
+      <div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Estimate at Completion</div>
+      <div style="font-size:24px;font-weight:700;color:var(--amber);line-height:1;margin-bottom:12px;" id="kpiTotalEAC">—</div>
+      <div style="display:flex;flex-direction:column;gap:5px;border-top:1px solid var(--border);padding-top:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;">
+          <span style="font-size:10px;font-weight:600;color:var(--blue);text-transform:uppercase;letter-spacing:.3px;white-space:nowrap;">Consultation</span>
+          <div style="text-align:right;">
+            <span style="font-size:12px;font-weight:600;" id="kpiConEAC">—</span>
+            <div style="font-size:10px;color:var(--text-muted);" id="kpiConEACmds"></div>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;">
+          <span style="font-size:10px;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:.3px;white-space:nowrap;">Development</span>
+          <div style="text-align:right;">
+            <span style="font-size:12px;font-weight:600;" id="kpiDevEAC">—</span>
+            <div style="font-size:10px;color:var(--text-muted);" id="kpiDevEACmds"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Progress row -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:24px;">
+    <div style="background:var(--bg-card);border:1px solid var(--border);border-top:3px solid var(--blue);border-radius:10px;padding:16px 20px;">
+      <div style="font-size:10px;font-weight:700;color:var(--blue);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Consultation — Progress</div>
+      <div style="display:flex;align-items:baseline;gap:4px;margin-bottom:6px;">
+        <span style="font-size:30px;font-weight:700;line-height:1;" id="kpiConProgress">—</span>
+        <span style="font-size:13px;color:var(--text-muted);">%</span>
+      </div>
+      <div style="height:5px;background:var(--border);border-radius:3px;margin-bottom:8px;overflow:hidden;">
+        <div id="kpiConProgressBar" style="height:100%;background:var(--blue);border-radius:3px;width:0%;transition:width .6s;"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;">
+        <span style="font-size:11px;color:var(--text-muted);">Remaining MDs</span>
+        <span style="font-size:13px;font-weight:700;" id="kpiConRemaining">—</span>
+      </div>
+    </div>
+    <div style="background:var(--bg-card);border:1px solid var(--border);border-top:3px solid var(--green);border-radius:10px;padding:16px 20px;">
+      <div style="font-size:10px;font-weight:700;color:var(--green);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Development — Progress</div>
+      <div style="display:flex;align-items:baseline;gap:4px;margin-bottom:6px;">
+        <span style="font-size:30px;font-weight:700;line-height:1;" id="kpiDevProgress">—</span>
+        <span style="font-size:13px;color:var(--text-muted);">%</span>
+      </div>
+      <div style="height:5px;background:var(--border);border-radius:3px;margin-bottom:8px;overflow:hidden;">
         <div id="kpiDevProgressBar" style="height:100%;background:var(--green);border-radius:3px;width:0%;transition:width .6s;"></div>
       </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <span style="font-size:11px;color:var(--text-muted);">Remaining MDs · from Variance</span>
-        <span style="font-size:14px;font-weight:700;" id="kpiDevRemaining">—</span>
+      <div style="display:flex;justify-content:space-between;">
+        <span style="font-size:11px;color:var(--text-muted);">Remaining MDs</span>
+        <span style="font-size:13px;font-weight:700;" id="kpiDevRemaining">—</span>
       </div>
     </div>
   </div>
