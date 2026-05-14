@@ -493,9 +493,12 @@ function extractYear(v) {
 }
 
 function showResult(el, ok, msg) {
+  if (!el) return;
   el.className = 'import-result ' + (ok ? 'ok' : 'error');
   el.textContent = msg;
   el.style.display = 'block';
+  // Auto-hide after 10s only for success
+  if (ok) setTimeout(() => { if(el) el.style.display='none'; }, 10000);
 }
 
 // ── Travel CRUD ──────────────────────────────────────────────────────
