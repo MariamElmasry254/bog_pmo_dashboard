@@ -5050,7 +5050,21 @@ def fill_current_effort_from_odoo(xlsx_path):
 # TRAVEL & ONSITE — stored in DB
 # ============================================================
 def load_travel():
-    return db.list_travel()
+    """Load travel records — reads from global storage (manage page).
+    Falls back to db.list_travel() for legacy records already in the old store.
+    """
+    # Primary: global storage (set via /manage page)
+    global_recs = _global_get('travel')
+    if global_recs is not None:
+        return global_recs
+    # Fallback: old db.list_travel() (BOG legacy)
+    try:
+        old = db.list_travel()
+        if old:
+            return old
+    except Exception:
+        pass
+    return []
 
 
 def save_travel(records):
@@ -5064,13 +5078,28 @@ def save_travel(records):
 # PROMOTIONS — track when employees get promoted mid-project
 # ============================================================
 def load_promotions():
-    raw = db.get_namespace_overrides('promotions', '')
-    records = []
-    for k, v in raw.items():
-        if isinstance(v, dict):
-            records.append(v)
-    records.sort(key=lambda x: (x.get('name', ''), x.get('promotion_date', '')))
-    return records
+    """Load promotions — reads from global storage (manage page) first."""
+    global_recs = _global_get('promotions')
+    if global_recs is not None:
+        # Normalize field names: manage page uses 'effective_date', old code uses 'promotion_date'
+        for r in global_recs:
+            if 'effective_date' in r and 'promotion_date' not in r:
+                r['promotion_date'] = r['effective_date']
+            if 'new_title' in r and 'position' not in r:
+                r['position'] = r['new_title']
+        global_recs.sort(key=lambda x: (x.get('name',''), x.get('promotion_date','')))
+        return global_recs
+    # Fallback: old promotions namespace
+    try:
+        raw = db.get_namespace_overrides('promotions', '')
+        records = []
+        for k, v in raw.items():
+            if isinstance(v, dict):
+                records.append(v)
+        records.sort(key=lambda x: (x.get('name',''), x.get('promotion_date','')))
+        return records
+    except Exception:
+        return []
 
 
 @app.route('/api/promotions', methods=['GET'])
