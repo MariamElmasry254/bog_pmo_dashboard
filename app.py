@@ -2397,26 +2397,73 @@ def api_budget_overrides_get(phase):
 
 @app.route('/api/overview/financials')
 def api_overview_financials():
-    """Returns approved revenue per phase (from budget overrides) for the Overview summary."""
+    """Returns Final Budget revenue per phase for the Overview summary.
+    Revenue = approved.revenue_sar + sum of delta_rev from budget_changes.
+    Uses same logic as budgetAutoCalc in variance.js.
+    """
     phases = ['development', 'consultation', 'support']
     result = {}
     total_rev = 0.0
     for phase in phases:
         try:
+            # Strategy 1: direct override key
             overrides = db.get_namespace_overrides('budget', phase) or {}
-            rev = overrides.get('approved.revenue_sar')
-            rev_val = float(rev) if rev is not None else 0.0
-            # Also add budget changes delta
+            rev_val = 0.0
+
+            # approved.revenue_sar may be stored as a dotted key
+            raw = overrides.get('approved.revenue_sar')
+            if raw is not None:
+                try: rev_val = float(raw)
+                except (TypeError, ValueError): pass
+
+            # Strategy 2: nested dict {'approved': {'revenue_sar': ...}}
+            if not rev_val:
+                approved_block = overrides.get('approved') or {}
+                if isinstance(approved_block, dict):
+                    r2 = approved_block.get('revenue_sar')
+                    if r2 is not None:
+                        try: rev_val = float(r2)
+                        except: pass
+
+            # Strategy 3: read directly with get_override
+            if not rev_val:
+                direct = db.get_override('budget', phase, 'approved.revenue_sar')
+                if direct is not None:
+                    try: rev_val = float(direct)
+                    except: pass
+
+            # Add Δ Revenue from budget changes (Final Budget = Approved + Changes)
             changes_raw = db.get_override('budget_changes', '', phase)
             if isinstance(changes_raw, list):
                 for ch in changes_raw:
-                    rev_val += float(ch.get('delta_rev') or 0)
+                    try: rev_val += float(ch.get('delta_rev') or 0)
+                    except: pass
+
             result[phase] = round(rev_val, 2)
             total_rev += rev_val
+            logger.info(f"Financials [{phase}]: rev={rev_val} overrides_keys={list(overrides.keys())[:5]}")
         except Exception as _e:
+            logger.error(f"Financials [{phase}] error: {_e}")
             result[phase] = 0.0
     result['total'] = round(total_rev, 2)
     return jsonify(result)
+
+
+@app.route('/debug/financials')
+def debug_financials():
+    """Debug: show raw budget override data for each phase."""
+    out = {}
+    for phase in ['development', 'consultation', 'support']:
+        overrides = db.get_namespace_overrides('budget', phase) or {}
+        direct    = db.get_override('budget', phase, 'approved.revenue_sar')
+        changes   = db.get_override('budget_changes', '', phase) or []
+        out[phase] = {
+            'namespace_overrides': overrides,
+            'direct_get': direct,
+            'budget_changes_count': len(changes) if isinstance(changes, list) else 0,
+            'budget_changes': changes if isinstance(changes, list) else [],
+        }
+    return jsonify(out)
 
 
 @app.route('/api/variance/budget-override/<phase>/<path:path>', methods=['DELETE'])
