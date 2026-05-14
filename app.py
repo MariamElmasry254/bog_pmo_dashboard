@@ -696,11 +696,16 @@ def api_global_promos_get():
     _seed_if_empty('promotions', PROMO_SEED)
     records = _global_get('promotions') or []
     year = request.args.get('year')
+    linked_filter = request.args.get('linked')
     if year:
         records = [r for r in records if str(r.get('year','')) == year]
     q = (request.args.get('q') or '').lower()
     if q:
         records = [r for r in records if q in (r.get('name') or '').lower()]
+    if linked_filter == '1':
+        records = [r for r in records if r.get('odoo_employee_id')]
+    elif linked_filter == '0':
+        records = [r for r in records if not r.get('odoo_employee_id')]
     return jsonify({'records': records, 'total': len(records)})
 
 
