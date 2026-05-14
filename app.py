@@ -4697,24 +4697,30 @@ def api_invoices():
         project_ids = [p['id'] for p in projects]
         logger.info(f"BOG projects found: {[(p['id'], p['name']) for p in projects]}")
 
-        # ── Step 2: find all SOs linked to this project ─────────────────────────
+        # ── Step 2: find all SOs linked to this SPECIFIC project ──────────────
+        # We use the project id for exact matching to avoid picking up SOs
+        # from other projects that happen to share an analytic account.
         so_ids = set()
         so_names_found = []
         if project_ids:
             try:
+                # Direct many2many: sale.order.project_ids
                 sos = odoo.models.execute_kw(
                     ODOO_DB, odoo.uid, ODOO_PASSWORD,
                     'sale.order', 'search_read',
                     [[('project_ids', 'in', project_ids)]],
-                    {'fields': ['name', 'id'], 'limit': 200}
+                    {'fields': ['name', 'id', 'project_ids'], 'limit': 200}
                 )
+                # Only keep SOs whose project_ids actually contain our project — exact match
                 for so in sos:
-                    so_ids.add(so['id'])
-                    so_names_found.append(so['name'])
+                    proj_ids_on_so = so.get('project_ids', [])
+                    if any(pid in proj_ids_on_so for pid in project_ids):
+                        so_ids.add(so['id'])
+                        so_names_found.append(so['name'])
             except Exception as _e:
                 logger.warning(f"SO lookup by project_ids failed: {_e}")
 
-        logger.info(f"SOs for BOG project: {so_names_found}")
+        logger.info(f"SOs for BOG project (exact match): {so_names_found}")
 
         # ── Step 3: get posted invoices for those SOs ───────────────────────────
         if not so_ids:
