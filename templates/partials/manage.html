@@ -157,9 +157,9 @@ tr:hover td{background:#FAFAFA;}
         <option value="linked">✅ Linked</option>
         <option value="unlinked">⚠ Unlinked</option>
       </select>
-      <input type="text" class="filter-sel" id="travelPosFilter" placeholder="Filter position…" style="min-width:130px;" oninput="loadTravel()">
-      <input type="date" class="filter-sel" id="travelDateFrom" style="min-width:120px;" onchange="loadTravel()" title="From date">
-      <input type="date" class="filter-sel" id="travelDateTo" style="min-width:120px;" onchange="loadTravel()" title="To date">
+      <input type="text" class="filter-sel" id="travelPosFilter" placeholder="🔍 Position…" style="min-width:120px;" oninput="loadTravel()">
+      <input type="date" class="filter-sel" id="travelDateFrom" onchange="loadTravel()" title="Travel from" style="min-width:130px;color:var(--muted);">
+      <input type="date" class="filter-sel" id="travelDateTo" onchange="loadTravel()" title="Travel to" style="min-width:130px;color:var(--muted);">
       <button class="btn btn-ghost" onclick="autoLink('travel')">⚡ Auto-Link All</button>
       <button class="btn btn-ghost" onclick="toggleForm('travelForm')">+ Add Manually</button>
     </div>
