@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PMO — Travel & Promotions</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --navy:#1B2A4E; --blue:#3B82F6; --green:#10B981; --amber:#F59E0B; --red:#EF4444;
+    --bg:#F5F6FA; --card:#fff; --border:#E5E7EB; --text:#111827; --muted:#9CA3AF;
+    --sans:'Inter',sans-serif;
+  }
+  body { background:var(--bg); font-family:var(--sans); font-size:14px; color:var(--text); }
+  .header {
+    background:var(--navy); padding:0 32px;
+    display:flex; align-items:center; gap:20px; height:56px;
+    position:sticky; top:0; z-index:100;
+  }
+  .header a { color:rgba(255,255,255,.6); text-decoration:none; font-size:12px; }
+  .header a:hover { color:white; }
+  .header h1 { font-size:16px; font-weight:700; color:white; margin:0; }
+  .header .sep { color:rgba(255,255,255,.2); }
+  .header .ml { margin-left:auto; display:flex; gap:10px; }
+  .header .btn-sm {
+    padding:5px 12px; border-radius:6px; font-size:11px; font-weight:600;
+    border:1px solid rgba(255,255,255,.15); color:rgba(255,255,255,.7);
+    text-decoration:none; transition:all .15s;
+  }
+  .header .btn-sm:hover { background:rgba(255,255,255,.1); color:white; }
+
+  .main { max-width:1300px; margin:0 auto; padding:28px 32px; }
+
+  /* Tabs */
+  .tabs { display:flex; gap:2px; border-bottom:2px solid var(--border); margin-bottom:28px; }
+  .tab-btn {
+    padding:10px 20px; background:none; border:none; cursor:pointer;
+    font-size:13px; font-weight:600; color:var(--muted);
+    border-bottom:2px solid transparent; margin-bottom:-2px; transition:all .15s;
+  }
+  .tab-btn.active { color:var(--navy); border-bottom-color:var(--navy); }
+  .tab-panel { display:none; }
+  .tab-panel.active { display:block; }
+
+  /* Upload zone */
+  .upload-zone {
+    border:2px dashed var(--border); border-radius:12px; padding:32px;
+    text-align:center; cursor:pointer; transition:all .2s; background:white;
+    margin-bottom:20px;
+  }
+  .upload-zone:hover, .upload-zone.drag { border-color:var(--blue); background:#EFF6FF; }
+  .upload-zone input[type=file] { display:none; }
+  .upload-zone .icon { font-size:32px; margin-bottom:8px; }
+  .upload-zone h3 { font-size:14px; font-weight:600; color:var(--text); margin-bottom:4px; }
+  .upload-zone p  { font-size:12px; color:var(--muted); }
+  .upload-zone .hint { font-size:11px; color:var(--blue); margin-top:6px; font-weight:500; }
+
+  .import-result {
+    padding:12px 16px; border-radius:8px; font-size:13px; margin-bottom:16px; display:none;
+  }
+  .import-result.ok    { background:#D1FAE5; color:#065F46; border:1px solid #A7F3D0; }
+  .import-result.error { background:#FEE2E2; color:#991B1B; border:1px solid #FCA5A5; }
+
+  /* Search + Add bar */
+  .toolbar {
+    display:flex; gap:10px; align-items:center; margin-bottom:16px; flex-wrap:wrap;
+  }
+  .search-inp {
+    flex:1; min-width:200px; padding:8px 12px;
+    border:1px solid var(--border); border-radius:8px; font-size:13px;
+    font-family:var(--sans); outline:none;
+  }
+  .search-inp:focus { border-color:var(--blue); }
+  .btn {
+    padding:8px 16px; border-radius:8px; font-size:13px; font-weight:600;
+    cursor:pointer; border:none; transition:background .15s;
+  }
+  .btn-primary { background:var(--blue); color:white; }
+  .btn-primary:hover { background:#2563EB; }
+  .btn-ghost { background:var(--bg); border:1px solid var(--border); color:var(--text); }
+  .btn-ghost:hover { background:var(--border); }
+  .btn-danger { background:#FEE2E2; color:var(--red); border:1px solid #FECACA; }
+  .btn-danger:hover { background:#FCA5A5; }
+
+  /* Table */
+  .tbl-wrap { background:white; border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+  table { width:100%; border-collapse:collapse; }
+  th {
+    text-align:left; font-size:10px; font-weight:700; color:var(--muted);
+    text-transform:uppercase; letter-spacing:.5px; padding:10px 14px;
+    background:var(--bg); border-bottom:1px solid var(--border);
+  }
+  td { padding:9px 14px; font-size:13px; border-bottom:1px solid #F3F4F6; vertical-align:middle; }
+  tr:last-child td { border-bottom:none; }
+  tr:hover td { background:#F9FAFB; }
+  .badge {
+    display:inline-block; padding:2px 8px; border-radius:10px; font-size:10px; font-weight:700;
+  }
+  .badge-green { background:#D1FAE5; color:#065F46; }
+  .badge-blue  { background:#DBEAFE; color:#1E40AF; }
+  .badge-amber { background:#FEF3C7; color:#92400E; }
+
+  /* Inline edit */
+  .cell-edit {
+    width:100%; padding:4px 6px; border:1px solid var(--blue); border-radius:4px;
+    font-size:13px; font-family:var(--sans); background:white;
+  }
+
+  /* Add form */
+  .add-form {
+    background:white; border:1px solid var(--border); border-radius:10px;
+    padding:20px; margin-bottom:20px; display:none;
+  }
+  .add-form.open { display:block; }
+  .form-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:12px; margin-bottom:16px; }
+  .form-field label { display:block; font-size:10px; font-weight:700; color:var(--muted);
+    text-transform:uppercase; letter-spacing:.4px; margin-bottom:4px; }
+  .form-field input, .form-field select {
+    width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:6px;
+    font-size:13px; font-family:var(--sans); outline:none;
+  }
+  .form-field input:focus { border-color:var(--blue); }
+
+  .count-badge {
+    display:inline-block; background:var(--navy); color:white;
+    font-size:10px; font-weight:700; padding:2px 7px; border-radius:10px; margin-left:6px;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <a href="/projects">← Projects</a>
+  <span class="sep">|</span>
+  <h1>⚙ Global Management</h1>
+  <div class="ml">
+    <a class="btn-sm" href="/projects">Dashboard</a>
+    <a class="btn-sm" href="/logout">Sign out</a>
+  </div>
+</div>
+
+<div class="main">
+
+  <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('travel')">
+      ✈ Travel Records <span class="count-badge" id="travelCount">…</span>
+    </button>
+    <button class="tab-btn" onclick="switchTab('promotions')">
+      🏆 Promotions <span class="count-badge" id="promoCount">…</span>
+    </button>
+  </div>
+
+  <!-- ══════════ TRAVEL TAB ══════════ -->
+  <div id="tab-travel" class="tab-panel active">
+
+    <!-- Excel Upload -->
+    <div class="upload-zone" id="travelDrop" onclick="document.getElementById('travelFile').click()"
+         ondragover="event.preventDefault();this.classList.add('drag')"
+         ondragleave="this.classList.remove('drag')"
+         ondrop="handleDrop(event,'travel')">
+      <input type="file" id="travelFile" accept=".xlsx,.xls" onchange="handleFile(this,'travel')">
+      <div class="icon">📂</div>
+      <h3>Upload Travel Excel</h3>
+      <p>Drag & drop or click to browse</p>
+      <div class="hint">Columns: Member / From / To (date) — duplicates auto-skipped</div>
+    </div>
+    <div class="import-result" id="travelImportResult"></div>
+
+    <!-- Toolbar -->
+    <div class="toolbar">
+      <input class="search-inp" id="travelSearch" placeholder="🔍 Search by name…" oninput="loadTravel()">
+      <button class="btn btn-ghost" onclick="toggleForm('travelForm')">+ Add Manually</button>
+    </div>
+
+    <!-- Add Form -->
+    <div class="add-form" id="travelForm">
+      <div class="form-grid">
+        <div class="form-field">
+          <label>Name *</label>
+          <input type="text" id="tv_name" placeholder="Full name">
+        </div>
+        <div class="form-field">
+          <label>Position / Level</label>
+          <input type="text" id="tv_pos" placeholder="e.g. Senior BA">
+        </div>
+        <div class="form-field">
+          <label>Travel Start *</label>
+          <input type="date" id="tv_start">
+        </div>
+        <div class="form-field">
+          <label>Travel End</label>
+          <input type="date" id="tv_end">
+        </div>
+        <div class="form-field">
+          <label>Notes</label>
+          <input type="text" id="tv_notes" placeholder="Optional">
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-primary" onclick="addTravel()">Save Record</button>
+        <button class="btn btn-ghost" onclick="toggleForm('travelForm')">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Table -->
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th><th>Name</th><th>Position</th><th>Start</th><th>End</th><th>Status</th><th>Notes</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="travelBody"><tr><td colspan="8" style="text-align:center;padding:32px;color:var(--muted);">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ══════════ PROMOTIONS TAB ══════════ -->
+  <div id="tab-promotions" class="tab-panel">
+
+    <!-- Excel Upload -->
+    <div class="upload-zone" id="promoDrop" onclick="document.getElementById('promoFile').click()"
+         ondragover="event.preventDefault();this.classList.add('drag')"
+         ondragleave="this.classList.remove('drag')"
+         ondrop="handleDrop(event,'promotions')">
+      <input type="file" id="promoFile" accept=".xlsx,.xls" onchange="handleFile(this,'promotions')">
+      <div class="icon">📂</div>
+      <h3>Upload Promotions Excel</h3>
+      <p>Drag & drop or click to browse</p>
+      <div class="hint">Columns: Name / Title (or Tittle) / Promotion Date — duplicates auto-skipped</div>
+    </div>
+    <div class="import-result" id="promoImportResult"></div>
+
+    <!-- Year filter + toolbar -->
+    <div class="toolbar">
+      <input class="search-inp" id="promoSearch" placeholder="🔍 Search by name…" oninput="loadPromos()">
+      <select id="promoYear" onchange="loadPromos()" style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;">
+        <option value="">All years</option>
+        <option value="2025">2025</option>
+        <option value="2026">2026</option>
+      </select>
+      <button class="btn btn-ghost" onclick="toggleForm('promoForm')">+ Add Manually</button>
+    </div>
+
+    <!-- Add Form -->
+    <div class="add-form" id="promoForm">
+      <div class="form-grid">
+        <div class="form-field">
+          <label>Name *</label>
+          <input type="text" id="pm_name" placeholder="Full name">
+        </div>
+        <div class="form-field">
+          <label>New Title</label>
+          <input type="text" id="pm_title" placeholder="e.g. Senior BA">
+        </div>
+        <div class="form-field">
+          <label>Effective Date</label>
+          <input type="date" id="pm_date">
+        </div>
+        <div class="form-field">
+          <label>Year</label>
+          <input type="number" id="pm_year" placeholder="2026" min="2020" max="2035">
+        </div>
+        <div class="form-field">
+          <label>Notes</label>
+          <input type="text" id="pm_notes" placeholder="Optional">
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-primary" onclick="addPromo()">Save Record</button>
+        <button class="btn btn-ghost" onclick="toggleForm('promoForm')">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Table -->
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th>#</th><th>Name</th><th>New Title</th><th>Effective Date</th><th>Year</th><th>Notes</th><th></th></tr>
+        </thead>
+        <tbody id="promoBody"><tr><td colspan="7" style="text-align:center;padding:32px;color:var(--muted);">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+let activeTab = 'travel';
+
+function switchTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.tab-btn').forEach((b,i) => b.classList.toggle('active', ['travel','promotions'][i]===tab));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('tab-'+tab).classList.add('active');
+  if (tab==='travel') loadTravel();
+  else loadPromos();
+}
+
+function toggleForm(id) {
+  const el = document.getElementById(id);
+  el.classList.toggle('open');
+}
+
+// ── Excel Upload ─────────────────────────────────────────────────────
+function handleDrop(e, type) {
+  e.preventDefault();
+  document.getElementById(type==='travel'?'travelDrop':'promoDrop').classList.remove('drag');
+  const file = e.dataTransfer.files[0];
+  if (file) processExcel(file, type);
+}
+
+function handleFile(input, type) {
+  if (input.files[0]) processExcel(input.files[0], type);
+  input.value = '';
+}
+
+function processExcel(file, type) {
+  const resultEl = document.getElementById(type==='travel' ? 'travelImportResult' : 'promoImportResult');
+  resultEl.className = 'import-result'; resultEl.style.display = 'none';
+
+  const reader = new FileReader();
+  reader.onload = async e => {
+    try {
+      const wb = XLSX.read(e.target.result, {type:'array', cellDates:true});
+      let allRows = [];
+
+      // Collect rows from all sheets
+      wb.SheetNames.forEach(sheetName => {
+        const ws = wb.Sheets[sheetName];
+        const rows = XLSX.utils.sheet_to_json(ws, {defval:''});
+        allRows = allRows.concat(rows);
+      });
+
+      if (!allRows.length) { showResult(resultEl, false, 'No data found in file'); return; }
+
+      // Normalize columns
+      const normalized = allRows.map(row => {
+        const r = {};
+        Object.keys(row).forEach(k => r[k.trim()] = row[k]);
+        return r;
+      });
+
+      let endpoint, payload;
+      if (type === 'travel') {
+        payload = normalized.map(r => ({
+          name:       r['Member'] || r['Name'] || r['name'] || '',
+          position:   r['Level']  || r['Position'] || r['position'] || '',
+          start_date: fmtDate(r['From'] || r['Start Date'] || r['start_date']),
+          end_date:   fmtDate(r['To']   || r['End Date']   || r['end_date']),
+          notes: r['Notes'] || r['notes'] || '',
+          status: 'confirmed'
+        })).filter(r => r.name && r.start_date);
+        endpoint = '/api/global/travel/import';
+      } else {
+        payload = normalized.map(r => ({
+          name:           r['Name'] || r['name'] || r['Name '] || '',
+          new_title:      r['Title'] || r['Tittle'] || r['Title '] || r['Tittle '] || '',
+          effective_date: fmtDate(r['Promotion Date'] || r['Date of Promotion'] || r['Date of Promotion '] || r['Promotion Date '] || ''),
+          year:           extractYear(r['Promotion Date'] || r['Date of Promotion'] || r['Date of Promotion '] || '') || new Date().getFullYear(),
+          notes: ''
+        })).filter(r => r.name);
+        endpoint = '/api/global/promotions/import';
+      }
+
+      const res = await fetch(endpoint, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      });
+      const d = await res.json();
+      showResult(resultEl, true, `✅ Imported ${d.added} records · ${d.skipped} duplicates skipped`);
+      if (type==='travel') loadTravel(); else loadPromos();
+
+    } catch(err) {
+      showResult(resultEl, false, 'Error reading file: ' + err.message);
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function fmtDate(v) {
+  if (!v) return '';
+  if (v instanceof Date) return v.toISOString().slice(0,10);
+  const s = String(v).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0,10);
+  // "27th February 2025" etc
+  const cleaned = s.replace(/(\d+)(st|nd|rd|th)\s*(of\s*)?/i, '$1 ').trim();
+  const d = new Date(cleaned);
+  if (!isNaN(d)) return d.toISOString().slice(0,10);
+  return s;
+}
+
+function extractYear(v) {
+  if (!v) return null;
+  const m = String(v).match(/\b(20\d{2})\b/);
+  return m ? parseInt(m[1]) : null;
+}
+
+function showResult(el, ok, msg) {
+  el.className = 'import-result ' + (ok ? 'ok' : 'error');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+// ── Travel CRUD ──────────────────────────────────────────────────────
+async function loadTravel() {
+  const q = document.getElementById('travelSearch').value;
+  const res = await fetch('/api/global/travel' + (q ? '?q='+encodeURIComponent(q) : ''));
+  const d = await res.json();
+  document.getElementById('travelCount').textContent = d.total;
+  const rows = d.records || [];
+  document.getElementById('travelBody').innerHTML = rows.length ? rows.map(r => `
+    <tr>
+      <td style="color:var(--muted)">${r.id}</td>
+      <td style="font-weight:600">${r.name}</td>
+      <td>${r.position||'—'}</td>
+      <td>${r.start_date||'—'}</td>
+      <td>${r.end_date||'—'}</td>
+      <td><span class="badge badge-green">${r.status||'confirmed'}</span></td>
+      <td style="color:var(--muted)">${r.notes||''}</td>
+      <td>
+        <button class="btn btn-danger" style="padding:3px 8px;font-size:11px;" onclick="deleteTravel(${r.id})">✕</button>
+      </td>
+    </tr>`).join('') :
+    '<tr><td colspan="8" style="text-align:center;padding:32px;color:var(--muted);">No records found</td></tr>';
+}
+
+async function addTravel() {
+  const name  = document.getElementById('tv_name').value.trim();
+  const start = document.getElementById('tv_start').value;
+  if (!name || !start) { alert('Name and start date required'); return; }
+  const res = await fetch('/api/global/travel', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({
+      name, start_date: start,
+      position: document.getElementById('tv_pos').value.trim(),
+      end_date:  document.getElementById('tv_end').value,
+      notes:     document.getElementById('tv_notes').value.trim(),
+      status: 'confirmed'
+    })
+  });
+  const d = await res.json();
+  if (d.ok) {
+    ['tv_name','tv_pos','tv_start','tv_end','tv_notes'].forEach(id => document.getElementById(id).value='');
+    document.getElementById('travelForm').classList.remove('open');
+    loadTravel();
+  } else if (d.error === 'duplicate') {
+    alert('Duplicate: this person already has a travel record starting on that date.');
+  } else {
+    alert('Error: ' + (d.error||'Unknown'));
+  }
+}
+
+async function deleteTravel(id) {
+  if (!confirm('Delete this travel record?')) return;
+  await fetch('/api/global/travel/'+id, {method:'DELETE'});
+  loadTravel();
+}
+
+// ── Promotions CRUD ──────────────────────────────────────────────────
+async function loadPromos() {
+  const q    = document.getElementById('promoSearch').value;
+  const year = document.getElementById('promoYear').value;
+  const params = new URLSearchParams();
+  if (q)    params.set('q', q);
+  if (year) params.set('year', year);
+  const res = await fetch('/api/global/promotions?' + params);
+  const d = await res.json();
+  document.getElementById('promoCount').textContent = d.total;
+  const rows = d.records || [];
+  document.getElementById('promoBody').innerHTML = rows.length ? rows.map(r => `
+    <tr>
+      <td style="color:var(--muted)">${r.id}</td>
+      <td style="font-weight:600">${r.name}</td>
+      <td>${r.new_title||'—'}</td>
+      <td>${r.effective_date||'—'}</td>
+      <td><span class="badge badge-blue">${r.year||'—'}</span></td>
+      <td style="color:var(--muted)">${r.notes||''}</td>
+      <td>
+        <button class="btn btn-danger" style="padding:3px 8px;font-size:11px;" onclick="deletePromo(${r.id})">✕</button>
+      </td>
+    </tr>`).join('') :
+    '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--muted);">No records found</td></tr>';
+}
+
+async function addPromo() {
+  const name = document.getElementById('pm_name').value.trim();
+  if (!name) { alert('Name required'); return; }
+  const res = await fetch('/api/global/promotions', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({
+      name,
+      new_title:      document.getElementById('pm_title').value.trim(),
+      effective_date: document.getElementById('pm_date').value,
+      year:           parseInt(document.getElementById('pm_year').value) || new Date().getFullYear(),
+      notes:          document.getElementById('pm_notes').value.trim(),
+    })
+  });
+  const d = await res.json();
+  if (d.ok) {
+    ['pm_name','pm_title','pm_date','pm_year','pm_notes'].forEach(id => document.getElementById(id).value='');
+    document.getElementById('promoForm').classList.remove('open');
+    loadPromos();
+  } else if (d.error === 'duplicate') {
+    alert('Duplicate: this person already has a promotion record for that year.');
+  } else {
+    alert('Error: ' + (d.error||'Unknown'));
+  }
+}
+
+async function deletePromo(id) {
+  if (!confirm('Delete this promotion record?')) return;
+  await fetch('/api/global/promotions/'+id, {method:'DELETE'});
+  loadPromos();
+}
+
+// Init
+loadTravel();
+</script>
+</body>
+</html>
