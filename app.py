@@ -228,7 +228,7 @@ class OdooClient:
                                 all_proj_tasks = self.models.execute_kw(
                                     ODOO_DB, self.uid, ODOO_PASSWORD,
                                     'project.task', 'search_read',
-                                    [[('project_id.name', 'ilike', _proj_name)]],
+                                    [[('project_id.name', 'ilike', project_name)]],
                                     {'fields': ['id', 'parent_id', 'phase_id'], 'limit': 10000}
                                 )
                                 task_map = {t['id']: t for t in all_proj_tasks}
@@ -787,6 +787,79 @@ def manage_page():
     return render_template('partials/manage.html')
 
 
+
+@app.route('/api/global/travel/parse-ticket', methods=['POST'])
+def api_parse_ticket():
+    import re, io
+    f = request.files.get('file')
+    if not f:
+        return jsonify({'error': 'No file uploaded'}), 400
+    raw = f.read()
+    text = ''
+    try:
+        import pdfplumber
+        with pdfplumber.open(io.BytesIO(raw)) as pdf:
+            for page in pdf.pages:
+                text += (page.extract_text() or '') + chr(10)
+    except Exception:
+        try:
+            import pypdf
+            rdr = pypdf.PdfReader(io.BytesIO(raw))
+            text = chr(10).join(pg.extract_text() or '' for pg in rdr.pages)
+        except Exception as e2:
+            return jsonify({'error': str(e2)}), 500
+
+    result = {}
+    # Name
+    for pat in [
+        r'Passenger Name\s*[:\-]\s*(?:MR\.?\s+|MRS\.?\s+|MS\.?\s+)?([A-Za-z][A-Za-z ]{3,35}?)(?:\s*-\s*ADT|\n)',
+        r'(?:MR|MRS|MS|DR)\.?\s+([A-Za-z][A-Za-z\s]{3,35}?)(?:\s*-\s*ADT|\n)',
+    ]:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            result['name'] = m.group(1).strip().title()
+            break
+
+    # Dates
+    mo_map = {'jan':'01','feb':'02','mar':'03','apr':'04','may':'05','jun':'06',
+               'jul':'07','aug':'08','sep':'09','oct':'10','nov':'11','dec':'12'}
+    dates = []
+    for m in re.finditer(r'(\d{1,2})(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)(\d{4})', text, re.IGNORECASE):
+        iso = '{}-{}-{:02d}'.format(m.group(3), mo_map[m.group(2).lower()], int(m.group(1)))
+        if iso not in dates and '2020' <= iso[:4] <= '2030':
+            dates.append(iso)
+    for m in re.finditer(r'\b(20\d{2}-\d{2}-\d{2})\b', text):
+        if m.group(1) not in dates:
+            dates.append(m.group(1))
+    dates = sorted(set(dates))
+    if dates:
+        result['departure_date'] = dates[0]
+    if len(dates) > 1:
+        result['return_date'] = dates[-1]
+
+    # Cities
+    cities = ['Cairo','Riyadh','Jeddah','Dubai','Doha','Amman','Beirut','Istanbul','London','Frankfurt']
+    cm = re.search(r'(' + '|'.join(cities) + r').*?(' + '|'.join(cities) + r')', text, re.IGNORECASE | re.DOTALL)
+    if cm:
+        result['from_city'] = cm.group(1).title()
+        result['to_city']   = cm.group(2).title()
+
+    # Odoo employee match
+    if result.get('name') and odoo.uid:
+        try:
+            first = result['name'].split()[0]
+            emps = odoo.models.execute_kw(ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'hr.employee', 'search_read',
+                [[('name', 'ilike', first), ('active', '=', True)]],
+                {'fields': ['id', 'name', 'job_title'], 'limit': 5})
+            result['odoo_matches'] = [{'id': e['id'], 'name': e['name'], 'job': e.get('job_title','')} for e in emps]
+        except Exception as _e:
+            logger.warning('Odoo match: %s', _e)
+
+    return jsonify(result)
+
+
+
 @app.route('/debug/projects-raw')
 def debug_projects_raw():
     """Debug: show raw Odoo project data to verify fields."""
@@ -1044,6 +1117,7 @@ def api_overview():
 @app.route('/api/overview/tags-analysis')
 def api_overview_tags_analysis():
     """Group tasks by their Odoo tags. Filtered by phase_group + phases."""
+    _proj_name = active_project_name()
     if not odoo.uid:
         if not odoo.connect():
             return jsonify({'tags': [], 'connected': False, 'error': 'Odoo unreachable'})
@@ -1070,7 +1144,7 @@ def api_overview_tags_analysis():
 
         # Build base domain - tasks in this project
         project_domain = []
-        if PROJECT_NAME:
+        if _proj_name:
             project_domain.append(('project_id.name', 'ilike', _proj_name))
 
         # Get parent tasks under requested phases
@@ -1310,7 +1384,7 @@ def api_overview_analysis(phase_group):
 
         # Step 1: Get parent tasks (those with phase_id set directly)
         project_domain = [('phase_id', 'in', phase_ids)]
-        if PROJECT_NAME:
+        if _proj_name:
             project_domain.append(('project_id.name', 'ilike', _proj_name))
 
         # Try to detect available assignment fields in this Odoo version.
