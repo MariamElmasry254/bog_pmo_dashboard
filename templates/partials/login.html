@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PMO Dashboard — Login</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    min-height: 100vh;
+    background: #0F1A35;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Inter', sans-serif;
+  }
+  /* Subtle grid background */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image:
+      linear-gradient(rgba(59,130,246,.06) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(59,130,246,.06) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+  }
+  .card {
+    background: #1B2A4E;
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 16px;
+    padding: 48px 44px;
+    width: 100%; max-width: 420px;
+    position: relative;
+    box-shadow: 0 24px 64px rgba(0,0,0,.4);
+  }
+  .card::before {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #F59E0B, #3B82F6, #10B981);
+    border-radius: 16px 16px 0 0;
+  }
+  .logo {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 32px;
+  }
+  .logo-icon {
+    width: 40px; height: 40px; border-radius: 10px;
+    background: linear-gradient(135deg, #3B82F6, #1B2A4E);
+    border: 1px solid rgba(59,130,246,.4);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+  }
+  .logo-text { font-size: 13px; font-weight: 700; color: white; letter-spacing: .02em; }
+  .logo-sub  { font-size: 10px; color: rgba(255,255,255,.4); text-transform: uppercase; letter-spacing: .12em; }
+  h1 { font-size: 22px; font-weight: 700; color: white; margin-bottom: 6px; }
+  .subtitle { font-size: 13px; color: rgba(255,255,255,.45); margin-bottom: 32px; }
+  .field { margin-bottom: 18px; }
+  .field label { display: block; font-size: 11px; font-weight: 600; color: rgba(255,255,255,.5);
+    text-transform: uppercase; letter-spacing: .06em; margin-bottom: 6px; }
+  .field input {
+    width: 100%; padding: 11px 14px;
+    background: rgba(255,255,255,.06);
+    border: 1px solid rgba(255,255,255,.1);
+    border-radius: 8px;
+    color: white; font-size: 14px; font-family: 'Inter', sans-serif;
+    transition: border-color .15s;
+    outline: none;
+  }
+  .field input:focus { border-color: rgba(59,130,246,.6); background: rgba(59,130,246,.08); }
+  .field input::placeholder { color: rgba(255,255,255,.25); }
+  .btn {
+    width: 100%; padding: 12px;
+    background: #3B82F6;
+    border: none; border-radius: 8px;
+    color: white; font-size: 14px; font-weight: 600;
+    cursor: pointer; transition: background .15s;
+    margin-top: 8px;
+  }
+  .btn:hover { background: #2563EB; }
+  .btn:disabled { background: #374151; cursor: not-allowed; }
+  .error {
+    background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.3);
+    color: #FCA5A5; border-radius: 8px; padding: 10px 14px;
+    font-size: 13px; margin-bottom: 20px;
+  }
+  .footer { text-align: center; margin-top: 24px; font-size: 11px; color: rgba(255,255,255,.2); }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">
+    <div class="logo-icon">📊</div>
+    <div>
+      <div class="logo-text">Codelab PMO</div>
+      <div class="logo-sub">Dashboard v3</div>
+    </div>
+  </div>
+
+  <h1>Welcome back</h1>
+  <p class="subtitle">Sign in to access the PMO Dashboard</p>
+
+  {% if error %}
+  <div class="error">⚠️ {{ error }}</div>
+  {% endif %}
+
+  <div id="errMsg" class="error" style="display:none;"></div>
+
+  <div class="field">
+    <label>Username</label>
+    <input type="text" id="username" placeholder="Enter username" autocomplete="username">
+  </div>
+  <div class="field">
+    <label>Password</label>
+    <input type="password" id="password" placeholder="Enter password" autocomplete="current-password"
+           onkeydown="if(event.key==='Enter') doLogin()">
+  </div>
+  <button class="btn" onclick="doLogin()" id="loginBtn">Sign In →</button>
+
+  <div class="footer">Codelab · Internal PMO Tool · {{ now.year if now else 2026 }}</div>
+</div>
+
+<script>
+async function doLogin() {
+  const btn = document.getElementById('loginBtn');
+  const errEl = document.getElementById('errMsg');
+  const u = document.getElementById('username').value.trim();
+  const p = document.getElementById('password').value;
+  if (!u || !p) { showErr('Please enter username and password.'); return; }
+
+  btn.disabled = true;
+  btn.textContent = 'Signing in…';
+  errEl.style.display = 'none';
+
+  try {
+    const res = await fetch('/login', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({username: u, password: p})
+    });
+    const d = await res.json();
+    if (d.ok) {
+      window.location.href = d.redirect || '/projects';
+    } else {
+      showErr(d.error || 'Invalid credentials');
+      btn.disabled = false; btn.textContent = 'Sign In →';
+    }
+  } catch(e) {
+    showErr('Connection error — please try again.');
+    btn.disabled = false; btn.textContent = 'Sign In →';
+  }
+}
+
+function showErr(msg) {
+  const el = document.getElementById('errMsg');
+  el.textContent = '⚠️ ' + msg;
+  el.style.display = 'block';
+}
+
+// Auto-focus username
+document.getElementById('username').focus();
+</script>
+</body>
+</html>
