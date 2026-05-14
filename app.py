@@ -4969,6 +4969,7 @@ def debug_invoices():
 
 
 
+@app.route('/api/travel', methods=['GET'])
 def api_travel_list():
     records = load_travel()
     today_str = date.today().isoformat()
