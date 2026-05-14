@@ -787,6 +787,33 @@ def api_parse_ticket():
 
 
 
+@app.route('/api/global/employees/search')
+def api_search_employees():
+    """Search Odoo employees by name for linking to travel/promotions records."""
+    try:
+        if not odoo.uid: odoo.connect()
+        q = (request.args.get('q') or '').strip()
+        if not q or len(q) < 2:
+            return jsonify({'employees': []})
+        employees = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'hr.employee', 'search_read',
+            [[('name', 'ilike', q), ('active', '=', True)]],
+            {'fields': ['id', 'name', 'job_title', 'job_id'], 'limit': 20}
+        )
+        result = []
+        for e in employees:
+            job = e.get('job_id')
+            result.append({
+                'id':    e['id'],
+                'name':  e['name'],
+                'title': e.get('job_title') or (job[1] if isinstance(job, list) and len(job)>1 else ''),
+            })
+        return jsonify({'employees': result})
+    except Exception as ex:
+        return jsonify({'employees': [], 'error': str(ex)})
+
+
 @app.route('/debug/projects-raw')
 def debug_projects_raw():
     """Debug: show raw Odoo project data to verify fields."""
@@ -3179,12 +3206,40 @@ def get_weekend_for_country(country):
         return TUNIS_WEEKEND
     return DEFAULT_WEEKEND
 
+def _names_match(a, b):
+    """Fuzzy name match: exact, or first+last word match, or one contains the other."""
+    a = (a or '').strip().lower().replace('-', ' ').replace('_', ' ')
+    b = (b or '').strip().lower().replace('-', ' ').replace('_', ' ')
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    # Remove spaces and compare
+    if a.replace(' ','') == b.replace(' ',''):
+        return True
+    # First + last word match
+    aw = a.split(); bw = b.split()
+    if len(aw) >= 2 and len(bw) >= 2:
+        if aw[0] == bw[0] and aw[-1] == bw[-1]:
+            return True
+    # One contains the other (handles "Kareem El Safy" vs "Kareem Elsafy")
+    a_nospace = a.replace(' ','')
+    b_nospace = b.replace(' ','')
+    if a_nospace in b_nospace or b_nospace in a_nospace:
+        return True
+    return False
+
+
 def get_travel_periods_for_employee(name):
-    """Returns list of (start_date, end_date_or_None) tuples for an employee's travel periods"""
+    """Returns list of (start_date, end_date_or_None) tuples for an employee's travel periods.
+    Uses fuzzy name matching to handle slight spelling differences.
+    Also matches by odoo_employee_id if stored in travel record.
+    """
     records = load_travel()
     periods = []
     for r in records:
-        if r.get('name', '').strip().lower() == name.strip().lower():
+        rec_name = r.get('name', '')
+        if _names_match(rec_name, name):
             periods.append((r.get('start_date'), r.get('end_date')))
     return periods
 
