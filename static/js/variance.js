@@ -1760,90 +1760,19 @@ async function estClearAll() {
 
 // ====== TRAVEL & ONSITE ======
 async function renderTravelSubTab() {
-  const cont = document.getElementById('varianceContent');
-
-  // Load employees + positions in parallel
-  let employees = [];
-  let positions = AppState.positions || [];
-  try {
-    const r = await fetch('/api/project-employees');
-    const d = await r.json();
-    employees = d.employees || [];
-  } catch (e) {}
-
-  AppState.travelEmployees = employees;
-  AppState.travelPositions = positions;
-
+  const cont = document.getElementById('variance-travel-cont');
+  if (!cont) return;
   cont.innerHTML = `
-    <div class="banner banner-info">
-      <strong>Travel & Onsite Records:</strong>
-      Track when team members travel onsite. Rates differ between Egypt and onsite work.
-      Leave end date empty if travel is open-ended.
-    </div>
-
-    <div class="card">
-      <h3 class="card-title" id="travelFormTitle">Add Travel Record</h3>
-      <div class="travel-form">
-        <div class="form-row">
-          <label>Employee Name
-            <input list="empNamesList" id="trName" placeholder="Type or pick from list..." class="search-input" autocomplete="off">
-            <datalist id="empNamesList">
-              ${employees.map(e => `<option value="${e.name}" data-position="${e.position || ''}">`).join('')}
-            </datalist>
-          </label>
-          <label>Position
-            <input list="positionsList" id="trPos" placeholder="Type or pick from list..." class="search-input" autocomplete="off">
-            <datalist id="positionsList">
-              ${positions.map(p => `<option value="${p.name}">`).join('')}
-            </datalist>
-          </label>
-        </div>
-        <div class="form-row">
-          <label>Travel Start <input type="date" id="trStart" class="search-input"></label>
-          <label>End Date <small class="muted-text">(optional · leave empty for open trip)</small> <input type="date" id="trEnd" class="search-input"></label>
-        </div>
-        <div class="form-row">
-          <label class="full-width">Notes <input type="text" id="trNotes" placeholder="Optional notes..." class="search-input"></label>
-        </div>
-        <div class="form-actions">
-          <button id="trCancel" class="btn-ghost" style="display:none;">Cancel Edit</button>
-          <button id="trSubmit" class="btn-primary">+ Add Record</button>
-        </div>
-        <input type="hidden" id="trEditingId" value="">
+    <div class="banner banner-info" style="display:flex;align-items:center;gap:16px;">
+      <span style="font-size:20px;">✈️</span>
+      <div>
+        <strong>Travel & Onsite records are now managed centrally.</strong><br>
+        <span style="font-size:13px;">Go to <a href="/manage" style="color:var(--blue);font-weight:600;">⚙ Manage → Travel Records</a> to view, add, or import travel data.</span>
       </div>
-    </div>
-
-    <div class="card">
-      <h3 class="card-title">Travel Records <span class="muted-text">— click "Edit" to update</span></h3>
-      <div class="table-scroll">
-        <table class="data-table" id="travelTable">
-          <thead><tr>
-            <th>Name</th><th>Position</th><th>Start</th><th>End</th>
-            <th class="num">Days</th><th>Status</th><th>Notes</th><th></th>
-          </tr></thead>
-          <tbody><tr><td colspan="8" class="loading">Loading…</td></tr></tbody>
-        </table>
-      </div>
-    </div>
-  `;
-
-  // Auto-fill position when name selected
-  document.getElementById('trName').addEventListener('input', (e) => {
-    const name = e.target.value;
-    const emp = (AppState.travelEmployees || []).find(x => x.name === name);
-    if (emp && emp.position && !document.getElementById('trPos').value) {
-      // Strip "- onsite" suffix to land on the dropdown value (PM picks onsite manually here)
-      const cleanPos = emp.position.replace(/\s*-\s*onsite\s*$/i, '').trim();
-      document.getElementById('trPos').value = cleanPos;
-    }
-  });
-
-  document.getElementById('trSubmit').addEventListener('click', submitTravel);
-  document.getElementById('trCancel').addEventListener('click', cancelEdit);
-  await loadTravelRecords();
+    </div>`;
 }
 
-async function loadTravelRecords() {
+async function loadTravelRecords() { {
   let d = { records: [] };
   try {
     const res = await fetch('/api/travel');
@@ -1957,106 +1886,19 @@ async function submitTravel() {
 // PROMOTIONS SUB-TAB
 // ============================================================
 async function renderPromotionsSubTab() {
-  const cont = document.getElementById('varianceContent');
-  cont.innerHTML = '<div class="loading">Loading promotions…</div>';
-
-  try {
-    // Load employees for datalist
-    const [promoRes, empRes] = await Promise.all([
-      fetch('/api/promotions'),
-      fetch('/api/project-employees'),
-    ]);
-    const promoData = await promoRes.json();
-    const empData = await empRes.json();
-    const employees = (empData.employees || []).map(e => e.name);
-    const records = promoData.records || [];
-
-    const empOptions = employees.map(e => `<option value="${e}">`).join('');
-
-    cont.innerHTML = `
-      <div class="card" style="margin-bottom: 16px;">
-        <h3 class="card-title" id="promoFormTitle">Add Promotion Record</h3>
-        <p class="muted-text" style="font-size: 12px; margin-bottom: 12px;">
-          Track mid-project promotions so cost calculations use the correct rate before and after promotion date.
-        </p>
-        <datalist id="promoEmpList">${empOptions}</datalist>
-        <div class="travel-form" style="display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 10px; align-items: end;">
-          <div>
-            <label class="filter-label">EMPLOYEE NAME</label>
-            <input type="text" id="promoName" list="promoEmpList" placeholder="Type name…" class="svc-input" style="width:100%; padding:6px 8px; border:1px solid var(--border-strong); border-radius:4px;"
-              oninput="promoFetchOdooPosition()">
-          </div>
-          <div>
-            <label class="filter-label">PROMOTION DATE</label>
-            <input type="date" id="promoDate" class="svc-input" style="width:100%; padding:6px 8px; border:1px solid var(--border-strong); border-radius:4px;">
-          </div>
-          <div>
-            <label class="filter-label">OLD POSITION <span class="muted-text">(before date)</span></label>
-            <input type="text" id="promoOldPos" placeholder="e.g. Business Analyst" class="svc-input" style="width:100%; padding:6px 8px; border:1px solid var(--border-strong); border-radius:4px;">
-          </div>
-          <div>
-            <label class="filter-label">NEW POSITION <span class="muted-text">(after date)</span></label>
-            <input type="text" id="promoNewPos" placeholder="e.g. Senior Business Analyst" class="svc-input" style="width:100%; padding:6px 8px; border:1px solid var(--border-strong); border-radius:4px;">
-          </div>
-        </div>
-        <div style="display: flex; gap: 8px; margin-top: 10px; align-items: center;">
-          <button class="btn-primary" onclick="submitPromotion()">💾 Save Promotion</button>
-          <button class="btn-outline" id="promoCancelBtn" onclick="cancelPromoEdit()" style="display:none;">✕ Cancel</button>
-          <span id="promoOdooHint" class="muted-text" style="font-size: 11px;"></span>
-        </div>
-        <input type="hidden" id="promoEditId" value="">
+  const cont = document.getElementById('variance-promotions-cont');
+  if (!cont) return;
+  cont.innerHTML = `
+    <div class="banner banner-info" style="display:flex;align-items:center;gap:16px;">
+      <span style="font-size:20px;">🏆</span>
+      <div>
+        <strong>Promotions are now managed centrally.</strong><br>
+        <span style="font-size:13px;">Go to <a href="/manage" style="color:var(--blue);font-weight:600;">⚙ Manage → Promotions</a> to view, add, or import promotion data.</span>
       </div>
-
-      <div class="card">
-        <h3 class="card-title">Promotion Records <span class="muted-text">(${records.length})</span></h3>
-        <div class="table-scroll">
-          <table class="data-table" id="promoTable">
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>Employee</th>
-                <th>Promotion Date</th>
-                <th>Old Position (before)</th>
-                <th>New Position (after)</th>
-                <th>Notes</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody id="promoTableBody"></tbody>
-          </table>
-        </div>
-      </div>
-    `;
-    loadPromoRecords(records);
-  } catch (e) {
-    cont.innerHTML = `<div class="banner banner-warn"><strong>Error:</strong> ${e.message}</div>`;
-  }
+    </div>`;
 }
 
-function loadPromoRecords(records) {
-  const tbody = document.getElementById('promoTableBody');
-  if (!tbody) return;
-  if (!records || !records.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="loading">No promotion records yet</td></tr>';
-    return;
-  }
-  tbody.innerHTML = records.map((r, i) => `
-    <tr>
-      <td>${i + 1}</td>
-      <td><b>${r.name}</b></td>
-      <td style="font-family: var(--mono); font-size: 12px;">${r.promotion_date || '—'}</td>
-      <td style="color: var(--text-muted); font-size: 12px;">${r.old_position || '—'}</td>
-      <td style="color: var(--blue); font-size: 12px; font-weight: 600;">${r.new_position || '—'}</td>
-      <td class="muted-text" style="font-size: 11px;">${r.notes || ''}</td>
-      <td>
-        <button class="btn-outline" style="font-size: 11px; padding: 3px 8px;" onclick="startPromoEdit(${r.id})">✏️ Edit</button>
-        <button class="btn-outline" style="font-size: 11px; padding: 3px 8px; color: var(--red);" onclick="deletePromo(${r.id})">🗑</button>
-      </td>
-    </tr>
-  `).join('');
-}
-
-async function promoFetchOdooPosition() {
+async function promoFetchOdooPosition() { {
   const name = document.getElementById('promoName')?.value?.trim();
   const hint = document.getElementById('promoOdooHint');
   if (!name || name.length < 3) { if (hint) hint.textContent = ''; return; }
