@@ -834,29 +834,46 @@ def api_travel_auto_link():
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'hr.employee', 'search_read',
             [[('active','=',True)]],
-            {'fields':['id','name'], 'limit':2000}
+            {'fields':['id','name','barcode'], 'limit':2000}
         )
-        emp_norm = {norm(e['name']): e for e in all_emps}
-        # Also index by first+last word
-        emp_fl = {}
+        # Build multiple indexes
+        emp_by_norm = {}   # normalized full name → emp
+        emp_by_fl   = {}   # first+last word → emp
+        emp_by_barcode = {} # barcode (E259) → emp
         for e in all_emps:
+            n = norm(e['name'])
+            emp_by_norm[n] = e
             words = e['name'].lower().split()
             if len(words) >= 2:
-                key = words[0] + words[-1]
-                emp_fl[key] = e
+                emp_by_fl[words[0]+words[-1]] = e
+            bc = (e.get('barcode') or '').strip().upper()
+            if bc:
+                emp_by_barcode[bc] = e
 
         matched = unmatched = 0
         for r in records:
             if r.get('odoo_employee_id'):
-                continue  # already linked
-            n = norm(r.get('name',''))
-            found = emp_norm.get(n)
+                continue
+            # Try by code first (E259 format stored in position or notes)
+            code = ''
+            import re as _re2
+            for field in ['position','notes','name']:
+                m = _re2.search(r'\b([ERT]\d+)\b', r.get(field,''), _re2.IGNORECASE)
+                if m: code = m.group(1).upper(); break
+
+            found = emp_by_barcode.get(code) if code else None
+
+            if not found:
+                n = norm(r.get('name',''))
+                found = emp_by_norm.get(n)
+
             if not found:
                 words = r.get('name','').lower().split()
                 if len(words) >= 2:
-                    found = emp_fl.get(words[0]+words[-1])
+                    found = emp_by_fl.get(words[0]+words[-1])
+
             if found:
-                r['odoo_employee_id'] = found['id']
+                r['odoo_employee_id']   = found['id']
                 r['odoo_employee_name'] = found['name']
                 matched += 1
             else:
@@ -881,27 +898,32 @@ def api_promotions_auto_link():
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'hr.employee', 'search_read',
             [[('active','=',True)]],
-            {'fields':['id','name'], 'limit':2000}
+            {'fields':['id','name','barcode'], 'limit':2000}
         )
-        emp_norm = {norm(e['name']): e for e in all_emps}
-        emp_fl = {}
+        emp_by_norm = {}
+        emp_by_fl   = {}
+        emp_by_barcode = {}
         for e in all_emps:
+            emp_by_norm[norm(e['name'])] = e
             words = e['name'].lower().split()
             if len(words) >= 2:
-                emp_fl[words[0]+words[-1]] = e
+                emp_by_fl[words[0]+words[-1]] = e
+            bc = (e.get('barcode') or '').strip().upper()
+            if bc:
+                emp_by_barcode[bc] = e
 
         matched = unmatched = 0
         for r in records:
             if r.get('odoo_employee_id'):
                 continue
             n = norm(r.get('name',''))
-            found = emp_norm.get(n)
+            found = emp_by_norm.get(n)
             if not found:
                 words = r.get('name','').lower().split()
                 if len(words) >= 2:
-                    found = emp_fl.get(words[0]+words[-1])
+                    found = emp_by_fl.get(words[0]+words[-1])
             if found:
-                r['odoo_employee_id'] = found['id']
+                r['odoo_employee_id']   = found['id']
                 r['odoo_employee_name'] = found['name']
                 matched += 1
             else:
@@ -3306,26 +3328,19 @@ def get_weekend_for_country(country):
     return DEFAULT_WEEKEND
 
 def _names_match(a, b):
-    """Fuzzy name match: exact, or first+last word match, or one contains the other."""
-    a = (a or '').strip().lower().replace('-', ' ').replace('_', ' ')
-    b = (b or '').strip().lower().replace('-', ' ').replace('_', ' ')
-    if not a or not b:
-        return False
-    if a == b:
-        return True
-    # Remove spaces and compare
-    if a.replace(' ','') == b.replace(' ',''):
-        return True
-    # First + last word match
+    """Fuzzy name match — handles [E259] prefix, hyphens, spacing differences."""
+    import re as _re3
+    def clean(s):
+        s = (_re3.sub(r'\[[A-Z]\d+\]\s*', '', s or '')).strip()
+        return s.lower().replace('-',' ').replace('_',' ').replace("'",'')
+    a = clean(a); b = clean(b)
+    if not a or not b: return False
+    if a == b: return True
+    if a.replace(' ','') == b.replace(' ',''): return True
     aw = a.split(); bw = b.split()
-    if len(aw) >= 2 and len(bw) >= 2:
-        if aw[0] == bw[0] and aw[-1] == bw[-1]:
-            return True
-    # One contains the other (handles "Kareem El Safy" vs "Kareem Elsafy")
-    a_nospace = a.replace(' ','')
-    b_nospace = b.replace(' ','')
-    if a_nospace in b_nospace or b_nospace in a_nospace:
-        return True
+    if len(aw) >= 2 and len(bw) >= 2 and aw[0]==bw[0] and aw[-1]==bw[-1]: return True
+    a_ns = a.replace(' ',''); b_ns = b.replace(' ','')
+    if a_ns in b_ns or b_ns in a_ns: return True
     return False
 
 
