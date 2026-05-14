@@ -4719,15 +4719,27 @@ def api_effort_all_months(phase_key):
             return False
 
         def _base_position_on_date(date_str):
+            """Return position title for this employee on given date.
+            Uses promotion records to determine correct position.
+            Before promotion: use odoo_pos (current position from Odoo)
+            After promotion: use new_title from promotion record
+            """
             pos = odoo_pos or ''
-            if emp_promos:
-                if date_str < emp_promos[0]['promotion_date']:
-                    pos = emp_promos[0].get('old_position') or odoo_pos or ''
+            if not emp_promos:
+                return pos
+            # Sort by date to find correct position
+            for promo in reversed(emp_promos):
+                promo_date = promo.get('promotion_date') or promo.get('effective_date') or ''
+                if not promo_date:
+                    continue
+                new_pos = promo.get('new_position') or promo.get('new_title') or ''
+                old_pos = promo.get('old_position') or odoo_pos or ''
+                if date_str >= promo_date:
+                    # On or after promotion date → use new position
+                    return new_pos if new_pos else pos
                 else:
-                    for promo in reversed(emp_promos):
-                        if date_str >= promo['promotion_date']:
-                            pos = promo.get('new_position') or odoo_pos or ''
-                            break
+                    # Before this promotion → use old position
+                    pos = old_pos
             return pos
 
         # KSA position aliases: Odoo returns various formats, normalize to DB keys
@@ -5457,8 +5469,12 @@ def load_promotions():
     if global_recs is not None:
         # Normalize field names: manage page uses 'effective_date', old code uses 'promotion_date'
         for r in global_recs:
+            # Normalize date field
             if 'effective_date' in r and 'promotion_date' not in r:
                 r['promotion_date'] = r['effective_date']
+            # Keep both new_title and new_position for compatibility
+            if 'new_title' in r:
+                r['new_position'] = r['new_title']  # used by _base_position_on_date
             if 'new_title' in r and 'position' not in r:
                 r['position'] = r['new_title']
         global_recs.sort(key=lambda x: (x.get('name',''), x.get('promotion_date','')))
