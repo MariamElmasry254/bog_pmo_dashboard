@@ -529,6 +529,7 @@ def logout():
 
 
 @app.route('/')
+@login_required
 def index():
     # If no project selected, redirect to projects list
     if not session.get('project_name'):
@@ -538,6 +539,7 @@ def index():
 
 
 @app.route('/projects')
+@login_required
 def projects_list():
     """Projects selection page — lists all Odoo projects with stage info."""
     # Try both locations
@@ -778,6 +780,13 @@ def api_global_promos_import():
         added += 1
     _global_set('promotions', records)
     return jsonify({'ok': True, 'added': added, 'skipped': skipped})
+
+
+@app.route('/manage')
+@login_required
+def manage_page():
+    """Global Travel & Promotions management page."""
+    return render_template('partials/manage.html')
 
 
 @app.route('/debug/projects-raw')
