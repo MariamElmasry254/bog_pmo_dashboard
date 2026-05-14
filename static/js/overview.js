@@ -281,13 +281,15 @@ function tagPhaseLabel(phases, total) {
 }
 
 async function loadOverviewKPIs() {
-  // ── 1. Main overview API (Roadmap + Odoo project) ──
+  // ── 1. Overview API (Odoo project + Variance) ──────────────────────
   try {
     const res = await fetch('/api/overview');
-    const d = await res.json();
+    const d   = await res.json();
+    AppState._overviewData = d;
 
-    // Header: PM + Coordinator + subtitle
-    const set = (id, v) => { const el=document.getElementById(id); if(el && v) el.textContent=v; };
+    const set = (id, v) => { const el=document.getElementById(id); if(el&&v!==null&&v!==undefined) el.textContent=v; };
+
+    // Header
     set('headerPM',    d.project_manager || '—');
     set('headerCoord', d.coordinator     || '—');
     const sub = document.getElementById('headerSubtitle');
@@ -298,57 +300,38 @@ async function loadOverviewKPIs() {
       if (d.duration_months) parts.push(`(${d.duration_months} months)`);
       sub.textContent = parts.join(' ');
     }
+    const pEl = document.getElementById('ovPeriod');
+    if (pEl) pEl.textContent = [d.roadmap_start, d.roadmap_end].filter(Boolean).join(' → ')
+      + (d.duration_months ? ` (${d.duration_months} months)` : '');
 
-    // Period tag
-    const periodEl = document.getElementById('ovPeriod');
-    if (periodEl) {
-      periodEl.textContent = [d.roadmap_start, d.roadmap_end].filter(Boolean).join(' → ')
-        + (d.duration_months ? ` (${d.duration_months} months)` : '');
-    }
-
-    // Row 1 KPIs
+    // Revenue
     const revEl = document.getElementById('kpiRevenue');
     if (revEl) revEl.textContent = d.project_value_sar
-      ? fmt.money(Math.round(d.project_value_sar))
-      : '—';
-    set('kpiMandays', fmt.num(d.total_mandays || 0));
-    set('kpiProgress', d.progress_pct || '—');
-    set('kpiDays', d.remaining_mds !== undefined
-      ? `${fmt.num(d.remaining_mds || 0)} MDs remaining · from Variance`
-      : `${d.days_elapsed||0} days elapsed`);
+      ? fmt.money(Math.round(d.project_value_sar)) : '—';
 
-    // Store for phase cost row (filled after effort loads)
-    AppState._overviewData = d;
-  } catch (e) {
-    console.error('Overview KPIs error:', e);
-  }
+    // Phase progress + remaining MDs
+    // development
+    set('kpiDevProgress',  d.progress_pct || '—');
+    set('kpiDevRemaining', d.remaining_mds !== undefined ? fmt.decimal(d.remaining_mds) + ' MD' : '—');
+    const devBar = document.getElementById('kpiDevProgressBar');
+    if (devBar) devBar.style.width = Math.min(100, d.progress_pct || 0) + '%';
 
-  // ── 2. Phase costs + EAC from Variance effort data ──
-  // Load effort for both phases and grab last month current cost + EAC
+    // consultation — separate plan_overrides read on backend
+    set('kpiConProgress',  d.con_progress_pct  !== undefined ? d.con_progress_pct  : '—');
+    set('kpiConRemaining', d.con_remaining_mds !== undefined ? fmt.decimal(d.con_remaining_mds) + ' MD' : '—');
+    const conBar = document.getElementById('kpiConProgressBar');
+    if (conBar) conBar.style.width = Math.min(100, d.con_progress_pct || 0) + '%';
+
+  } catch(e) { console.error('Overview KPIs error:', e); }
+
+  // ── 2. Phase costs + EAC ──────────────────────────────────────────
   _loadPhaseCostKPIs();
 
-  // ── 3. Team members ──
-  try {
-    const res = await fetch('/api/team/summary');
-    const d = await res.json();
-    if (d.success) {
-      const set = (id,v)=>{const el=document.getElementById(id);if(el)el.textContent=v;};
-      set('kpiTeamMembers', d.total || 0);
-      const sub = [];
-      if (d.onsite   > 0) sub.push(`${d.onsite} onsite`);
-      if (d.offshore > 0) sub.push(`${d.offshore} offshore`);
-      set('kpiTeamSubtext', sub.join(' · ') || '');
-    } else {
-      document.getElementById('kpiTeamMembers').textContent = '—';
-      const st = document.getElementById('kpiTeamSubtext');
-      if(st){ st.textContent='Sheet not accessible'; st.style.color='var(--amber)'; }
-    }
-  } catch (e) {
-    const st = document.getElementById('kpiTeamSubtext');
-    if(st) st.textContent = 'Error loading';
-  }
+  // ── 3. Team members (from effort API, split by phase) ─────────────
+  AppState._teamActiveTab = 'development';
+  _loadTeamKPI('development');
 
-  // ── 4. Wire team modal ──
+  // Wire team modal button (from old modal)
   const card = document.getElementById('kpiTeamMembersCard');
   if (card && !card.dataset.wired) {
     card.dataset.wired = '1';
@@ -358,17 +341,100 @@ async function loadOverviewKPIs() {
   }
 }
 
+// ── Team tab switching ──────────────────────────────────────────────
+window.switchTeamTab = function(phase) {
+  AppState._teamActiveTab = phase;
+  const devBtn = document.getElementById('teamTabDev');
+  const conBtn = document.getElementById('teamTabCon');
+  const navy = 'background:var(--navy);color:white;';
+  const idle = 'background:var(--bg-subtle);color:var(--text-muted);';
+  if (devBtn) devBtn.style.cssText = devBtn.style.cssText.replace(/background[^;]+;color[^;]+;/, '') + (phase==='development'?navy:idle);
+  if (conBtn) conBtn.style.cssText = conBtn.style.cssText.replace(/background[^;]+;color[^;]+;/, '') + (phase==='consultation'?navy:idle);
+  _loadTeamKPI(phase);
+};
+
+async function _loadTeamKPI(phase) {
+  const listEl  = document.getElementById('kpiTeamList');
+  const countEl = document.getElementById('kpiTeamCount');
+  if (!listEl) return;
+  listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">Loading…</div>';
+
+  try {
+    // Get employees from effort API for this phase
+    if (!AppState._effortMonths) AppState._effortMonths = {};
+    let employees = AppState._effortEmployees?.[phase];
+    if (!employees) {
+      const res = await fetch(`/api/effort/${phase}/all-months`);
+      const d   = await res.json();
+      if (!AppState._effortEmployees) AppState._effortEmployees = {};
+      AppState._effortEmployees[phase] = d.employees || [];
+      employees = AppState._effortEmployees[phase];
+      // cache effort data
+      if (!AppState._effortMonthCosts) AppState._effortMonthCosts = {};
+      if (!AppState._effortMonthMDs)   AppState._effortMonthMDs   = {};
+      if (!AppState._effortMonths)     AppState._effortMonths     = {};
+      AppState._effortMonthCosts[phase] = d.month_cost_usd || {};
+      AppState._effortMonthMDs[phase]   = d.month_mds      || {};
+      AppState._effortMonths[phase]     = d.months          || [];
+    }
+
+    // Filter: exclude Arabic names + Amr (keep non-Arabic, non-Amr)
+    const isArabic = s => /[؀-ۿ]/.test(s || '');
+    const team = employees.filter(e => {
+      const n = (e.name || '').trim();
+      if (!n || n === '—') return false;
+      if (isArabic(n)) return false;
+      if (/amr/i.test(n)) return false;
+      // Onsite-only rows: skip duplicates (keep base row)
+      if ((e.is_onsite_row || e.onsite)) return false;
+      return true;
+    });
+
+    if (!team.length) {
+      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">No team members found</div>';
+      if (countEl) countEl.textContent = '0 members';
+      return;
+    }
+
+    if (countEl) countEl.textContent = `${team.length} member${team.length!==1?'s':''}`;
+
+    listEl.innerHTML = team.map(e => {
+      const pos = (e.position || '').replace(/^(KSA|EGY|TUN)\s*-\s*/i, '').replace(/ - onsite$/i,'');
+      const country = e.country || (e.position||'').match(/^(KSA|EGY|TUN)/i)?.[1] || '';
+      const countryColor = {'KSA':'var(--amber)','EGY':'var(--blue)','TUN':'var(--green)'}[country.toUpperCase()] || 'var(--text-muted)';
+      return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);">
+        <div style="width:28px;height:28px;border-radius:50%;background:var(--bg-subtle);
+                    display:flex;align-items:center;justify-content:center;
+                    font-size:11px;font-weight:700;color:var(--navy);flex-shrink:0;">
+          ${(e.name||'?').charAt(0).toUpperCase()}
+        </div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:12px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${e.name}</div>
+          <div style="font-size:10px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${pos}</div>
+        </div>
+        ${country ? `<span style="font-size:9px;font-weight:700;color:${countryColor};background:${countryColor}18;
+                          padding:1px 5px;border-radius:8px;flex-shrink:0;">${country}</span>` : ''}
+      </div>`;
+    }).join('');
+
+  } catch(e) {
+    listEl.innerHTML = '<div style="color:var(--red);font-size:12px;">Error loading team</div>';
+    console.error('Team KPI error:', e);
+  }
+}
+
 async function _loadPhaseCostKPIs() {
-  // Fetch effort for development + consultation, pick last month with data
   const fSAR = v => fmt.money(Math.round(v));
   const set   = (id, v) => { const el=document.getElementById(id); if(el) el.textContent=v||'—'; };
 
+  let totalCostSAR = 0;
+  let totalEACSAR  = 0;
+
   for (const phase of ['consultation', 'development']) {
     try {
-      // Use cached AppState if available (loaded by Variance tab)
-      let months   = AppState._effortMonths?.[phase]     || [];
-      let mCosts   = AppState._effortMonthCosts?.[phase]  || {};
-      let mMDs     = AppState._effortMonthMDs?.[phase]    || {};
+      let months = AppState._effortMonths?.[phase]     || [];
+      let mCosts = AppState._effortMonthCosts?.[phase] || {};
+      let mMDs   = AppState._effortMonthMDs?.[phase]   || {};
 
       if (!months.length) {
         const res = await fetch(`/api/effort/${phase}/all-months`);
@@ -376,7 +442,6 @@ async function _loadPhaseCostKPIs() {
         months = d.months || [];
         mCosts = d.month_cost_usd || {};
         mMDs   = d.month_mds      || {};
-        // Cache for Variance tab
         if (!AppState._effortMonths)     AppState._effortMonths     = {};
         if (!AppState._effortMonthCosts) AppState._effortMonthCosts = {};
         if (!AppState._effortMonthMDs)   AppState._effortMonthMDs   = {};
@@ -385,50 +450,35 @@ async function _loadPhaseCostKPIs() {
         AppState._effortMonthMDs[phase]   = mMDs;
       }
 
-      // Cumulative cost SAR up to last month with data
       let cumCostUSD = 0;
-      let lastMonthMDs = 0;
-      months.forEach(m => {
-        const c = mCosts[m.key] || 0;
-        const mds = mMDs[m.key] || 0;
-        if (c > 0 || mds > 0) {
-          cumCostUSD   += c;
-          lastMonthMDs  = mds;
-        }
-      });
+      months.forEach(m => { cumCostUSD += mCosts[m.key] || 0; });
       const cumCostSAR = cumCostUSD * 3.75;
+      totalCostSAR += cumCostSAR;
 
-      // EAC remaining MDs from plan_overrides (loaded by overview API)
       const overviewData = AppState._overviewData || {};
-      const eacMDs = phase === 'development' ? (overviewData.dev_eac_mds || 0)
-                                              : (overviewData.con_eac_mds || 0);
-
-      // Avg cost/MD from actual effort
-      const totalMDs = Object.values(mMDs).reduce((s,v)=>s+v,0);
-      const avgCostPerMD = totalMDs > 0 ? cumCostSAR / totalMDs : 0;
-      const eacCostSAR   = cumCostSAR + eacMDs * avgCostPerMD;
+      const eacMDs  = phase === 'development' ? (overviewData.dev_eac_mds || 0)
+                                               : (overviewData.con_eac_mds || 0);
+      const totalMDs = Object.values(mMDs).reduce((s,v)=>s+v, 0);
+      const avgCPMD  = totalMDs > 0 ? cumCostSAR / totalMDs : 0;
+      const eacCostSAR = cumCostSAR + eacMDs * avgCPMD;
+      totalEACSAR += eacCostSAR;
 
       const pre = phase === 'development' ? 'Dev' : 'Con';
-      set(`kpi${pre}Cost`,    fSAR(cumCostSAR));
-      set(`kpi${pre}EAC`,     fSAR(eacCostSAR));
-      set(`kpi${pre}EACmds`,  eacMDs > 0 ? `${fmt.decimal(eacMDs)} MDs remaining` : 'No remaining MDs');
+      set(`kpi${pre}Cost`,   fSAR(cumCostSAR));
+      set(`kpi${pre}EAC`,    fSAR(eacCostSAR));
+      set(`kpi${pre}EACmds`, eacMDs > 0 ? `${fmt.decimal(eacMDs)} MDs remaining` : 'EAC = Current Cost');
     } catch(e) {
-      console.warn(`Phase cost KPI error (${phase}):`, e);
+      console.warn(`Phase cost KPI (${phase}):`, e);
     }
   }
 
-  // Total EAC = dev + consultation
-  try {
-    const devEl = document.getElementById('kpiDevEAC');
-    const conEl = document.getElementById('kpiConEAC');
-    const totEl = document.getElementById('kpiTotalEAC');
-    if (devEl && conEl && totEl) {
-      const devV = parseFloat(devEl.textContent.replace(/[^0-9.]/g,'')) || 0;
-      const conV = parseFloat(conEl.textContent.replace(/[^0-9.]/g,'')) || 0;
-      if (devV || conV) totEl.textContent = fmt.money(Math.round(devV + conV));
-    }
-  } catch(e) {}
+  // Totals
+  const tcEl = document.getElementById('kpiTotalCost');
+  if (tcEl) tcEl.textContent = totalCostSAR ? fSAR(totalCostSAR) : '—';
+  const teEl = document.getElementById('kpiTotalEAC');
+  if (teEl) teEl.textContent = totalEACSAR  ? fSAR(totalEACSAR)  : '—';
 }
+
 
 async function openTeamModal() {
   document.getElementById('teamModal').style.display = 'flex';
