@@ -486,9 +486,8 @@ def handle_error(e):
 @app.route('/')
 def index():
     # If no project selected, redirect to projects list
-    if not session.get('project_id') and not session.get('project_name'):
-        # Set default to BOG for backward compatibility
-        session['project_name'] = PROJECT_NAME
+    if not session.get('project_name'):
+        return redirect('/projects')
     _, proj_name = get_active_project()
     return render_template('index.html', project_name=proj_name)
 
@@ -496,7 +495,12 @@ def index():
 @app.route('/projects')
 def projects_list():
     """Projects selection page — lists all Odoo projects with stage info."""
-    return render_template('projects.html')
+    # Try both locations
+    import os
+    tmpl_dir = app.template_folder
+    if os.path.exists(os.path.join(tmpl_dir, 'projects.html')):
+        return render_template('projects.html')
+    return render_template('partials/projects.html')
 
 
 @app.route('/project/select', methods=['POST'])
