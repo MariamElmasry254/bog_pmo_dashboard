@@ -157,9 +157,9 @@ tr:hover td{background:#FAFAFA;}
         <option value="linked">✅ Linked</option>
         <option value="unlinked">⚠ Unlinked</option>
       </select>
-      <input type="text" class="filter-sel" id="travelPosFilter" placeholder="Filter position…" style="min-width:140px;" oninput="loadTravel()">
-      <input type="date" class="filter-sel" id="travelDateFrom" style="min-width:130px;" onchange="loadTravel()" title="Travel from date">
-      <input type="date" class="filter-sel" id="travelDateTo" style="min-width:130px;" onchange="loadTravel()" title="Travel to date">
+      <input type="text" class="filter-sel" id="travelPosFilter" placeholder="Filter position…" style="min-width:130px;" oninput="loadTravel()">
+      <input type="date" class="filter-sel" id="travelDateFrom" style="min-width:120px;" onchange="loadTravel()" title="From date">
+      <input type="date" class="filter-sel" id="travelDateTo" style="min-width:120px;" onchange="loadTravel()" title="To date">
       <button class="btn btn-ghost" onclick="autoLink('travel')">⚡ Auto-Link All</button>
       <button class="btn btn-ghost" onclick="toggleForm('travelForm')">+ Add Manually</button>
     </div>
@@ -288,7 +288,7 @@ tr:hover td{background:#FAFAFA;}
     <div class="tbl-wrap">
       <table>
         <thead><tr>
-          <th>#</th><th>Name</th><th>New Title</th><th>Effective Date</th><th>Year</th><th>Notes</th><th></th>
+          <th>Name</th><th>New Title</th><th>Effective Date</th><th>Year</th><th>Notes</th><th></th>
         </tr></thead>
         <tbody id="promoBody">
           <tr><td colspan="7" style="text-align:center;padding:32px;color:var(--muted);">Loading…</td></tr>
@@ -363,7 +363,8 @@ async function loadTravel() {
 
   const res = await fetch('/api/global/travel?' + params);
   const d   = await res.json();
-  // Count updated after client filter
+  document.getElementById('travelCount').textContent = d.total;
+
   // Reset selection
   _travelSel.clear();
   const sa = document.getElementById('travelSelectAll');
@@ -371,34 +372,29 @@ async function loadTravel() {
   document.getElementById('travelBulkBar').style.display = 'none';
 
   let rows = d.records || [];
-  // Client-side: position filter
-  const posF  = (document.getElementById('travelPosFilter')?.value||'').toLowerCase();
-  const dateF = document.getElementById('travelDateFrom')?.value||'';
-  const dateT = document.getElementById('travelDateTo')?.value||'';
-  if (posF) rows = rows.filter(r => (r.position||'').toLowerCase().includes(posF));
-  if (dateF) rows = rows.filter(r => r.start_date && r.start_date >= dateF);
-  if (dateT) rows = rows.filter(r => r.start_date && r.start_date <= dateT);
-  document.getElementById('travelCount').textContent = rows.length;
+  const posF   = (document.getElementById('travelPosFilter')?.value||'').toLowerCase();
+  const dateFrom = document.getElementById('travelDateFrom')?.value||'';
+  const dateTo   = document.getElementById('travelDateTo')?.value||'';
+  if (posF)     rows = rows.filter(r => (r.position||'').toLowerCase().includes(posF));
+  if (dateFrom) rows = rows.filter(r => r.start_date && r.start_date >= dateFrom);
+  if (dateTo)   rows = rows.filter(r => r.start_date && r.start_date <= dateTo);
   document.getElementById('travelBody').innerHTML = rows.length
     ? rows.map(r => `
       <tr id="tr${r.id}">
-        <td><input type="checkbox" class="tcb" data-id="${r.id}" onclick="onTravelCb(this)" style="cursor:pointer;width:15px;height:15px;"></td>
-        <td style="color:var(--muted);font-size:11px;">${r.id}</td>
+        <td style="width:36px;"><input type="checkbox" class="tcb" data-id="${r.id}" onclick="onTravelCb(this)" style="cursor:pointer;width:15px;height:15px;"></td>
         <td>
-          <span style="font-weight:600;">${esc(r.name)}</span>
-          ${codeTag(r,'promotions')}
+          <div style="font-weight:600;font-size:13px;">${esc(r.name)} ${codeTag(r)}</div>
         </td>
         <td style="font-size:12px;">${esc(r.position||'—')}</td>
         <td style="font-size:12px;">${r.start_date||'—'}</td>
         <td style="font-size:12px;">${r.end_date||'—'}</td>
-        <td><span class="badge badge-green" style="font-size:10px;">${r.status||'confirmed'}</span></td>
-        <td style="font-size:11px;color:var(--muted);max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(r.notes||'')}</td>
+        <td style="font-size:11px;color:var(--muted);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(r.notes||'')}</td>
         <td style="white-space:nowrap;">
           <button class="btn btn-ghost btn-sm" onclick='openEdit(${JSON.stringify(r).replace(/'/g,"\\'")},"travel")'>✎</button>
           <button class="btn btn-danger btn-sm" onclick="delTravel(${r.id})">✕</button>
         </td>
       </tr>`).join('')
-    : '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--muted);">No records found</td></tr>';
+    : '<tr><td colspan="6" style="text-align:center;padding:32px;color:var(--muted);">No records found</td></tr>';
 }
 
 function codeTag(r) {
@@ -808,7 +804,6 @@ async function loadPromos() {
   document.getElementById('promoBody').innerHTML = rows.length
     ? rows.map(r => `
       <tr>
-        <td style="color:var(--muted);font-size:11px;">${r.id}</td>
         <td>
           <span style="font-weight:600;">${esc(r.name)}</span>
           ${codeTag(r,'promotions')}
@@ -822,7 +817,7 @@ async function loadPromos() {
           <button class="btn btn-danger btn-sm" onclick="delPromo(${r.id})">✕</button>
         </td>
       </tr>`).join('')
-    : '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--muted);">No records found</td></tr>';
+    : '<tr><td colspan="6" style="text-align:center;padding:32px;color:var(--muted);">No records found</td></tr>';
 }
 
 // ─── Promotions: CRUD ─────────────────────────────────────────────────
