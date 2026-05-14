@@ -606,8 +606,13 @@ def api_global_travel_get():
     _seed_if_empty('travel', TRAVEL_SEED)
     records = _global_get('travel') or []
     q = (request.args.get('q') or '').lower()
+    linked_filter = request.args.get('linked')  # '1'=linked only, '0'=unlinked only
     if q:
         records = [r for r in records if q in (r.get('name') or '').lower()]
+    if linked_filter == '1':
+        records = [r for r in records if r.get('odoo_employee_id')]
+    elif linked_filter == '0':
+        records = [r for r in records if not r.get('odoo_employee_id')]
     return jsonify({'records': records, 'total': len(records)})
 
 
