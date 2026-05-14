@@ -223,6 +223,12 @@
     <!-- Toolbar -->
     <div class="toolbar">
       <input class="search-inp" id="travelSearch" placeholder="🔍 Search by name…" oninput="loadTravel()">
+      <select id="travelLinkFilter" onchange="loadTravel()"
+        style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;">
+        <option value="all">All</option>
+        <option value="linked">✅ Linked</option>
+        <option value="unlinked">⚠ Unlinked</option>
+      </select>
       <button class="btn btn-ghost" onclick="autoLinkAll('travel')" id="autoLinkTravelBtn">⚡ Auto-Link All</button>
       <button class="btn btn-ghost" onclick="toggleForm('travelForm')">+ Add Manually</button>
     </div>
@@ -261,11 +267,23 @@
       </div>
     </div>
 
+    <!-- Bulk Action Bar -->
+    <div id="bulkBar" style="display:none;align-items:center;gap:10px;padding:8px 14px;
+         background:#EFF6FF;border:1px solid #BFDBFE;border-radius:8px;margin-bottom:10px;">
+      <span id="bulkCount" style="font-size:13px;font-weight:600;color:#1E40AF;"></span>
+      <button class="btn btn-danger" style="padding:5px 12px;font-size:12px;" onclick="bulkDelete()">🗑 Delete Selected</button>
+      <button class="btn btn-ghost" style="padding:5px 12px;font-size:12px;" onclick="bulkAutoLink()">⚡ Auto-Link Selected</button>
+      <button class="btn btn-ghost" style="padding:5px 12px;font-size:12px;margin-left:auto;"
+              onclick="_selectedIds.clear();document.getElementById('selectAll').checked=false;
+                       document.querySelectorAll('.row-cb').forEach(e=>e.checked=false);updateBulkBar()">✕ Clear</button>
+    </div>
+
     <!-- Table -->
     <div class="tbl-wrap">
       <table>
         <thead>
           <tr>
+            <th style="width:32px;"><input type="checkbox" id="selectAll" onclick="toggleSelectAll(this)" title="Select all"></th>
             <th>#</th><th>Name</th><th>Position</th><th>Start</th><th>End</th><th>Status</th><th>Notes</th><th colspan="2"></th>
           </tr>
         </thead>
@@ -331,6 +349,17 @@
         <button class="btn btn-primary" onclick="addPromo()">Save Record</button>
         <button class="btn btn-ghost" onclick="cancelPromoEdit()">Cancel</button>
       </div>
+    </div>
+
+    <!-- Bulk Action Bar -->
+    <div id="bulkBar" style="display:none;align-items:center;gap:10px;padding:8px 14px;
+         background:#EFF6FF;border:1px solid #BFDBFE;border-radius:8px;margin-bottom:10px;">
+      <span id="bulkCount" style="font-size:13px;font-weight:600;color:#1E40AF;"></span>
+      <button class="btn btn-danger" style="padding:5px 12px;font-size:12px;" onclick="bulkDelete()">🗑 Delete Selected</button>
+      <button class="btn btn-ghost" style="padding:5px 12px;font-size:12px;" onclick="bulkAutoLink()">⚡ Auto-Link Selected</button>
+      <button class="btn btn-ghost" style="padding:5px 12px;font-size:12px;margin-left:auto;"
+              onclick="_selectedIds.clear();document.getElementById('selectAll').checked=false;
+                       document.querySelectorAll('.row-cb').forEach(e=>e.checked=false);updateBulkBar()">✕ Clear</button>
     </div>
 
     <!-- Table -->
@@ -470,8 +499,13 @@ function showResult(el, ok, msg) {
 
 // ── Travel CRUD ──────────────────────────────────────────────────────
 async function loadTravel() {
-  const q = document.getElementById('travelSearch').value;
-  const res = await fetch('/api/global/travel' + (q ? '?q='+encodeURIComponent(q) : ''));
+  const q      = document.getElementById('travelSearch').value;
+  const filter = (document.getElementById('travelLinkFilter') || {}).value || 'all';
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  if (filter === 'linked')   params.set('linked', '1');
+  if (filter === 'unlinked') params.set('linked', '0');
+  const res = await fetch('/api/global/travel?' + params);
   const d = await res.json();
   document.getElementById('travelCount').textContent = d.total;
   const rows = d.records || [];
