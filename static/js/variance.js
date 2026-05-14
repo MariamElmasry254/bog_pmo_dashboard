@@ -858,8 +858,20 @@ async function profRecomputeAll(phaseKey) {
   }
 
   const costPerMD = totalEstMDs > 0 ? totalEstCostSAR / totalEstMDs : 0;
-  const finProfitPct = AppState._finalProfitPct?.[phaseKey] || 0;
-  const plannedProfitSAR = finProfitPct * totalRevSAR || (totalRevSAR - totalEstCostSAR);
+
+  // Avg Cost per MD from Current Effort (Total Cost SAR ÷ Total MDs in effort tab)
+  let effortAvgCostPerMD = AppState._effortAvgCostPerMD?.[phaseKey];
+  if (!effortAvgCostPerMD) {
+    // Calculate from effort month costs and MDs
+    const allMDs   = Object.values(effortMDsFinal).reduce((s,v) => s+v, 0);
+    const allCosts = Object.values(effortCostsFinal).reduce((s,v) => s+v, 0) * 3.75;
+    effortAvgCostPerMD = allMDs > 0 ? allCosts / allMDs : costPerMD;
+  }
+  const finProfitPct = AppState._finalProfitPct?.[phaseKey];
+  // If no saved profit%, calculate from budget: (revenue - est cost) / revenue
+  const plannedProfitSAR = finProfitPct != null
+    ? finProfitPct * totalRevSAR
+    : (totalRevSAR - totalEstCostSAR);
 
   // Resolve effort data after possible API fetch above
   const effortMDsFinal   = AppState._effortMonthMDs?.[phaseKey]   || {};
@@ -891,10 +903,17 @@ async function profRecomputeAll(phaseKey) {
     });
     const currentCostSAR = accCostUSD * 3.75;
     // ── All equations per reference sheet ──
-    const eacMDs            = actualMDs + remainingMDs;
-    const expectedOverrun   = (completionPct > 0 && totalEstMDs > 0)
-                              ? (actualMDs / totalEstMDs) / (completionPct / 100) - 1 : 0;
-    const estCostToComplete = remainingMDs * costPerMD;
+    const eacMDs = actualMDs + remainingMDs;
+
+    // Expected Overrun = (Actual/EstMDs) / (%Comp/100) - 1
+    const expectedOverrun = (completionPct > 0 && totalEstMDs > 0 && actualMDs > 0)
+      ? (actualMDs / totalEstMDs) / (completionPct / 100) - 1 : null;
+
+    // Running avg cost per MD from actual effort (not planned rate)
+    const runningAvgCostPerMD = actualMDs > 0 ? currentCostSAR / actualMDs : effortAvgCostPerMD;
+
+    // Est Cost to Complete = Remaining MDs × Avg Cost per MD from Current Effort
+    const estCostToComplete = remainingMDs * effortAvgCostPerMD;
     const estAtCompletion   = estCostToComplete + currentCostSAR;
     const cpi               = estAtCompletion > 0 ? totalEstCostSAR / estAtCompletion : 0;
     const costVarianceSAR   = totalEstCostSAR - estAtCompletion;
@@ -902,11 +921,12 @@ async function profRecomputeAll(phaseKey) {
     const revToDate         = totalRevSAR * (completionPct / 100);
     const profitAtComp      = totalRevSAR - estAtCompletion;
     const profitAtCompPct   = totalRevSAR > 0 ? profitAtComp / totalRevSAR * 100 : 0;
-    // Planned profit from Final Budget profit %
+    // Planned Profit = from Final Budget (updates when budget changes)
     const plannedProfitFinal = plannedProfitSAR;
-    const profVar           = profitAtComp - plannedProfitFinal;
-    const profVarPct        = totalRevSAR > 0 ? profVar / totalRevSAR * 100 : 0;
-    const progressPct       = estAtCompletion > 0 ? currentCostSAR / estAtCompletion * 100 : 0;
+    const profVar            = profitAtComp - plannedProfitFinal;
+    const profVarPct         = totalRevSAR > 0 ? profVar / totalRevSAR * 100 : 0;
+    // Progress % = Current Cost / EAC Cost
+    const progressPct        = estAtCompletion > 0 ? currentCostSAR / estAtCompletion * 100 : 0;
 
     // Virtual Invoice
     const viThisMonth = revToDate;                                          // = Revenue to Date this month
@@ -931,8 +951,8 @@ async function profRecomputeAll(phaseKey) {
     // Computed columns
     setSpan(`pc-currcost-${monthKey}`,      currentCostSAR > 0 ? fSAR(currentCostSAR) : '—');
     setSpan(`pc-eac-${monthKey}`,           `<b style="color:var(--blue);">${fNum(eacMDs)}</b>`);
-    const ovColor = expectedOverrun > 0 ? 'var(--red)' : 'var(--green)';
-    setSpan(`pc-overrun-${monthKey}`, actualMDs > 0 && completionPct > 0 ? `<span style="color:${ovColor};">${fmt.decimal(expectedOverrun*100)}%</span>` : '—');
+    const ovColor = (expectedOverrun !== null && expectedOverrun > 0) ? 'var(--red)' : 'var(--green)';
+    setSpan(`pc-overrun-${monthKey}`, expectedOverrun !== null ? `<span style="color:${ovColor};">${fmt.decimal(expectedOverrun*100)}%</span>` : '—');
     setSpan(`pc-costtocomplete-${monthKey}`, estCostToComplete > 0 ? fSAR(estCostToComplete) : '—');
     setSpan(`pc-eac-cost-${monthKey}`,       estAtCompletion > 0 ? fSAR(estAtCompletion) : '—');
 
@@ -1222,6 +1242,9 @@ async function loadEffortLive(phaseKey, containerId) {
     // ── Summary strip OUTSIDE the table ──
     const totalCostSAR = grandTotalCost * 3.75;
     const avgCostPerMD = grandTotalMDs > 0 ? totalCostSAR / grandTotalMDs : 0;
+    // Save for profitability to use
+    if (!AppState._effortAvgCostPerMD) AppState._effortAvgCostPerMD = {};
+    AppState._effortAvgCostPerMD[phaseKey] = avgCostPerMD;
     html += `
       <div style="display: flex; gap: 32px; align-items: center; flex-wrap: wrap; margin-top: 16px; padding: 14px 18px; background: #EFF6FF; border-radius: 8px; border: 1px solid #BFDBFE;">
         <div>
