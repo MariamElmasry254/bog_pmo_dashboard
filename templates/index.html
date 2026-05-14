@@ -1,84 +1,971 @@
 <!DOCTYPE html>
-<html lang="en" dir="ltr">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BOG Digital Transformation — PMO Dashboard</title>
+<title>PMO — Travel & Promotions</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Cairo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --navy:#1B2A4E; --blue:#3B82F6; --green:#10B981; --amber:#F59E0B; --red:#EF4444;
+    --bg:#F5F6FA; --card:#fff; --border:#E5E7EB; --text:#111827; --muted:#9CA3AF;
+    --sans:'Inter',sans-serif;
+  }
+  body { background:var(--bg); font-family:var(--sans); font-size:14px; color:var(--text); }
+  .header {
+    background:var(--navy); padding:0 32px;
+    display:flex; align-items:center; gap:20px; height:56px;
+    position:sticky; top:0; z-index:100;
+  }
+  .header a { color:rgba(255,255,255,.6); text-decoration:none; font-size:12px; }
+  .header a:hover { color:white; }
+  .header h1 { font-size:16px; font-weight:700; color:white; margin:0; }
+  .header .sep { color:rgba(255,255,255,.2); }
+  .header .ml { margin-left:auto; display:flex; gap:10px; }
+  .header .btn-sm {
+    padding:5px 12px; border-radius:6px; font-size:11px; font-weight:600;
+    border:1px solid rgba(255,255,255,.15); color:rgba(255,255,255,.7);
+    text-decoration:none; transition:all .15s;
+  }
+  .header .btn-sm:hover { background:rgba(255,255,255,.1); color:white; }
+
+  .main { max-width:1300px; margin:0 auto; padding:28px 32px; }
+
+  /* Tabs */
+  .tabs { display:flex; gap:2px; border-bottom:2px solid var(--border); margin-bottom:28px; }
+  .tab-btn {
+    padding:10px 20px; background:none; border:none; cursor:pointer;
+    font-size:13px; font-weight:600; color:var(--muted);
+    border-bottom:2px solid transparent; margin-bottom:-2px; transition:all .15s;
+  }
+  .tab-btn.active { color:var(--navy); border-bottom-color:var(--navy); }
+  .tab-panel { display:none; }
+  .tab-panel.active { display:block; }
+
+  /* Upload zone */
+  .upload-zone {
+    border:2px dashed var(--border); border-radius:12px; padding:32px;
+    text-align:center; cursor:pointer; transition:all .2s; background:white;
+    margin-bottom:20px;
+  }
+  .upload-zone:hover, .upload-zone.drag { border-color:var(--blue); background:#EFF6FF; }
+  .upload-zone input[type=file] { display:none; }
+  .upload-zone .icon { font-size:32px; margin-bottom:8px; }
+  .upload-zone h3 { font-size:14px; font-weight:600; color:var(--text); margin-bottom:4px; }
+  .upload-zone p  { font-size:12px; color:var(--muted); }
+  .upload-zone .hint { font-size:11px; color:var(--blue); margin-top:6px; font-weight:500; }
+
+  .import-result {
+    padding:12px 16px; border-radius:8px; font-size:13px; margin-bottom:16px; display:none;
+  }
+  .import-result.ok    { background:#D1FAE5; color:#065F46; border:1px solid #A7F3D0; }
+  .import-result.error { background:#FEE2E2; color:#991B1B; border:1px solid #FCA5A5; }
+
+  /* Search + Add bar */
+  .toolbar {
+    display:flex; gap:10px; align-items:center; margin-bottom:16px; flex-wrap:wrap;
+  }
+  .search-inp {
+    flex:1; min-width:200px; padding:8px 12px;
+    border:1px solid var(--border); border-radius:8px; font-size:13px;
+    font-family:var(--sans); outline:none;
+  }
+  .search-inp:focus { border-color:var(--blue); }
+  .btn {
+    padding:8px 16px; border-radius:8px; font-size:13px; font-weight:600;
+    cursor:pointer; border:none; transition:background .15s;
+  }
+  .btn-primary { background:var(--blue); color:white; }
+  .btn-primary:hover { background:#2563EB; }
+  .btn-ghost { background:var(--bg); border:1px solid var(--border); color:var(--text); }
+  .btn-ghost:hover { background:var(--border); }
+  .btn-danger { background:#FEE2E2; color:var(--red); border:1px solid #FECACA; }
+  .btn-danger:hover { background:#FCA5A5; }
+
+  /* Table */
+  .tbl-wrap { background:white; border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+  table { width:100%; border-collapse:collapse; }
+  th {
+    text-align:left; font-size:10px; font-weight:700; color:var(--muted);
+    text-transform:uppercase; letter-spacing:.5px; padding:10px 14px;
+    background:var(--bg); border-bottom:1px solid var(--border);
+  }
+  td { padding:9px 14px; font-size:13px; border-bottom:1px solid #F3F4F6; vertical-align:middle; }
+  tr:last-child td { border-bottom:none; }
+  tr:hover td { background:#F9FAFB; }
+  .badge {
+    display:inline-block; padding:2px 8px; border-radius:10px; font-size:10px; font-weight:700;
+  }
+  .badge-green { background:#D1FAE5; color:#065F46; }
+  .badge-blue  { background:#DBEAFE; color:#1E40AF; }
+  .badge-amber { background:#FEF3C7; color:#92400E; }
+
+  /* Inline edit */
+  .cell-edit {
+    width:100%; padding:4px 6px; border:1px solid var(--blue); border-radius:4px;
+    font-size:13px; font-family:var(--sans); background:white;
+  }
+
+  /* Add form */
+  .add-form {
+    background:white; border:1px solid var(--border); border-radius:10px;
+    padding:20px; margin-bottom:20px; display:none;
+  }
+  .add-form.open { display:block; }
+  .form-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:12px; margin-bottom:16px; }
+  .form-field label { display:block; font-size:10px; font-weight:700; color:var(--muted);
+    text-transform:uppercase; letter-spacing:.4px; margin-bottom:4px; }
+  .form-field input, .form-field select {
+    width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:6px;
+    font-size:13px; font-family:var(--sans); outline:none;
+  }
+  .form-field input:focus { border-color:var(--blue); }
+
+  .count-badge {
+    display:inline-block; background:var(--navy); color:white;
+    font-size:10px; font-weight:700; padding:2px 7px; border-radius:10px; margin-left:6px;
+  }
+</style>
 </head>
 <body>
 
-<!-- ============ EXECUTIVE HEADER ============ -->
-<header class="exec-header">
-  <div class="exec-content">
-    <div class="exec-top">
-      <div style="display:flex;align-items:center;gap:16px;">
-        <a href="/projects" style="font-size:11px;color:rgba(255,255,255,.6);text-decoration:none;
-           letter-spacing:.1em;text-transform:uppercase;font-weight:600;transition:color .15s;"
-           onmouseover="this.style.color='white'" onmouseout="this.style.color='rgba(255,255,255,.6)'">
-          ← All Projects
-        </a>
-        <span class="exec-label">PMO DASHBOARD</span>
-      </div>
-      <div class="exec-meta">
-        <div><span>PROJECT MANAGER</span><b id="headerPM">—</b></div>
-        <div><span>COORDINATOR</span><b id="headerCoord">—</b></div>
-        <div><span>GENERATED</span><b id="generatedTime">—</b></div>
-        <div style="display:flex;gap:12px;align-items:center;margin-left:16px;">
-          <a href="/manage" style="font-size:11px;color:rgba(255,255,255,.6);text-decoration:none;
-             padding:5px 10px;border:1px solid rgba(255,255,255,.15);border-radius:6px;
-             transition:all .15s;" onmouseover="this.style.background='rgba(255,255,255,.1)'"
-             onmouseout="this.style.background='transparent'">⚙ Manage</a>
-          <a href="/logout" style="font-size:11px;color:rgba(255,255,255,.5);text-decoration:none;
-             padding:5px 10px;border:1px solid rgba(255,255,255,.1);border-radius:6px;
-             transition:all .15s;" onmouseover="this.style.color='white'"
-             onmouseout="this.style.color='rgba(255,255,255,.5)'">Sign out</a>
+<div class="header">
+  <a href="/projects">← Projects</a>
+  <span class="sep">|</span>
+  <h1>⚙ Global Management</h1>
+  <div class="ml">
+    <a class="btn-sm" href="/projects">Dashboard</a>
+    <a class="btn-sm" href="/logout">Sign out</a>
+  </div>
+</div>
+
+<div class="main">
+
+  <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('travel')">
+      ✈ Travel Records <span class="count-badge" id="travelCount">…</span>
+    </button>
+    <button class="tab-btn" onclick="switchTab('promotions')">
+      🏆 Promotions <span class="count-badge" id="promoCount">…</span>
+    </button>
+  </div>
+
+  <!-- ══════════ TRAVEL TAB ══════════ -->
+  <div id="tab-travel" class="tab-panel active">
+
+    <!-- PDF Ticket Upload -->
+    <div class="upload-zone" style="border-color:var(--amber);"
+         onclick="document.getElementById('ticketFile').click()"
+         ondragover="event.preventDefault()" ondragleave="" ondrop="handleTicketDrop(event)">
+      <input type="file" id="ticketFile" accept=".pdf" onchange="handleTicket(this)">
+      <div class="icon">✈️</div>
+      <h3>Upload Airline Ticket PDF</h3>
+      <p>Auto-extracts: passenger name, departure & return dates</p>
+      <div class="hint" style="color:var(--amber);">Saudia · EgyptAir · Flynas</div>
+    </div>
+    <div class="import-result" id="ticketResult"></div>
+
+    <div id="ticketForm" style="display:none;background:white;border:1px solid var(--amber);border-radius:10px;padding:20px;margin-bottom:16px;">
+      <div style="font-size:12px;font-weight:700;color:var(--amber);margin-bottom:12px;">✈️ Ticket Parsed — Review &amp; Save</div>
+      <div class="form-grid">
+        <div class="form-field"><label>Name *</label>
+          <input type="text" id="tk_name">
+          <div id="tk_hint" style="font-size:10px;color:var(--green);margin-top:3px;"></div>
         </div>
+        <div class="form-field"><label>Position (from Odoo)</label><input type="text" id="tk_pos"></div>
+        <div class="form-field"><label>Departure ★</label><input type="date" id="tk_start"></div>
+        <div class="form-field"><label>Return (empty = one-way)</label><input type="date" id="tk_end"></div>
+        <div class="form-field"><label>Route</label><input type="text" id="tk_route" readonly style="color:var(--muted)"></div>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-primary" onclick="saveTicketAsTravel()">Save Travel Record</button>
+        <button class="btn btn-ghost" onclick="document.getElementById('ticketForm').style.display='none'">Cancel</button>
       </div>
     </div>
-    <h1 class="exec-title" id="headerProjectTitle">{{ project_name }}</h1>
 
+    <!-- Excel Upload -->
+    <div class="upload-zone" id="travelDrop" onclick="document.getElementById('travelFile').click()"
+         ondragover="event.preventDefault();this.classList.add('drag')"
+         ondragleave="this.classList.remove('drag')"
+         ondrop="handleDrop(event,'travel')">
+      <input type="file" id="travelFile" accept=".xlsx,.xls" onchange="handleFile(this,'travel')">
+      <div class="icon">📂</div>
+      <h3>Upload Travel Excel</h3>
+      <p>Drag & drop or click to browse</p>
+      <div class="hint">Columns: Member / From / To (date) — duplicates auto-skipped</div>
+    </div>
+    <div class="import-result" id="travelImportResult"></div>
 
-    <nav class="exec-tabs">
-      <button class="exec-tab active" data-tab="overview"><span class="tab-num">01</span> Overview</button>
-      <button class="exec-tab" data-tab="variance"><span class="tab-num">02</span> Variance</button>
-      <button class="exec-tab" data-tab="services"><span class="tab-num">03</span> Services &amp; Scope</button>
-      <button class="exec-tab" data-tab="timesheets"><span class="tab-num">04</span> Timesheets</button>
-      <button class="exec-tab" data-tab="missing"><span class="tab-num">05</span> Missing Hours</button>
-      <button class="exec-tab" data-tab="risks"><span class="tab-num">06</span> ⚠️ Risks &amp; Issues</button>
-      <button class="exec-tab" data-tab="roadmap"><span class="tab-num">07</span> Roadmap</button>
-    </nav>
+    <!-- PDF Ticket Upload -->
+    <div style="background:white;border:1px solid var(--border);border-radius:10px;padding:16px 20px;margin-bottom:16px;">
+      <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;">📄 Parse from Flight Ticket PDF</div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <label style="padding:8px 16px;background:var(--bg);border:1px solid var(--border);border-radius:8px;
+                      cursor:pointer;font-size:13px;font-weight:500;transition:all .15s;"
+               onmouseover="this.style.background='#E0E7FF'" onmouseout="this.style.background='var(--bg)'">
+          📂 Upload Ticket PDF
+          <input type="file" id="ticketFile" accept=".pdf" style="display:none" onchange="parseTicket(this)">
+        </label>
+        <div id="ticketResult" style="font-size:13px;color:var(--muted);flex:1;"></div>
+      </div>
+      <!-- Parsed result preview -->
+      <div id="ticketPreview" style="display:none;margin-top:12px;padding:12px;background:#F0FDF4;border:1px solid #A7F3D0;border-radius:8px;">
+        <div style="font-size:11px;font-weight:700;color:#065F46;margin-bottom:8px;">✅ Extracted from ticket:</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin-bottom:10px;" id="ticketFields"></div>
+        <button class="btn btn-primary" onclick="confirmTicketImport()" style="font-size:12px;padding:6px 14px;">Add to Travel Records</button>
+        <button class="btn btn-ghost" onclick="document.getElementById('ticketPreview').style.display='none'" style="font-size:12px;padding:6px 14px;">Discard</button>
+      </div>
+    </div>
+
+    <!-- Toolbar -->
+    <div class="toolbar">
+      <input class="search-inp" id="travelSearch" placeholder="🔍 Search by name…" oninput="loadTravel()">
+      <select id="travelLinkFilter" onchange="loadTravel()"
+        style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;">
+        <option value="all">All</option>
+        <option value="linked">✅ Linked</option>
+        <option value="unlinked">⚠ Unlinked</option>
+      </select>
+      <button class="btn btn-ghost" onclick="autoLinkAll('travel')" id="autoLinkTravelBtn">⚡ Auto-Link All</button>
+      <button class="btn btn-ghost" onclick="toggleForm('travelForm')">+ Add Manually</button>
+    </div>
+    <div id="autoLinkResult" style="display:none;padding:8px 12px;border-radius:6px;font-size:13px;margin-bottom:10px;"></div>
+
+    <!-- Add Form -->
+    <div class="add-form" id="travelForm">
+      <div class="form-grid">
+        <div class="form-field" style="position:relative;">
+          <label>Name * <span style="font-weight:400;color:var(--blue);font-size:9px;cursor:pointer;" onclick="searchOdooEmp()">🔍 Search in Odoo</span></label>
+          <input type="text" id="tv_name" placeholder="Full name" oninput="onTvNameInput(this)">
+          <div id="tvNameSuggestions" style="display:none;position:absolute;top:100%;left:0;right:0;background:white;
+               border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.1);z-index:100;max-height:160px;overflow-y:auto;"></div>
+          <input type="hidden" id="tv_odoo_id">
+        </div>
+        <div class="form-field">
+          <label>Position / Level</label>
+          <input type="text" id="tv_pos" placeholder="e.g. Senior BA">
+        </div>
+        <div class="form-field">
+          <label>Travel Start *</label>
+          <input type="date" id="tv_start">
+        </div>
+        <div class="form-field">
+          <label>Travel End</label>
+          <input type="date" id="tv_end">
+        </div>
+        <div class="form-field">
+          <label>Notes</label>
+          <input type="text" id="tv_notes" placeholder="Optional">
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-primary" onclick="addTravel()">Save Record</button>
+        <button class="btn btn-ghost" onclick="cancelEdit()">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Bulk Action Bar -->
+    <div id="bulkBar" style="display:none;align-items:center;gap:10px;padding:8px 14px;
+         background:#EFF6FF;border:1px solid #BFDBFE;border-radius:8px;margin-bottom:10px;">
+      <span id="bulkCount" style="font-size:13px;font-weight:600;color:#1E40AF;"></span>
+      <button class="btn btn-danger" style="padding:5px 12px;font-size:12px;" onclick="bulkDelete()">🗑 Delete Selected</button>
+      <button class="btn btn-ghost" style="padding:5px 12px;font-size:12px;" onclick="bulkAutoLink()">⚡ Auto-Link Selected</button>
+      <button class="btn btn-ghost" style="padding:5px 12px;font-size:12px;margin-left:auto;"
+              onclick="_selectedIds.clear();document.getElementById('selectAll').checked=false;
+                       document.querySelectorAll('.row-cb').forEach(e=>e.checked=false);updateBulkBar()">✕ Clear</button>
+    </div>
+
+    <!-- Table -->
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:32px;"><input type="checkbox" id="selectAll" onclick="toggleSelectAll(this)" title="Select all"></th>
+            <th>#</th><th>Name</th><th>Position</th><th>Start</th><th>End</th><th>Status</th><th>Notes</th><th colspan="2"></th>
+          </tr>
+        </thead>
+        <tbody id="travelBody"><tr><td colspan="9" style="text-align:center;padding:32px;color:var(--muted);">Loading…</td></tr></tbody>
+      </table>
+    </div>
   </div>
-</header>
 
-<main class="content">
-  {% include 'partials/overview.html' %}
-  {% include 'partials/variance.html' %}
-  {% include 'partials/services.html' %}
-  {% include 'partials/timesheets.html' %}
-  {% include 'partials/missing.html' %}
-  {% include 'partials/risks.html' %}
-  {% include 'partials/roadmap.html' %}
-</main>
+  <!-- ══════════ PROMOTIONS TAB ══════════ -->
+  <div id="tab-promotions" class="tab-panel">
 
-<footer class="footer">
-  <span>BOG · Digital Transformation — Internal PMO Dashboard</span>
-  <span>v3.0 · Modular</span>
-</footer>
+    <!-- Excel Upload -->
+    <div class="upload-zone" id="promoDrop" onclick="document.getElementById('promoFile').click()"
+         ondragover="event.preventDefault();this.classList.add('drag')"
+         ondragleave="this.classList.remove('drag')"
+         ondrop="handleDrop(event,'promotions')">
+      <input type="file" id="promoFile" accept=".xlsx,.xls" onchange="handleFile(this,'promotions')">
+      <div class="icon">📂</div>
+      <h3>Upload Promotions Excel</h3>
+      <p>Drag & drop or click to browse</p>
+      <div class="hint">Columns: Name / Title (or Tittle) / Promotion Date — duplicates auto-skipped</div>
+    </div>
+    <div class="import-result" id="promoImportResult"></div>
 
-<!-- Modular JS -->
-<script src="{{ url_for('static', filename='js/utils.js') }}"></script>
-<script src="{{ url_for('static', filename='js/overview.js') }}"></script>
-<script src="{{ url_for('static', filename='js/variance.js') }}"></script>
-<script src="{{ url_for('static', filename='js/services.js') }}"></script>
-<script src="{{ url_for('static', filename='js/timesheets.js') }}"></script>
-<script src="{{ url_for('static', filename='js/missing.js') }}"></script>
-<script src="{{ url_for('static', filename='js/risks.js') }}"></script>
-<script src="{{ url_for('static', filename='js/roadmap.js') }}"></script>
-<script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    <!-- Year filter + toolbar -->
+    <div class="toolbar">
+      <input class="search-inp" id="promoSearch" placeholder="🔍 Search by name…" oninput="loadPromos()">
+      <select id="promoYear" onchange="loadPromos()" style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;">
+        <option value="">All years</option>
+        <option value="2025">2025</option>
+        <option value="2026">2026</option>
+      </select>
+      <button class="btn btn-ghost" onclick="autoLinkAll('promotions')">⚡ Auto-Link All</button>
+      <button class="btn btn-ghost" onclick="toggleForm('promoForm')">+ Add Manually</button>
+    </div>
+    <div id="autoLinkPromoResult" style="display:none;padding:8px 12px;border-radius:6px;font-size:13px;margin-bottom:10px;"></div>
+
+    <!-- Add Form -->
+    <div class="add-form" id="promoForm">
+      <div class="form-grid">
+        <div class="form-field">
+          <label>Name *</label>
+          <input type="text" id="pm_name" placeholder="Full name">
+        </div>
+        <div class="form-field">
+          <label>New Title</label>
+          <input type="text" id="pm_title" placeholder="e.g. Senior BA">
+        </div>
+        <div class="form-field">
+          <label>Effective Date</label>
+          <input type="date" id="pm_date">
+        </div>
+        <div class="form-field">
+          <label>Year</label>
+          <input type="number" id="pm_year" placeholder="2026" min="2020" max="2035">
+        </div>
+        <div class="form-field">
+          <label>Notes</label>
+          <input type="text" id="pm_notes" placeholder="Optional">
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-primary" onclick="addPromo()">Save Record</button>
+        <button class="btn btn-ghost" onclick="cancelPromoEdit()">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Bulk Action Bar -->
+    <div id="bulkBar" style="display:none;align-items:center;gap:10px;padding:8px 14px;
+         background:#EFF6FF;border:1px solid #BFDBFE;border-radius:8px;margin-bottom:10px;">
+      <span id="bulkCount" style="font-size:13px;font-weight:600;color:#1E40AF;"></span>
+      <button class="btn btn-danger" style="padding:5px 12px;font-size:12px;" onclick="bulkDelete()">🗑 Delete Selected</button>
+      <button class="btn btn-ghost" style="padding:5px 12px;font-size:12px;" onclick="bulkAutoLink()">⚡ Auto-Link Selected</button>
+      <button class="btn btn-ghost" style="padding:5px 12px;font-size:12px;margin-left:auto;"
+              onclick="_selectedIds.clear();document.getElementById('selectAll').checked=false;
+                       document.querySelectorAll('.row-cb').forEach(e=>e.checked=false);updateBulkBar()">✕ Clear</button>
+    </div>
+
+    <!-- Table -->
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th>#</th><th>Name</th><th>New Title</th><th>Effective Date</th><th>Year</th><th>Notes</th><th></th></tr>
+        </thead>
+        <tbody id="promoBody"><tr><td colspan="7" style="text-align:center;padding:32px;color:var(--muted);">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+function odooStatus(r) {
+  if (r.odoo_employee_id) {
+    return '<span style="font-size:10px;color:#1E40AF;font-weight:500;">&nbsp;· #' + r.odoo_employee_id + '</span>';
+  }
+  return '<span style="font-size:10px;color:#9CA3AF;">&nbsp;· <a href="#" onclick="openOdooLink(' + r.id + ',\'' + r.name.replace(/\'/g, "\\'" ) + '\')" style="color:#9CA3AF;font-size:10px;">unlinked</a></span>';
+}
+let activeTab = 'travel';
+
+function switchTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.tab-btn').forEach((b,i) => b.classList.toggle('active', ['travel','promotions'][i]===tab));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('tab-'+tab).classList.add('active');
+  if (tab==='travel') loadTravel();
+  else loadPromos();
+}
+
+function toggleForm(id) {
+  const el = document.getElementById(id);
+  el.classList.toggle('open');
+}
+
+// ── Excel Upload ─────────────────────────────────────────────────────
+function handleDrop(e, type) {
+  e.preventDefault();
+  document.getElementById(type==='travel'?'travelDrop':'promoDrop').classList.remove('drag');
+  const file = e.dataTransfer.files[0];
+  if (file) processExcel(file, type);
+}
+
+function handleFile(input, type) {
+  if (input.files[0]) processExcel(input.files[0], type);
+  input.value = '';
+}
+
+function processExcel(file, type) {
+  const resultEl = document.getElementById(type==='travel' ? 'travelImportResult' : 'promoImportResult');
+  resultEl.className = 'import-result'; resultEl.style.display = 'none';
+
+  const reader = new FileReader();
+  reader.onload = async e => {
+    try {
+      const wb = XLSX.read(e.target.result, {type:'array', cellDates:true});
+      let allRows = [];
+
+      // Collect rows from all sheets
+      wb.SheetNames.forEach(sheetName => {
+        const ws = wb.Sheets[sheetName];
+        const rows = XLSX.utils.sheet_to_json(ws, {defval:''});
+        allRows = allRows.concat(rows);
+      });
+
+      if (!allRows.length) { showResult(resultEl, false, 'No data found in file'); return; }
+
+      // Normalize columns
+      const normalized = allRows.map(row => {
+        const r = {};
+        Object.keys(row).forEach(k => r[k.trim()] = row[k]);
+        return r;
+      });
+
+      let endpoint, payload;
+      if (type === 'travel') {
+        payload = normalized.map(r => ({
+          name:       r['Member'] || r['Name'] || r['name'] || '',
+          position:   r['Level']  || r['Position'] || r['position'] || '',
+          start_date: fmtDate(r['From'] || r['Start Date'] || r['start_date']),
+          end_date:   fmtDate(r['To']   || r['End Date']   || r['end_date']),
+          notes: r['Notes'] || r['notes'] || '',
+          status: 'confirmed'
+        })).filter(r => r.name && r.start_date);
+        endpoint = '/api/global/travel/import';
+      } else {
+        payload = normalized.map(r => ({
+          name:           r['Name'] || r['name'] || r['Name '] || '',
+          new_title:      r['Title'] || r['Tittle'] || r['Title '] || r['Tittle '] || '',
+          effective_date: fmtDate(r['Promotion Date'] || r['Date of Promotion'] || r['Date of Promotion '] || r['Promotion Date '] || ''),
+          year:           extractYear(r['Promotion Date'] || r['Date of Promotion'] || r['Date of Promotion '] || '') || new Date().getFullYear(),
+          notes: ''
+        })).filter(r => r.name);
+        endpoint = '/api/global/promotions/import';
+      }
+
+      const res = await fetch(endpoint, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      });
+      const d = await res.json();
+      showResult(resultEl, true, `✅ Imported ${d.added} records · ${d.skipped} duplicates skipped`);
+      if (type==='travel') loadTravel(); else loadPromos();
+
+    } catch(err) {
+      showResult(resultEl, false, 'Error reading file: ' + err.message);
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function fmtDate(v) {
+  if (!v) return '';
+  if (v instanceof Date) return v.toISOString().slice(0,10);
+  const s = String(v).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0,10);
+  // "27th February 2025" etc
+  const cleaned = s.replace(/(\d+)(st|nd|rd|th)\s*(of\s*)?/i, '$1 ').trim();
+  const d = new Date(cleaned);
+  if (!isNaN(d)) return d.toISOString().slice(0,10);
+  return s;
+}
+
+function extractYear(v) {
+  if (!v) return null;
+  const m = String(v).match(/\b(20\d{2})\b/);
+  return m ? parseInt(m[1]) : null;
+}
+
+function showResult(el, ok, msg) {
+  el.className = 'import-result ' + (ok ? 'ok' : 'error');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+// ── Travel CRUD ──────────────────────────────────────────────────────
+async function loadTravel() {
+  const q = document.getElementById('travelSearch').value;
+  const res = await fetch('/api/global/travel' + (q ? '?q='+encodeURIComponent(q) : ''));
+  const d = await res.json();
+  document.getElementById('travelCount').textContent = d.total;
+  const rows = d.records || [];
+  document.getElementById('travelBody').innerHTML = rows.length ? rows.map(r => `
+    <tr>
+      <td style="color:var(--muted)">${r.id}</td>
+      <td style="font-weight:600">${r.name} ${odooStatus(r)}</td>
+      <td>${r.position||'—'}</td>
+      <td>${r.start_date||'—'}</td>
+      <td>${r.end_date||'—'}</td>
+      <td><span class="badge badge-green">${r.status||'confirmed'}</span></td>
+      <td style="color:var(--muted)">${r.notes||''}</td>
+      <td>
+        <button class="btn btn-ghost" style="padding:3px 8px;font-size:11px;margin-right:4px;" onclick="editTravel(${r.id})">✎</button>
+        <button class="btn btn-danger" style="padding:3px 8px;font-size:11px;" onclick="deleteTravel(${r.id})">✕</button>
+      </td>
+    </tr>`).join('') :
+    '<tr><td colspan="8" style="text-align:center;padding:32px;color:var(--muted);">No records found</td></tr>';
+}
+
+async function addTravel() {
+  const name  = document.getElementById('tv_name').value.trim();
+  const start = document.getElementById('tv_start').value;
+  if (!name || !start) { alert('Name and start date required'); return; }
+  const body = {
+    name, start_date: start,
+    position:         document.getElementById('tv_pos').value.trim(),
+    end_date:         document.getElementById('tv_end').value,
+    notes:            document.getElementById('tv_notes').value.trim(),
+    status:           'confirmed',
+    odoo_employee_id: parseInt(document.getElementById('tv_odoo_id').value) || null,
+  };
+
+  let res;
+  if (_editingTravel) {
+    // UPDATE existing record
+    res = await fetch('/api/global/travel/'+_editingTravel.id, {
+      method:'PUT', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+  } else {
+    // ADD new record
+    res = await fetch('/api/global/travel', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+  }
+
+  const d = await res.json();
+  if (d.ok) {
+    cancelEdit();
+    loadTravel();
+  } else if (d.error === 'duplicate') {
+    alert('Duplicate: this person already has a travel record starting on that date.');
+  } else {
+    alert('Error: ' + (d.error||'Unknown'));
+  }
+}
+
+async function deleteTravel(id) {
+  if (!confirm('Delete this travel record?')) return;
+  await fetch('/api/global/travel/'+id, {method:'DELETE'});
+  loadTravel();
+}
+
+// ── Odoo Link Modal ──────────────────────────────────────────────────
+let _linkingTravelId = null;
+
+function openOdooLink(travelId, name) {
+  _linkingTravelId = travelId;
+  // Create/show modal
+  let modal = document.getElementById('odooLinkModal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'odooLinkModal';
+    modal.style.cssText = `position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;
+      display:flex;align-items:center;justify-content:center;`;
+    modal.innerHTML = `
+      <div style="background:white;border-radius:12px;padding:28px;width:420px;max-width:90vw;box-shadow:0 20px 60px rgba(0,0,0,.3);">
+        <h3 style="font-size:16px;font-weight:700;margin-bottom:4px;">🔗 Link to Odoo Employee</h3>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:16px;" id="linkModalSubtitle"></p>
+        <input type="text" id="odooLinkSearch" placeholder="Search Odoo employees…"
+          style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;
+                 font-size:13px;margin-bottom:8px;outline:none;"
+          oninput="searchForLink(this.value)">
+        <div id="odooLinkResults" style="max-height:180px;overflow-y:auto;border:1px solid var(--border);
+             border-radius:8px;background:white;display:none;"></div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+          <span style="font-size:12px;color:var(--muted);white-space:nowrap;">Enter ID manually:</span>
+          <input type="number" id="manualOdooId" placeholder="e.g. 247" min="1"
+            style="flex:1;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
+          <button class="btn btn-primary" style="padding:7px 14px;font-size:12px;" onclick="confirmManualId()">Link</button>
+        </div>
+        <div style="margin-top:10px;">
+          <button class="btn btn-ghost" style="width:100%;" onclick="closeOdooLink()">Cancel</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', e => { if(e.target===modal) closeOdooLink(); });
+  }
+  document.getElementById('linkModalSubtitle').textContent = `Linking travel record for: ${name}`;
+  document.getElementById('odooLinkSearch').value = name;
+  modal.style.display = 'flex';
+  searchForLink(name);
+  setTimeout(() => document.getElementById('odooLinkSearch').focus(), 100);
+}
+
+function closeOdooLink() {
+  const m = document.getElementById('odooLinkModal');
+  if (m) m.style.display = 'none';
+  _linkingTravelId = null;
+}
+
+let _linkSearchTimer = null;
+function searchForLink(q) {
+  clearTimeout(_linkSearchTimer);
+  _linkSearchTimer = setTimeout(async () => {
+    const res = document.getElementById('odooLinkResults');
+    if (!q || q.length < 2) { res.style.display='none'; return; }
+    try {
+      const r = await fetch('/api/global/employees/search?q='+encodeURIComponent(q));
+      const d = await r.json();
+      const emps = d.employees || [];
+      if (!emps.length) { res.innerHTML='<div style="padding:12px;color:var(--muted);font-size:13px;">No employees found</div>'; res.style.display='block'; return; }
+      res.innerHTML = emps.map(e => `
+        <div style="padding:10px 14px;cursor:pointer;border-bottom:1px solid #F3F4F6;transition:background .1s;"
+             onmouseover="this.style.background='#EFF6FF'" onmouseout="this.style.background=''"
+             onclick="confirmOdooLink(${e.id}, '${e.name.replace(/'/g,"\'")}')">
+          <div style="font-weight:600;font-size:13px;">${e.name}</div>
+          <div style="font-size:11px;color:var(--muted);">Odoo ID: ${e.id} · ${e.title||'—'}</div>
+        </div>`).join('');
+      res.style.display = 'block';
+    } catch(e) { res.style.display='none'; }
+  }, 350);
+}
+
+async function confirmManualId() {
+  const id = parseInt(document.getElementById('manualOdooId').value);
+  if (!id || id < 1) { alert('Enter a valid Odoo employee ID'); return; }
+  await confirmOdooLink(id, 'Manual #' + id);
+}
+
+async function autoLinkAll(type) {
+  const btn = document.getElementById(type === 'travel' ? 'autoLinkTravelBtn' : null);
+  const resEl = document.getElementById(type === 'travel' ? 'autoLinkResult' : 'autoLinkPromoResult');
+  if (resEl) { resEl.style.display='block'; resEl.style.background='#FEF3C7'; resEl.textContent='⏳ Matching with Odoo…'; }
+  try {
+    const res = await fetch('/api/global/' + type + '/auto-link', {method:'POST'});
+    const d = await res.json();
+    if (d.ok) {
+      const msg = `✅ Linked ${d.matched} records · ${d.unmatched} unmatched · ${d.total} total`;
+      if (resEl) { resEl.style.background='#D1FAE5'; resEl.textContent=msg; }
+      if (type === 'travel') loadTravel(); else loadPromos();
+    } else {
+      if (resEl) { resEl.style.background='#FEE2E2'; resEl.textContent='⚠️ ' + (d.error||'Error'); }
+    }
+  } catch(e) {
+    if (resEl) { resEl.style.background='#FEE2E2'; resEl.textContent='⚠️ ' + e.message; }
+  }
+}
+
+async function confirmOdooLink(odooId, odooName) {
+  let url, reload;
+  if (_linkingTravelId) {
+    url = '/api/global/travel/'+_linkingTravelId;
+    reload = loadTravel;
+  } else if (_linkingPromoId) {
+    url = '/api/global/promotions/'+_linkingPromoId;
+    reload = loadPromos;
+  } else return;
+
+  const res = await fetch(url, {
+    method: 'PUT', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({odoo_employee_id: odooId, odoo_employee_name: odooName})
+  });
+  const d = await res.json();
+  if (d.ok) { closeOdooLink(); reload(); }
+  else { alert('Error: ' + (d.error||'Unknown')); }
+}
+
+// ── Odoo Employee Search ──────────────────────────────────────────────
+let _empSearchTimer = null;
+
+function onTvNameInput(inp) {
+  document.getElementById('tv_odoo_id').value = '';
+  clearTimeout(_empSearchTimer);
+  _empSearchTimer = setTimeout(() => searchOdooEmpByName(inp.value), 400);
+}
+
+async function searchOdooEmpByName(q) {
+  const sugEl = document.getElementById('tvNameSuggestions');
+  if (!q || q.length < 2) { sugEl.style.display='none'; return; }
+  try {
+    const res = await fetch('/api/global/employees/search?q='+encodeURIComponent(q));
+    const d   = await res.json();
+    const emps = d.employees || [];
+    if (!emps.length) { sugEl.style.display='none'; return; }
+    sugEl.innerHTML = emps.map(e =>
+      `<div style="padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid #F3F4F6;"
+            onmouseover="this.style.background='#F0F9FF'" onmouseout="this.style.background=''"
+            onclick="selectOdooEmp(${e.id}, '${e.name.replace(/'/g,"\\'")}', '${(e.title||'').replace(/'/g,"\\'")}')">
+         <b>${e.name}</b> <span style="color:var(--muted);font-size:11px;">${e.title||''}</span>
+       </div>`
+    ).join('');
+    sugEl.style.display = 'block';
+  } catch(e) { sugEl.style.display='none'; }
+}
+
+function selectOdooEmp(id, name, title) {
+  document.getElementById('tv_name').value    = name;
+  document.getElementById('tv_odoo_id').value = id;
+  if (title && !document.getElementById('tv_pos').value) {
+    document.getElementById('tv_pos').value = title;
+  }
+  document.getElementById('tvNameSuggestions').style.display = 'none';
+}
+
+// Close suggestions on outside click
+document.addEventListener('click', e => {
+  if (!e.target.closest('#tv_name') && !e.target.closest('#tvNameSuggestions'))
+    document.getElementById('tvNameSuggestions').style.display = 'none';
+});
+
+// ── PDF Ticket Parser ─────────────────────────────────────────────────
+let _parsedTicket = null;
+
+async function parseTicket(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const resultEl  = document.getElementById('ticketResult');
+  const previewEl = document.getElementById('ticketPreview');
+  resultEl.textContent = '⏳ Reading ticket…';
+  previewEl.style.display = 'none';
+  input.value = '';
+
+  const formData = new FormData();
+  formData.append('file', file);
+  try {
+    const res = await fetch('/api/global/travel/parse-ticket', {method:'POST', body: formData});
+    const d   = await res.json();
+    if (!d.ok) { resultEl.textContent = '⚠️ ' + (d.error||'Parse failed'); return; }
+    _parsedTicket = d;
+    resultEl.textContent = '';
+    // Show preview
+    const fields = document.getElementById('ticketFields');
+    fields.innerHTML = [
+      {label:'Name',       val: d.name       || '—'},
+      {label:'Start Date', val: d.start_date || '—'},
+      {label:'End Date',   val: d.end_date   || '—  (add manually if return ticket missing)'},
+      {label:'Direction',  val: d.direction  || '—'},
+      {label:'Route',      val: (d.from_city && d.to_city) ? `${d.from_city} → ${d.to_city}` : '—'},
+      {label:'Airline',    val: d.airline    || '—'},
+    ].map(f => `<div style="background:white;padding:8px 10px;border-radius:6px;border:1px solid #D1FAE5;">
+      <div style="font-size:9px;font-weight:700;color:#065F46;text-transform:uppercase;letter-spacing:.4px;margin-bottom:2px;">${f.label}</div>
+      <div style="font-size:13px;font-weight:600;">${f.val}</div>
+    </div>`).join('');
+    previewEl.style.display = 'block';
+  } catch(e) {
+    resultEl.textContent = '⚠️ Error: ' + e.message;
+  }
+}
+
+async function confirmTicketImport() {
+  if (!_parsedTicket) return;
+  const d = _parsedTicket;
+  if (!d.name) { alert('Could not extract name from ticket — please add manually.'); return; }
+  const res = await fetch('/api/global/travel', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({
+      name:       d.name,
+      position:   '',
+      start_date: d.start_date,
+      end_date:   d.end_date || '',
+      notes:      `${d.airline||''} ${d.flight||''} ${d.from_city||''} → ${d.to_city||''}`.trim(),
+      status:     'confirmed'
+    })
+  });
+  const r = await res.json();
+  if (r.ok) {
+    document.getElementById('ticketPreview').style.display = 'none';
+    document.getElementById('ticketResult').textContent = `✅ Added: ${d.name} (${d.start_date})`;
+    _parsedTicket = null;
+    loadTravel();
+  } else if (r.error === 'duplicate') {
+    alert('Already exists: ' + d.name + ' on ' + d.start_date);
+  } else {
+    alert('Error: ' + (r.error||'Unknown'));
+  }
+}
+
+// ── Promotions CRUD ──────────────────────────────────────────────────
+async function loadPromos() {
+  const q    = document.getElementById('promoSearch').value;
+  const year = document.getElementById('promoYear').value;
+  const params = new URLSearchParams();
+  if (q)    params.set('q', q);
+  if (year) params.set('year', year);
+  const res = await fetch('/api/global/promotions?' + params);
+  const d = await res.json();
+  document.getElementById('promoCount').textContent = d.total;
+  const rows = d.records || [];
+  document.getElementById('promoBody').innerHTML = rows.length ? rows.map(r => `
+    <tr>
+      <td style="color:var(--muted)">${r.id}</td>
+      <td style="font-weight:600">${r.name} ${odooStatus(r)}</td>
+      <td>${r.new_title||'—'}</td>
+      <td>${r.effective_date||'—'}</td>
+      <td><span class="badge badge-blue">${r.year||'—'}</span></td>
+      <td style="color:var(--muted)">${r.notes||''}</td>
+      <td>
+        <button class="btn btn-danger" style="padding:3px 8px;font-size:11px;" onclick="deletePromo(${r.id})">✕</button>
+      </td>
+    </tr>`).join('') :
+    '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--muted);">No records found</td></tr>';
+}
+
+async function addPromo() {
+  const name = document.getElementById('pm_name').value.trim();
+  if (!name) { alert('Name required'); return; }
+  const body = {
+    name,
+    new_title:      document.getElementById('pm_title').value.trim(),
+    effective_date: document.getElementById('pm_date').value,
+    year:           parseInt(document.getElementById('pm_year').value) || new Date().getFullYear(),
+    notes:          document.getElementById('pm_notes').value.trim(),
+  };
+  let res;
+  if (_editingPromo) {
+    res = await fetch('/api/global/promotions/'+_editingPromo.id, {
+      method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
+    });
+  } else {
+    res = await fetch('/api/global/promotions', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
+    });
+  }
+  const d = await res.json();
+  if (d.ok) { cancelPromoEdit(); loadPromos(); }
+  else if (d.error === 'duplicate') { alert('Duplicate: same name + year already exists.'); }
+  else { alert('Error: ' + (d.error||'Unknown')); }
+}
+
+let _editingPromo = null;
+
+function editPromo(r) {
+  _editingPromo = r;
+  document.getElementById('pm_name').value  = r.name        || '';
+  document.getElementById('pm_title').value = r.new_title   || '';
+  document.getElementById('pm_date').value  = r.effective_date || '';
+  document.getElementById('pm_year').value  = r.year        || '';
+  document.getElementById('pm_notes').value = r.notes       || '';
+  document.getElementById('promoForm').classList.add('open');
+  document.querySelector('#promoForm .btn-primary').textContent = 'Update';
+  document.getElementById('promoForm').scrollIntoView({behavior:'smooth'});
+}
+
+function cancelPromoEdit() {
+  _editingPromo = null;
+  ['pm_name','pm_title','pm_date','pm_year','pm_notes'].forEach(id => document.getElementById(id).value='');
+  document.getElementById('promoForm').classList.remove('open');
+  document.querySelector('#promoForm .btn-primary').textContent = 'Save Record';
+}
+
+let _linkingPromoId = null;
+function openOdooLinkPromo(promoId, name) {
+  _linkingPromoId = promoId;
+  _linkingTravelId = null;
+  openOdooLink(promoId, name);  // reuse same modal, but track _linkingPromoId
+}
+
+async function deletePromo(id) {
+  if (!confirm('Delete this promotion record?')) return;
+  await fetch('/api/global/promotions/'+id, {method:'DELETE'});
+  loadPromos();
+}
+
+// ── PDF Ticket Parsing ───────────────────────────────────────────────
+function handleTicketDrop(e) {
+  e.preventDefault();
+  if (e.dataTransfer.files[0]) parseTicket(e.dataTransfer.files[0]);
+}
+function handleTicket(inp) {
+  if (inp.files[0]) parseTicket(inp.files[0]);
+  inp.value = '';
+}
+async function parseTicket(file) {
+  const rEl = document.getElementById('ticketResult');
+  showResult(rEl, true, '⏳ Reading ticket…');
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const res = await fetch('/api/global/travel/parse-ticket', {method:'POST', body:fd});
+    const d = await res.json();
+    if (d.error) { showResult(rEl, false, 'Error: '+d.error); return; }
+    document.getElementById('tk_name').value  = d.name || '';
+    document.getElementById('tk_start').value = d.departure_date || '';
+    document.getElementById('tk_end').value   = d.return_date || '';
+    document.getElementById('tk_route').value = (d.from_city&&d.to_city) ? d.from_city+' → '+d.to_city : '';
+    const hint = document.getElementById('tk_hint');
+    if (d.odoo_matches && d.odoo_matches.length) {
+      const b = d.odoo_matches[0];
+      hint.textContent = '✅ Odoo match: '+b.name+(b.job?' ('+b.job+')':'');
+      document.getElementById('tk_name').value = b.name;
+      document.getElementById('tk_pos').value  = b.job||'';
+    } else {
+      hint.textContent = d.name ? '⚠️ No Odoo match — verify name' : '⚠️ Could not extract name';
+    }
+    document.getElementById('ticketForm').style.display = 'block';
+    rEl.style.display = 'none';
+  } catch(e) { showResult(rEl, false, 'Error: '+e.message); }
+}
+async function saveTicketAsTravel() {
+  const name = document.getElementById('tk_name').value.trim();
+  const start= document.getElementById('tk_start').value;
+  if (!name||!start) { alert('Name and departure date required'); return; }
+  const res = await fetch('/api/global/travel', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({name, start_date:start,
+      end_date:  document.getElementById('tk_end').value||'',
+      position:  document.getElementById('tk_pos').value||'',
+      notes:     document.getElementById('tk_route').value||'',
+      status:'confirmed'})
+  });
+  const d = await res.json();
+  if (d.ok) {
+    document.getElementById('ticketForm').style.display='none';
+    showResult(document.getElementById('ticketResult'), true, '✅ Travel record saved!');
+    loadTravel();
+  } else if (d.error==='duplicate') {
+    alert('Duplicate — already has a record for that date. Edit the existing one instead.');
+  } else { alert('Error: '+(d.error||'Unknown')); }
+}
+
+// ── Inline Edit ──────────────────────────────────────────────────────
+async function editTravel(id) {
+  const res = await fetch('/api/global/travel');
+  const d = await res.json();
+  const r = (d.records||[]).find(x => x.id===id);
+  if (!r) return;
+  const row = document.querySelector(`[onclick="editTravel(${id})"]`).closest('tr');
+  row.innerHTML = `
+    <td style="color:var(--muted)">${id}</td>
+    <td><input class="cell-edit" id="en_${id}" value="${(r.name||'').replace(/"/g,'&quot;')}"></td>
+    <td><input class="cell-edit" id="ep_${id}" value="${(r.position||'').replace(/"/g,'&quot;')}"></td>
+    <td><input type="date" class="cell-edit" id="es_${id}" value="${r.start_date||''}"></td>
+    <td><input type="date" class="cell-edit" id="ee_${id}" value="${r.end_date||''}"></td>
+    <td><select class="cell-edit" id="est_${id}">
+      <option ${r.status==='confirmed'?'selected':''}>confirmed</option>
+      <option ${r.status==='cancelled'?'selected':''}>cancelled</option></select></td>
+    <td><input class="cell-edit" id="eno_${id}" value="${(r.notes||'').replace(/"/g,'&quot;')}"></td>
+    <td style="white-space:nowrap;">
+      <button class="btn btn-primary" style="padding:3px 8px;font-size:11px;margin-right:4px;" onclick="saveEdit(${id})">✓</button>
+      <button class="btn btn-ghost" style="padding:3px 8px;font-size:11px;" onclick="loadTravel()">✕</button>
+    </td>`;
+}
+async function saveEdit(id) {
+  const g = s => document.getElementById(s+id)?.value||'';
+  await fetch('/api/global/travel/'+id, {method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({name:g('en_'), position:g('ep_'), start_date:g('es_'),
+      end_date:g('ee_'), status:g('est_'), notes:g('eno_')})});
+  loadTravel();
+}
+
+// Init
+loadTravel();
+</script>
 </body>
 </html>
