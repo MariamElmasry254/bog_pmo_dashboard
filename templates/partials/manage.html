@@ -223,8 +223,10 @@
     <!-- Toolbar -->
     <div class="toolbar">
       <input class="search-inp" id="travelSearch" placeholder="🔍 Search by name…" oninput="loadTravel()">
+      <button class="btn btn-ghost" onclick="autoLinkAll('travel')" id="autoLinkTravelBtn">⚡ Auto-Link All</button>
       <button class="btn btn-ghost" onclick="toggleForm('travelForm')">+ Add Manually</button>
     </div>
+    <div id="autoLinkResult" style="display:none;padding:8px 12px;border-radius:6px;font-size:13px;margin-bottom:10px;"></div>
 
     <!-- Add Form -->
     <div class="add-form" id="travelForm">
@@ -296,8 +298,10 @@
         <option value="2025">2025</option>
         <option value="2026">2026</option>
       </select>
+      <button class="btn btn-ghost" onclick="autoLinkAll('promotions')">⚡ Auto-Link All</button>
       <button class="btn btn-ghost" onclick="toggleForm('promoForm')">+ Add Manually</button>
     </div>
+    <div id="autoLinkPromoResult" style="display:none;padding:8px 12px;border-radius:6px;font-size:13px;margin-bottom:10px;"></div>
 
     <!-- Add Form -->
     <div class="add-form" id="promoForm">
@@ -325,7 +329,7 @@
       </div>
       <div style="display:flex;gap:8px;">
         <button class="btn btn-primary" onclick="addPromo()">Save Record</button>
-        <button class="btn btn-ghost" onclick="toggleForm('promoForm')">Cancel</button>
+        <button class="btn btn-ghost" onclick="cancelPromoEdit()">Cancel</button>
       </div>
     </div>
 
@@ -553,10 +557,16 @@ function openOdooLink(travelId, name) {
           style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;
                  font-size:13px;margin-bottom:8px;outline:none;"
           oninput="searchForLink(this.value)">
-        <div id="odooLinkResults" style="max-height:200px;overflow-y:auto;border:1px solid var(--border);
+        <div id="odooLinkResults" style="max-height:180px;overflow-y:auto;border:1px solid var(--border);
              border-radius:8px;background:white;display:none;"></div>
-        <div style="display:flex;gap:8px;margin-top:16px;">
-          <button class="btn btn-ghost" style="flex:1;" onclick="closeOdooLink()">Cancel</button>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+          <span style="font-size:12px;color:var(--muted);white-space:nowrap;">Enter ID manually:</span>
+          <input type="number" id="manualOdooId" placeholder="e.g. 247" min="1"
+            style="flex:1;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
+          <button class="btn btn-primary" style="padding:7px 14px;font-size:12px;" onclick="confirmManualId()">Link</button>
+        </div>
+        <div style="margin-top:10px;">
+          <button class="btn btn-ghost" style="width:100%;" onclick="closeOdooLink()">Cancel</button>
         </div>
       </div>`;
     document.body.appendChild(modal);
@@ -598,20 +608,48 @@ function searchForLink(q) {
   }, 350);
 }
 
+async function confirmManualId() {
+  const id = parseInt(document.getElementById('manualOdooId').value);
+  if (!id || id < 1) { alert('Enter a valid Odoo employee ID'); return; }
+  await confirmOdooLink(id, 'Manual #' + id);
+}
+
+async function autoLinkAll(type) {
+  const btn = document.getElementById(type === 'travel' ? 'autoLinkTravelBtn' : null);
+  const resEl = document.getElementById(type === 'travel' ? 'autoLinkResult' : 'autoLinkPromoResult');
+  if (resEl) { resEl.style.display='block'; resEl.style.background='#FEF3C7'; resEl.textContent='⏳ Matching with Odoo…'; }
+  try {
+    const res = await fetch('/api/global/' + type + '/auto-link', {method:'POST'});
+    const d = await res.json();
+    if (d.ok) {
+      const msg = `✅ Linked ${d.matched} records · ${d.unmatched} unmatched · ${d.total} total`;
+      if (resEl) { resEl.style.background='#D1FAE5'; resEl.textContent=msg; }
+      if (type === 'travel') loadTravel(); else loadPromos();
+    } else {
+      if (resEl) { resEl.style.background='#FEE2E2'; resEl.textContent='⚠️ ' + (d.error||'Error'); }
+    }
+  } catch(e) {
+    if (resEl) { resEl.style.background='#FEE2E2'; resEl.textContent='⚠️ ' + e.message; }
+  }
+}
+
 async function confirmOdooLink(odooId, odooName) {
-  if (!_linkingTravelId) return;
-  const res = await fetch('/api/global/travel/'+_linkingTravelId, {
-    method: 'PUT',
-    headers: {'Content-Type':'application/json'},
+  let url, reload;
+  if (_linkingTravelId) {
+    url = '/api/global/travel/'+_linkingTravelId;
+    reload = loadTravel;
+  } else if (_linkingPromoId) {
+    url = '/api/global/promotions/'+_linkingPromoId;
+    reload = loadPromos;
+  } else return;
+
+  const res = await fetch(url, {
+    method: 'PUT', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({odoo_employee_id: odooId, odoo_employee_name: odooName})
   });
   const d = await res.json();
-  if (d.ok) {
-    closeOdooLink();
-    loadTravel();
-  } else {
-    alert('Error: ' + (d.error||'Unknown'));
-  }
+  if (d.ok) { closeOdooLink(); reload(); }
+  else { alert('Error: ' + (d.error||'Unknown')); }
 }
 
 // ── Odoo Employee Search ──────────────────────────────────────────────
@@ -753,26 +791,55 @@ async function loadPromos() {
 async function addPromo() {
   const name = document.getElementById('pm_name').value.trim();
   if (!name) { alert('Name required'); return; }
-  const res = await fetch('/api/global/promotions', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({
-      name,
-      new_title:      document.getElementById('pm_title').value.trim(),
-      effective_date: document.getElementById('pm_date').value,
-      year:           parseInt(document.getElementById('pm_year').value) || new Date().getFullYear(),
-      notes:          document.getElementById('pm_notes').value.trim(),
-    })
-  });
-  const d = await res.json();
-  if (d.ok) {
-    ['pm_name','pm_title','pm_date','pm_year','pm_notes'].forEach(id => document.getElementById(id).value='');
-    document.getElementById('promoForm').classList.remove('open');
-    loadPromos();
-  } else if (d.error === 'duplicate') {
-    alert('Duplicate: this person already has a promotion record for that year.');
+  const body = {
+    name,
+    new_title:      document.getElementById('pm_title').value.trim(),
+    effective_date: document.getElementById('pm_date').value,
+    year:           parseInt(document.getElementById('pm_year').value) || new Date().getFullYear(),
+    notes:          document.getElementById('pm_notes').value.trim(),
+  };
+  let res;
+  if (_editingPromo) {
+    res = await fetch('/api/global/promotions/'+_editingPromo.id, {
+      method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
+    });
   } else {
-    alert('Error: ' + (d.error||'Unknown'));
+    res = await fetch('/api/global/promotions', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
+    });
   }
+  const d = await res.json();
+  if (d.ok) { cancelPromoEdit(); loadPromos(); }
+  else if (d.error === 'duplicate') { alert('Duplicate: same name + year already exists.'); }
+  else { alert('Error: ' + (d.error||'Unknown')); }
+}
+
+let _editingPromo = null;
+
+function editPromo(r) {
+  _editingPromo = r;
+  document.getElementById('pm_name').value  = r.name        || '';
+  document.getElementById('pm_title').value = r.new_title   || '';
+  document.getElementById('pm_date').value  = r.effective_date || '';
+  document.getElementById('pm_year').value  = r.year        || '';
+  document.getElementById('pm_notes').value = r.notes       || '';
+  document.getElementById('promoForm').classList.add('open');
+  document.querySelector('#promoForm .btn-primary').textContent = 'Update';
+  document.getElementById('promoForm').scrollIntoView({behavior:'smooth'});
+}
+
+function cancelPromoEdit() {
+  _editingPromo = null;
+  ['pm_name','pm_title','pm_date','pm_year','pm_notes'].forEach(id => document.getElementById(id).value='');
+  document.getElementById('promoForm').classList.remove('open');
+  document.querySelector('#promoForm .btn-primary').textContent = 'Save Record';
+}
+
+let _linkingPromoId = null;
+function openOdooLinkPromo(promoId, name) {
+  _linkingPromoId = promoId;
+  _linkingTravelId = null;
+  openOdooLink(promoId, name);  // reuse same modal, but track _linkingPromoId
 }
 
 async function deletePromo(id) {
