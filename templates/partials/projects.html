@@ -148,7 +148,7 @@ function renderProjects() {
   const fmtVal  = v => v > 0 ? new Intl.NumberFormat('en').format(Math.round(v)) + ' SAR' : '—';
 
   document.getElementById('projGrid').innerHTML = list.map(p => `
-    <div class="proj-card status-${p.status||'unknown'}" onclick="selectProject(${p.id}, ${JSON.stringify(p.name)})">
+    <div class="proj-card status-${p.status||'unknown'}" data-pid="${p.id}" data-pname="${(p.name||'').replace(/"/g,'&quot;')}" onclick="handleCardClick(this)">
       <span class="proj-status-badge badge-${p.status||'unknown'}">${p.stage_name || statusLabel[p.status] || 'Unknown'}</span>
       <div class="proj-card-name">${p.name}</div>
       <div class="proj-card-meta">#${p.id}</div>
@@ -172,21 +172,27 @@ function renderProjects() {
   `).join('');
 }
 
+function handleCardClick(el) {
+  const id   = el.dataset.pid;
+  const name = el.dataset.pname;
+  selectProject(id, name);
+}
+
 async function selectProject(id, name) {
-  // Visual feedback
   document.querySelectorAll('.proj-card').forEach(c => c.style.opacity = '0.5');
   try {
     const res = await fetch('/project/select', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ project_id: id, project_name: name })
+      body: JSON.stringify({ project_id: parseInt(id), project_name: name })
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
     const d = await res.json();
     if (d.ok) {
       window.location.href = d.redirect || '/';
     } else {
       alert('Error: ' + (d.error || 'Unknown'));
+      document.querySelectorAll('.proj-card').forEach(c => c.style.opacity = '1');
     }
   } catch(e) {
     alert('Could not open project: ' + e.message);
