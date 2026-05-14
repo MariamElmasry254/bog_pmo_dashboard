@@ -476,7 +476,7 @@ def api_overview():
                 ODOO_DB, odoo.uid, ODOO_PASSWORD,
                 'project.project', 'search_read',
                 [[('name', 'ilike', PROJECT_NAME)]],
-                {'fields': ['id', 'name', 'start_date', 'date',
+                {'fields': ['id', 'name', 'start_date', 'end_date',
                             'user_id',        # Project Manager (many2one res.users)
                             'coordinator_id', # Coordinator (many2one res.users)
                             'value',          # Project value (float)
@@ -497,7 +497,7 @@ def api_overview():
         return None
 
     proj_start = _odoo_date('start_date') or PROJECT_INFO.get('start_date')
-    proj_end   = _odoo_date('date')       or PROJECT_INFO.get('end_date')
+    proj_end   = _odoo_date('end_date')   or PROJECT_INFO.get('end_date')
 
     # Duration in months
     duration_months = PROJECT_INFO.get('duration_months')
