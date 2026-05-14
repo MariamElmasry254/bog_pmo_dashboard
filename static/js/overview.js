@@ -530,7 +530,6 @@ async function openTeamModal() {
   modal.style.display = 'flex';
   const body = document.getElementById('teamModalBody');
 
-  // Build 2-tab layout inside modal
   body.innerHTML = `
     <div style="display:flex;border-bottom:1px solid var(--border);margin:-20px -24px 16px;padding:0 24px;">
       <button id="modalTabDev" onclick="switchModalTeamTab('development')"
@@ -548,140 +547,8 @@ async function openTeamModal() {
 
   window._modalTeamActiveTab = 'development';
   _loadModalTeamTab('development');
-
-  try {
-    const res = await fetch('/api/team/members');
-    const d = await res.json();
-    document.getElementById('teamSheetLink').href = d.sheet_url || '#';
-
-    if (!d.success) {
-      body.innerHTML = `
-        <div class="banner banner-warn">
-          <strong>⚠️ Cannot read Google Sheet</strong>
-          <div style="margin-top: 8px; font-size: 13px;">${d.error || 'Unknown error'}</div>
-          <div style="margin-top: 12px; padding: 12px; background: white; border-radius: 6px;">
-            <strong>To fix:</strong>
-            <ol style="margin: 8px 0 0 20px; font-size: 13px; line-height: 1.7;">
-              <li>Open the Google Sheet</li>
-              <li>Click <strong>Share</strong> button (top right)</li>
-              <li>Under "General access", change to <strong>"Anyone with the link"</strong></li>
-              <li>Set role to <strong>"Viewer"</strong></li>
-              <li>Click <strong>Done</strong></li>
-              <li>Refresh this page</li>
-            </ol>
-          </div>
-        </div>
-      `;
-      return;
-    }
-
-    document.getElementById('teamCountBadge').textContent =
-      `— ${d.total_active || 0} member${(d.total_active || 0) !== 1 ? 's' : ''}`;
-
-    let html = `
-      <div class="team-kpi-strip">
-        <div class="team-kpi"><div class="team-kpi-num">${d.total_active || 0}</div><div class="team-kpi-lbl">TOTAL</div></div>
-        <div class="team-kpi"><div class="team-kpi-num" style="color: var(--blue);">${d.total_onsite || 0}</div><div class="team-kpi-lbl">ONSITE</div></div>
-        <div class="team-kpi"><div class="team-kpi-num" style="color: #6366F1;">${d.total_offshore || 0}</div><div class="team-kpi-lbl">OFFSHORE</div></div>
-        <div class="team-kpi"><div class="team-kpi-num" style="color: #10B981;">${(d.groups || []).length}</div><div class="team-kpi-lbl">DEPARTMENTS</div></div>
-      </div>
-      <div class="team-hierarchy">`;
-
-    (d.groups || []).forEach(group => {
-      const isManagement = group.is_management;
-      const groupClass = isManagement ? 'team-group team-mgmt' : 'team-group';
-
-      // Group header counts (no "active" wording since all shown are active scope)
-      const memberWord = group.count !== 1 ? 'members' : 'member';
-      const onSiteBadge = group.onsite_count > 0 ? `<span class="grp-site-badge grp-onsite">${group.onsite_count} onsite</span>` : '';
-      const offBadge = group.offshore_count > 0 ? `<span class="grp-site-badge grp-offshore">${group.offshore_count} offshore</span>` : '';
-
-      html += `
-        <div class="${groupClass}">
-          <div class="team-group-head ${isManagement ? 'mgmt-head' : ''}">
-            <h4>${group.name || 'Unassigned'}</h4>
-            <div class="team-group-meta">
-              ${onSiteBadge}${offBadge}
-              <span class="team-group-count">${group.count} ${memberWord}</span>
-            </div>
-          </div>
-          <div class="team-members-list">
-      `;
-      group.members.forEach(m => {
-        const role = ((m.title || m.role) || '').toLowerCase();
-
-        let roleClass, badgeClass, badgeText;
-        if (isManagement) {
-          roleClass = 'role-manager';
-          badgeClass = 'badge-mgmt';
-          if (role.includes('director') || role.includes('head')) badgeText = 'Director';
-          else if (role.includes('manager')) badgeText = 'Manager';
-          else if (role.includes('pmo')) badgeText = 'PMO';
-          else if (role === 'pm' || role.includes('pm ')) badgeText = 'PM';
-          else if (role.includes('coordinator')) badgeText = 'Coordinator';
-          else badgeText = 'Lead';
-        } else if (role.includes('manager') && !role.includes('senior')) {
-          roleClass = 'role-manager';
-          badgeClass = 'badge-mgmt';
-          badgeText = 'Manager';
-        } else if (role.includes('lead') || role.includes('principal')) {
-          roleClass = 'role-lead';
-          badgeClass = 'badge-lead';
-          badgeText = 'Lead';
-        } else if (role.includes('senior') || role.includes('sr.') || role.includes('sr ')) {
-          roleClass = 'role-senior';
-          badgeClass = 'badge-senior';
-          badgeText = 'Senior';
-        } else if (role.includes('junior') || role.includes('jr')) {
-          roleClass = 'role-junior';
-          badgeClass = 'badge-junior';
-          badgeText = 'Junior';
-        } else {
-          roleClass = 'role-mid';
-          badgeClass = 'badge-mid';
-          badgeText = 'Mid';
-        }
-
-        const cardClass = `team-member-card ${roleClass}`;
-        const initials = (m.name || '?').split(/\s+/).slice(0, 2).map(s => s[0]).join('').toUpperCase();
-
-        const siteBadge = m.onsite_offshore === 'Onsite'
-          ? '<span class="site-badge onsite">📍 Onsite</span>'
-          : m.onsite_offshore === 'Offshore'
-          ? '<span class="site-badge offshore">🌐 Offshore</span>'
-          : '';
-
-        const allocBadge = m.allocation
-          ? `<span class="alloc-badge">${m.allocation}</span>` : '';
-
-        html += `
-          <div class="${cardClass}">
-            <div class="team-avatar">${initials}</div>
-            <div class="team-member-info">
-              <div class="team-member-name-row">
-                <span class="team-member-name" dir="auto">${m.name || '(no name)'}</span>
-                <span class="pos-badge ${badgeClass}">${badgeText}</span>
-              </div>
-              ${m.title || m.role ? `<div class="team-member-role">${m.title || m.role}</div>` : ''}
-              ${m.position ? `<div class="team-member-position" dir="auto">${m.position}</div>` : ''}
-              <div class="team-member-meta">
-                ${siteBadge}
-                ${allocBadge}
-                ${m.email ? `<span>📧 ${m.email}</span>` : ''}
-              </div>
-            </div>
-          </div>
-        `;
-      });
-      html += '</div></div>';
-    });
-
-    html += '</div>';
-    body.innerHTML = html;
-  } catch (e) {
-    body.innerHTML = `<div class="banner banner-warn"><strong>Error:</strong> ${e.message}</div>`;
-  }
 }
+
 
 window.switchModalTeamTab = function(phase) {
   window._modalTeamActiveTab = phase;
