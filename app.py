@@ -579,29 +579,48 @@ def api_overview():
 
     # Current Cost per phase — from effort API cached data (best effort)
     # We don't re-fetch here to keep this fast; JS will fill in from AppState
+    # Get consultation progress separately
+    con_progress = con_remaining = 0.0
+    try:
+        overrides2 = load_plan_overrides()
+        con_data = (overrides2.get('plan_overrides') or {}).get('consultation', {}) or {}
+        for mk in sorted(con_data.keys(), reverse=True):
+            md = con_data.get(mk, {}) or {}
+            if 'completion' in md and not con_progress:
+                con_progress = float(md['completion'])
+            if 'remaining' in md and not con_remaining:
+                con_remaining = float(md['remaining'])
+            if con_progress and con_remaining:
+                break
+    except Exception:
+        pass
+
     return jsonify({
-        'project_name':      PROJECT_NAME,
-        'phase':             PROJECT_INFO.get('phase'),
-        'roadmap_start':     proj_start,
-        'roadmap_end':       proj_end,
-        'duration_months':   int(duration_months) if duration_months else None,
-        'total_mandays':     total_wd_roadmap,
-        'teams_count':       len(teams),
-        'teams':             sorted(teams),
-        'milestones_count':  milestones_count,
+        'project_name':       PROJECT_NAME,
+        'phase':              PROJECT_INFO.get('phase'),
+        'roadmap_start':      proj_start,
+        'roadmap_end':        proj_end,
+        'duration_months':    int(duration_months) if duration_months else None,
+        'total_mandays':      total_wd_roadmap,
+        'teams_count':        len(teams),
+        'teams':              sorted(teams),
+        'milestones_count':   milestones_count,
         # Odoo live
-        'project_manager':   pm_name,
-        'coordinator':       coord_name,
-        'project_value_sar': project_value_sar,
-        # Variance
-        'progress_pct':      round(project_progress, 1),
-        'remaining_mds':     round(project_remaining, 1),
-        'dev_eac_mds':       round(dev_eac, 1),
-        'con_eac_mds':       round(con_eac, 1),
+        'project_manager':    pm_name,
+        'coordinator':        coord_name,
+        'project_value_sar':  project_value_sar,
+        # Development variance
+        'progress_pct':       round(project_progress, 1),
+        'remaining_mds':      round(project_remaining, 1),
+        'dev_eac_mds':        round(dev_eac, 1),
+        # Consultation variance
+        'con_progress_pct':   round(con_progress,   1),
+        'con_remaining_mds':  round(con_remaining,  1),
+        'con_eac_mds':        round(con_eac,        1),
         # Timeline
-        'time_progress_pct': time_progress_pct,
-        'days_elapsed':      days_elapsed,
-        'days_remaining':    days_remaining,
+        'time_progress_pct':  time_progress_pct,
+        'days_elapsed':       days_elapsed,
+        'days_remaining':     days_remaining,
     })
 
 
