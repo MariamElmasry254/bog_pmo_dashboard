@@ -530,7 +530,88 @@ async function deleteTravel(id) {
   loadTravel();
 }
 
-// ── Odoo Employee Search ─────────────────────────────────────────────
+// ── Odoo Link Modal ──────────────────────────────────────────────────
+let _linkingTravelId = null;
+
+function openOdooLink(travelId, name) {
+  _linkingTravelId = travelId;
+  // Create/show modal
+  let modal = document.getElementById('odooLinkModal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'odooLinkModal';
+    modal.style.cssText = `position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;
+      display:flex;align-items:center;justify-content:center;`;
+    modal.innerHTML = `
+      <div style="background:white;border-radius:12px;padding:28px;width:420px;max-width:90vw;box-shadow:0 20px 60px rgba(0,0,0,.3);">
+        <h3 style="font-size:16px;font-weight:700;margin-bottom:4px;">🔗 Link to Odoo Employee</h3>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:16px;" id="linkModalSubtitle"></p>
+        <input type="text" id="odooLinkSearch" placeholder="Search Odoo employees…"
+          style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;
+                 font-size:13px;margin-bottom:8px;outline:none;"
+          oninput="searchForLink(this.value)">
+        <div id="odooLinkResults" style="max-height:200px;overflow-y:auto;border:1px solid var(--border);
+             border-radius:8px;background:white;display:none;"></div>
+        <div style="display:flex;gap:8px;margin-top:16px;">
+          <button class="btn btn-ghost" style="flex:1;" onclick="closeOdooLink()">Cancel</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', e => { if(e.target===modal) closeOdooLink(); });
+  }
+  document.getElementById('linkModalSubtitle').textContent = `Linking travel record for: ${name}`;
+  document.getElementById('odooLinkSearch').value = name;
+  modal.style.display = 'flex';
+  searchForLink(name);
+  setTimeout(() => document.getElementById('odooLinkSearch').focus(), 100);
+}
+
+function closeOdooLink() {
+  const m = document.getElementById('odooLinkModal');
+  if (m) m.style.display = 'none';
+  _linkingTravelId = null;
+}
+
+let _linkSearchTimer = null;
+function searchForLink(q) {
+  clearTimeout(_linkSearchTimer);
+  _linkSearchTimer = setTimeout(async () => {
+    const res = document.getElementById('odooLinkResults');
+    if (!q || q.length < 2) { res.style.display='none'; return; }
+    try {
+      const r = await fetch('/api/global/employees/search?q='+encodeURIComponent(q));
+      const d = await r.json();
+      const emps = d.employees || [];
+      if (!emps.length) { res.innerHTML='<div style="padding:12px;color:var(--muted);font-size:13px;">No employees found</div>'; res.style.display='block'; return; }
+      res.innerHTML = emps.map(e => `
+        <div style="padding:10px 14px;cursor:pointer;border-bottom:1px solid #F3F4F6;transition:background .1s;"
+             onmouseover="this.style.background='#EFF6FF'" onmouseout="this.style.background=''"
+             onclick="confirmOdooLink(${e.id}, '${e.name.replace(/'/g,"\'")}')">
+          <div style="font-weight:600;font-size:13px;">${e.name}</div>
+          <div style="font-size:11px;color:var(--muted);">Odoo ID: ${e.id} · ${e.title||'—'}</div>
+        </div>`).join('');
+      res.style.display = 'block';
+    } catch(e) { res.style.display='none'; }
+  }, 350);
+}
+
+async function confirmOdooLink(odooId, odooName) {
+  if (!_linkingTravelId) return;
+  const res = await fetch('/api/global/travel/'+_linkingTravelId, {
+    method: 'PUT',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({odoo_employee_id: odooId, odoo_employee_name: odooName})
+  });
+  const d = await res.json();
+  if (d.ok) {
+    closeOdooLink();
+    loadTravel();
+  } else {
+    alert('Error: ' + (d.error||'Unknown'));
+  }
+}
+
+// ── Odoo Employee Search ──────────────────────────────────────────────
 let _empSearchTimer = null;
 
 function onTvNameInput(inp) {
