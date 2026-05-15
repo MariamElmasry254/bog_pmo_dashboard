@@ -294,6 +294,47 @@ async function loadOverviewKPIs() {
       if (btn) btn.style.display = _isBog ? '' : 'none';
     });
 
+    // For non-BOG: switch default phase to 'services' and rewire sub-tabs
+    if (!_isBog) {
+      AppState.currentOverviewPhase = 'services';
+      AppState.currentTagPhase      = 'services';
+
+      // Update sub-tab buttons to use services/support
+      const ovSubTabs = document.getElementById('overviewSubTabs');
+      if (ovSubTabs) {
+        ovSubTabs.innerHTML = `
+          <button class="sub-tab active" data-ovphase="services" id="ovTabSvc">Services</button>
+          <button class="sub-tab" data-ovphase="support" id="ovTabSup">Support</button>`;
+        ovSubTabs.querySelectorAll('.sub-tab').forEach(b => {
+          b.addEventListener('click', () => {
+            const phase = b.dataset.ovphase;
+            AppState.currentOverviewPhase = phase;
+            AppState.activePhases = null;
+            AppState.activeEmployees = [];
+            ovSubTabs.querySelectorAll('.sub-tab').forEach(x =>
+              x.classList.toggle('active', x.dataset.ovphase === phase));
+            loadTaskAnalysis(phase);
+          });
+        });
+      }
+      // Tags sub-tabs
+      const tagSubTabs = document.querySelector('#tagsAnalysis .sub-tabs-bar');
+      if (tagSubTabs) {
+        tagSubTabs.innerHTML = `
+          <button class="sub-tab active" data-tagphase="services">Services</button>
+          <button class="sub-tab" data-tagphase="support">Support</button>`;
+        tagSubTabs.querySelectorAll('.sub-tab').forEach(b => {
+          b.addEventListener('click', () => {
+            const ph = b.dataset.tagphase;
+            AppState.currentTagPhase = ph;
+            tagSubTabs.querySelectorAll('.sub-tab').forEach(x =>
+              x.classList.toggle('active', x.dataset.tagphase === ph));
+            loadTagsAnalysis(ph);
+          });
+        });
+      }
+    }
+
     // Rename phase labels for non-BOG: Consultation→Services, hide Development
     if (!_isBog) {
       // id → new text (null = hide element)
