@@ -39,15 +39,15 @@
       <div style="font-size:24px;font-weight:700;line-height:1;margin-bottom:12px;" id="kpiRevenue">—</div>
       <div style="display:flex;flex-direction:column;gap:5px;border-top:1px solid var(--border);padding-top:10px;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
-          <span style="font-size:10px;font-weight:600;color:var(--blue);text-transform:uppercase;letter-spacing:.3px;">Consultation</span>
+          <span style="font-size:10px;font-weight:600;color:var(--blue);text-transform:uppercase;letter-spacing:.3px;" id="labelConRev">Consultation</span>
           <span style="font-size:12px;font-weight:600;" id="kpiConRev">—</span>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;">
-          <span style="font-size:10px;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:.3px;">Development</span>
+          <span style="font-size:10px;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:.3px;" id="labelDevRev">Development</span>
           <span style="font-size:12px;font-weight:600;" id="kpiDevRev">—</span>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;">
-          <span style="font-size:10px;font-weight:600;color:var(--amber);text-transform:uppercase;letter-spacing:.3px;">Support</span>
+          <span style="font-size:10px;font-weight:600;color:var(--amber);text-transform:uppercase;letter-spacing:.3px;" id="labelSupRev">Support</span>
           <span style="font-size:12px;font-weight:600;" id="kpiSupRev">—</span>
         </div>
       </div>
@@ -59,11 +59,11 @@
       <div style="font-size:24px;font-weight:700;line-height:1;margin-bottom:12px;" id="kpiTotalCost">—</div>
       <div style="display:flex;flex-direction:column;gap:5px;border-top:1px solid var(--border);padding-top:10px;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
-          <span style="font-size:10px;font-weight:600;color:var(--blue);text-transform:uppercase;letter-spacing:.3px;">Consultation</span>
+          <span style="font-size:10px;font-weight:600;color:var(--blue);text-transform:uppercase;letter-spacing:.3px;" id="labelConCost">Consultation</span>
           <span style="font-size:12px;font-weight:600;" id="kpiConCost">—</span>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;">
-          <span style="font-size:10px;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:.3px;">Development</span>
+          <span style="font-size:10px;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:.3px;" id="labelDevCost">Development</span>
           <span style="font-size:12px;font-weight:600;" id="kpiDevCost">—</span>
         </div>
       </div>
@@ -75,11 +75,11 @@
       <div style="font-size:24px;font-weight:700;color:var(--amber);line-height:1;margin-bottom:12px;" id="kpiTotalEAC">—</div>
       <div style="display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--border);padding-top:10px;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
-          <span style="font-size:10px;font-weight:600;color:var(--blue);text-transform:uppercase;letter-spacing:.3px;">Consultation</span>
+          <span style="font-size:10px;font-weight:600;color:var(--blue);text-transform:uppercase;letter-spacing:.3px;" id="labelConEAC">Consultation</span>
           <span style="font-size:12px;font-weight:600;" id="kpiConEAC">—</span>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;">
-          <span style="font-size:10px;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:.3px;">Development</span>
+          <span style="font-size:10px;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:.3px;" id="labelDevEAC">Development</span>
           <span style="font-size:12px;font-weight:600;" id="kpiDevEAC">—</span>
         </div>
       </div>
@@ -89,7 +89,7 @@
   <!-- Progress row -->
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:24px;">
     <div style="background:var(--bg-card);border:1px solid var(--border);border-top:3px solid var(--blue);border-radius:10px;padding:16px 20px;">
-      <div style="font-size:10px;font-weight:700;color:var(--blue);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Consultation — Progress</div>
+      <div style="font-size:10px;font-weight:700;color:var(--blue);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;" id="labelConProgress">Consultation — Progress</div>
       <div style="display:flex;align-items:baseline;gap:4px;margin-bottom:6px;">
         <span style="font-size:30px;font-weight:700;line-height:1;" id="kpiConProgress">—</span>
         <span style="font-size:13px;color:var(--text-muted);">%</span>
@@ -103,7 +103,7 @@
       </div>
     </div>
     <div style="background:var(--bg-card);border:1px solid var(--border);border-top:3px solid var(--green);border-radius:10px;padding:16px 20px;">
-      <div style="font-size:10px;font-weight:700;color:var(--green);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Development — Progress</div>
+      <div style="font-size:10px;font-weight:700;color:var(--green);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;" id="labelDevProgress">Development — Progress</div>
       <div style="display:flex;align-items:baseline;gap:4px;margin-bottom:6px;">
         <span style="font-size:30px;font-weight:700;line-height:1;" id="kpiDevProgress">—</span>
         <span style="font-size:13px;color:var(--text-muted);">%</span>
@@ -133,8 +133,8 @@
 
   <!-- Sub-tabs: Development / Consultation -->
   <div class="sub-tabs-bar" id="overviewSubTabs">
-    <button class="sub-tab active" data-ovphase="development">Development</button>
-    <button class="sub-tab" data-ovphase="consultation">Consultation</button>
+    <button class="sub-tab active" data-ovphase="development" id="ovTabDev">Development</button>
+    <button class="sub-tab" data-ovphase="consultation" id="ovTabCon">Consultation</button>
   </div>
 
   <!-- Filters Bar -->
@@ -184,8 +184,8 @@
 
   <!-- Tag sub-tabs: Development / Consultation -->
   <div class="sub-tabs-bar" id="tagSubTabs">
-    <button class="sub-tab active" data-tagphase="development">Development</button>
-    <button class="sub-tab" data-tagphase="consultation">Consultation</button>
+    <button class="sub-tab active" data-tagphase="development" id="tagTabDev">Development</button>
+    <button class="sub-tab" data-tagphase="consultation" id="tagTabCon">Consultation</button>
   </div>
 
   <!-- Phase multi-select for tags -->
