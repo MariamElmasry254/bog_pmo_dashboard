@@ -1001,12 +1001,19 @@ async function parseTicket(input) {
       </div>`;
     }
 
-    // For return tickets: show which open record will be updated
+    // For return tickets: show which record will be updated (or warn if already has end_date)
     let matchHtml = '';
     if (dir === 'return' && d.open_travel_id) {
-      matchHtml = `<div style="grid-column:1/-1;background:#D1FAE5;border:1px solid #10B981;border-radius:6px;padding:10px 12px;font-size:12px;color:#065F46;">
-        ✅ Will update open travel record: <strong>${d.name}</strong> (started <strong>${d.open_travel_start}</strong>) → set end date to <strong>${d.end_date}</strong>
-      </div>`;
+      if (d.open_travel_end) {
+        // Already has end date — show as warning, disable confirm
+        matchHtml = `<div style="grid-column:1/-1;background:#FEE2E2;border:1px solid #DC2626;border-radius:6px;padding:10px 12px;font-size:12px;color:#991B1B;">
+          ❌ <strong>${d.name}</strong> already has a completed travel record (${d.open_travel_start} → ${d.open_travel_end}). The return date is already set. No action needed.
+        </div>`;
+      } else {
+        matchHtml = `<div style="grid-column:1/-1;background:#D1FAE5;border:1px solid #10B981;border-radius:6px;padding:10px 12px;font-size:12px;color:#065F46;">
+          ✅ Will update open travel record: <strong>${d.name}</strong> (started <strong>${d.open_travel_start}</strong>) → set end date to <strong>${d.end_date}</strong>
+        </div>`;
+      }
     }
 
     document.getElementById('ticketFields').innerHTML = warningHtml + matchHtml + [
@@ -1025,9 +1032,14 @@ async function parseTicket(input) {
     // Update confirm button label
     const confirmBtn = document.getElementById('ticketConfirmBtn');
     if (confirmBtn) {
-      if (dir === 'return' && d.open_travel_id) {
+      if (dir === 'return' && d.open_travel_id && !d.open_travel_end) {
         confirmBtn.textContent = '✅ Set Return Date';
         confirmBtn.style.background = '#10B981';
+        confirmBtn.disabled = false;
+      } else if (dir === 'return' && d.open_travel_id && d.open_travel_end) {
+        confirmBtn.textContent = '✓ Already set — Discard';
+        confirmBtn.style.background = '#6B7280';
+        confirmBtn.onclick = () => { document.getElementById('ticketPreview').style.display='none'; _parsedTicket=null; };
       } else if (dir === 'return' && !d.open_travel_id) {
         confirmBtn.textContent = '⚠️ Add Anyway';
         confirmBtn.style.background = '#F59E0B';
@@ -1051,6 +1063,14 @@ async function confirmTicket() {
   const dir = d.direction || 'unknown';
 
   // RETURN ticket + open record found → update end_date only
+  if (dir === 'return' && d.open_travel_id && d.open_travel_end) {
+    // Already has end date — nothing to do
+    document.getElementById('ticketPreview').style.display = 'none';
+    document.getElementById('ticketMsg').textContent = '✅ ' + d.name + ' already has return date set (' + d.open_travel_end + '). No changes made.';
+    _parsedTicket = null;
+    return;
+  }
+
   if (dir === 'return' && d.open_travel_id) {
     if (!d.end_date) { alert('Return date not found in ticket'); return; }
     const res = await fetch('/api/global/travel/' + d.open_travel_id, {
