@@ -3553,24 +3553,35 @@ def api_services_overrides_get():
 @app.route('/api/phases')
 def api_phases():
     """List of phases for the project (from Odoo or fallback)"""
-    phases = odoo.get_phases()
+    _proj_name = active_project_name()
+    _proj_id   = session.get('project_id')
+    _is_bog    = not _proj_id or str(_proj_id) == '228'
+
+    phases = odoo.get_phases(project_name=_proj_name)
     if phases is None:
-        # Fallback list (the 5 phases we know exist)
+        fallback = [
+            {'name': 'Consultation phase - Initiation'},
+            {'name': 'Consultation phase - Analysis'},
+            {'name': 'Consultation phase - General'},
+            {'name': 'Consultation phase - UX'},
+            {'name': 'Development Phase'},
+        ] if _is_bog else []
         return jsonify({
             'connected': False,
-            'phases': [
-                {'name': 'Consultation phase - Initiation'},
-                {'name': 'Consultation phase - Analysis'},
-                {'name': 'Consultation phase - General'},
-                {'name': 'Consultation phase - UX'},
-                {'name': 'Development Phase'},
-            ],
-            'default': 'Development Phase',
+            'phases': fallback,
+            'default': 'Development Phase' if _is_bog else '',
         })
+
+    # Sort: for non-BOG, put services phases first
+    default_phase = phases[0]['name'] if phases else ''
+    if _is_bog:
+        default_phase = 'Development Phase'
+
     return jsonify({
         'connected': True,
         'phases': [{'id': p['id'], 'name': p['name']} for p in phases],
-        'default': 'Development Phase',
+        'default': default_phase,
+        'is_bog': _is_bog,
     })
 
 def parse_phases_param(args):
