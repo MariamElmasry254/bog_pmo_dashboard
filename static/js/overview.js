@@ -287,6 +287,13 @@ async function loadOverviewKPIs() {
     const d   = await res.json();
     AppState._overviewData = d;
 
+    // Hide BOG-only tabs for non-BOG projects
+    const _isBog = d.is_bog !== false;
+    ['services', 'missing', 'risks', 'roadmap'].forEach(tab => {
+      const btn = document.querySelector(`.exec-tab[data-tab="${tab}"]`);
+      if (btn) btn.style.display = _isBog ? '' : 'none';
+    });
+
     const set = (id, v) => { const el=document.getElementById(id); if(el&&v!==null&&v!==undefined) el.textContent=v; };
 
     // Header
