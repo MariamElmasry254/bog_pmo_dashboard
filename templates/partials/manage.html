@@ -1462,5 +1462,33 @@ async function delPromo(id) {
 // ─── Init ─────────────────────────────────────────────────────────────
 loadTravel();
 </script>
+
+<!-- ═══════════════ PHASE CONFIG TAB ═══════════════ -->
+<div id="tab-phaseconfig" class="tab-panel">
+
+  <!-- Upload section -->
+  <div style="background:#F0F9FF;border:1px solid #BAE6FD;border-radius:10px;padding:16px 20px;margin-bottom:20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+    <div>
+      <div style="font-size:14px;font-weight:700;color:#0C4A6E;">📊 Project Phase Configuration</div>
+      <div style="font-size:12px;color:#0369A1;margin-top:3px;">Upload the Estimated Cost Excel to configure which projects have Services / Support phases</div>
+    </div>
+    <label style="cursor:pointer;margin-left:auto;">
+      <input type="file" accept=".xlsx,.xls" style="display:none;" onchange="uploadProjectConfig(this)">
+      <span style="background:#0EA5E9;color:white;padding:9px 18px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;">📤 Upload Config Excel</span>
+    </label>
+    <div id="configUploadResult" style="font-size:12px;display:none;"></div>
+  </div>
+
+  <!-- Project filter -->
+  <div style="display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap;">
+    <input class="search-inp" id="pcSearch" placeholder="🔍 Filter project…" oninput="renderPhaseConfig()" style="max-width:300px;">
+    <span style="font-size:12px;color:var(--muted);" id="pcCount"></span>
+  </div>
+
+  <!-- Projects list -->
+  <div id="phaseConfigList"></div>
+
+</div>
+
 </body>
 </html>
