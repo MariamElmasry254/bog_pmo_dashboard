@@ -129,7 +129,7 @@ tr:hover td{background:#FAFAFA;}
         <div style="font-size:11px;font-weight:700;color:#065F46;margin-bottom:8px;">✅ Extracted — review before saving:</div>
         <div id="ticketFields" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;margin-bottom:10px;"></div>
         <div style="display:flex;gap:8px;">
-          <button class="btn btn-primary" style="font-size:12px;padding:6px 14px;" onclick="confirmTicket()">Add to Travel</button>
+          <button class="btn btn-primary" id="ticketConfirmBtn" style="font-size:12px;padding:6px 14px;" onclick="confirmTicket()">✅ Add Travel Record</button>
           <button class="btn btn-ghost" style="font-size:12px;padding:6px 14px;" onclick="document.getElementById('ticketPreview').style.display='none'">Discard</button>
         </div>
       </div>
@@ -862,31 +862,78 @@ async function parseTicket(input) {
   const file = input.files[0];
   if (!file) return;
   input.value = '';
-  document.getElementById('ticketMsg').textContent = '⏳ Reading ticket…';
-  document.getElementById('ticketPreview').style.display = 'none';
+  const msgEl     = document.getElementById('ticketMsg');
+  const previewEl = document.getElementById('ticketPreview');
+  msgEl.textContent = '⏳ Reading ticket…';
+  previewEl.style.display = 'none';
 
   const form = new FormData();
   form.append('file', file);
   try {
     const res = await fetch('/api/global/travel/parse-ticket', {method:'POST', body: form});
     const d   = await res.json();
-    if (!d.ok) { document.getElementById('ticketMsg').textContent = '⚠️ ' + (d.error||'Parse failed'); return; }
+
+    if (d.error) {
+      msgEl.innerHTML = '⚠️ ' + d.error;
+      return;
+    }
+
     _parsedTicket = d;
-    document.getElementById('ticketMsg').textContent = '';
-    document.getElementById('ticketFields').innerHTML = [
-      {l:'Name',       v: d.name        || '—'},
-      {l:'Start Date', v: d.start_date  || '—'},
-      {l:'End Date',   v: d.end_date    || '(enter manually if return ticket)'},
-      {l:'Direction',  v: d.direction   || '—'},
-      {l:'Route',      v: (d.from_city && d.to_city) ? d.from_city+' → '+d.to_city : '—'},
-      {l:'Airline',    v: d.airline     || '—'},
+    msgEl.textContent = '';
+
+    const dir = d.direction || 'unknown';
+    const dirLabel = dir === 'outbound' ? '✈️ Outbound (Cairo → KSA)' :
+                     dir === 'return'   ? '🔄 Return (KSA → Cairo)'   : '❓ Unknown direction';
+    const dirColor = dir === 'outbound' ? '#3B82F6' :
+                     dir === 'return'   ? '#10B981' : '#F59E0B';
+
+    // Warning for return with no open record
+    let warningHtml = '';
+    if (d.warning) {
+      warningHtml = `<div style="grid-column:1/-1;background:#FEF3C7;border:1px solid #F59E0B;border-radius:6px;padding:10px 12px;font-size:12px;color:#92400E;">
+        ⚠️ <strong>${d.warning}</strong>
+      </div>`;
+    }
+
+    // For return tickets: show which open record will be updated
+    let matchHtml = '';
+    if (dir === 'return' && d.open_travel_id) {
+      matchHtml = `<div style="grid-column:1/-1;background:#D1FAE5;border:1px solid #10B981;border-radius:6px;padding:10px 12px;font-size:12px;color:#065F46;">
+        ✅ Will update open travel record: <strong>${d.name}</strong> (started <strong>${d.open_travel_start}</strong>) → set end date to <strong>${d.end_date}</strong>
+      </div>`;
+    }
+
+    document.getElementById('ticketFields').innerHTML = warningHtml + matchHtml + [
+      {l:'Passenger',  v: d.name || '—'},
+      {l:'Direction',  v: `<span style="color:${dirColor};font-weight:700;">${dirLabel}</span>`},
+      {l:'Route',      v: (d.from_city && d.to_city) ? `${d.from_city} → ${d.to_city}` : '—'},
+      {l: dir === 'return' ? 'End Date (Return)' : 'Start Date (Departure)',
+         v: (dir === 'return' ? d.end_date : d.start_date) || '—'},
+      {l:'Position (Odoo)', v: d.position || '<span style="color:#9CA3AF;">Not found in Odoo</span>'},
+      {l:'Odoo Code',  v: d.odoo_code || '—'},
     ].map(f => `<div style="background:#fff;padding:8px;border-radius:6px;border:1px solid #D1FAE5;">
       <div style="font-size:9px;font-weight:700;color:#065F46;text-transform:uppercase;letter-spacing:.4px;margin-bottom:2px;">${f.l}</div>
       <div style="font-size:13px;font-weight:600;">${f.v}</div>
     </div>`).join('');
-    document.getElementById('ticketPreview').style.display = 'block';
+
+    // Update confirm button label
+    const confirmBtn = document.getElementById('ticketConfirmBtn');
+    if (confirmBtn) {
+      if (dir === 'return' && d.open_travel_id) {
+        confirmBtn.textContent = '✅ Set Return Date';
+        confirmBtn.style.background = '#10B981';
+      } else if (dir === 'return' && !d.open_travel_id) {
+        confirmBtn.textContent = '⚠️ Add Anyway';
+        confirmBtn.style.background = '#F59E0B';
+      } else {
+        confirmBtn.textContent = '✅ Add Travel Record';
+        confirmBtn.style.background = '';
+      }
+    }
+
+    previewEl.style.display = 'block';
   } catch(e) {
-    document.getElementById('ticketMsg').textContent = '⚠️ ' + e.message;
+    msgEl.textContent = '⚠️ ' + e.message;
   }
 }
 
@@ -894,12 +941,51 @@ async function confirmTicket() {
   if (!_parsedTicket) return;
   const d = _parsedTicket;
   if (!d.name) { alert('Name not extracted — add manually'); return; }
+
+  const dir = d.direction || 'unknown';
+
+  // RETURN ticket + open record found → update end_date only
+  if (dir === 'return' && d.open_travel_id) {
+    if (!d.end_date) { alert('Return date not found in ticket'); return; }
+    const res = await fetch('/api/global/travel/' + d.open_travel_id, {
+      method: 'PUT', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ end_date: d.end_date })
+    });
+    const r = await res.json();
+    if (r.ok) {
+      document.getElementById('ticketPreview').style.display = 'none';
+      document.getElementById('ticketMsg').textContent = '✅ Return date set for ' + d.name + ': ' + d.end_date;
+      _parsedTicket = null;
+      loadTravel();
+    } else alert('Error: ' + (r.error || 'Unknown'));
+    return;
+  }
+
+  // RETURN ticket but no open record → warn
+  if (dir === 'return' && !d.open_travel_id) {
+    if (!confirm('⚠️ No open outbound record found for ' + d.name + '.
+Add outbound (departure) ticket first.
+
+Add as new record anyway?')) return;
+  }
+
+  // OUTBOUND or unknown → create new travel record
+  if (!d.start_date && dir !== 'return') {
+    alert('Departure date not found in ticket — add manually');
+    return;
+  }
+
   const res = await fetch('/api/global/travel', {
-    method:'POST', headers:{'Content-Type':'application/json'},
+    method: 'POST', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({
-      name: d.name, start_date: d.start_date, end_date: d.end_date||'',
-      notes: [d.airline, d.flight, d.from_city, d.to_city].filter(Boolean).join(' '),
-      status: 'confirmed'
+      name:               d.name,
+      start_date:         d.start_date || d.end_date || '',
+      end_date:           dir === 'return' ? (d.end_date || '') : '',
+      position:           d.position || '',
+      notes:              [d.from_city, d.to_city].filter(Boolean).join(' → '),
+      odoo_employee_id:   d.odoo_id   || null,
+      odoo_employee_code: d.odoo_code || '',
+      odoo_employee_name: d.name,
     })
   });
   const r = await res.json();
@@ -910,7 +996,7 @@ async function confirmTicket() {
     loadTravel();
   } else if (r.error === 'duplicate') {
     alert('Already exists: ' + d.name + ' on ' + d.start_date);
-  } else alert('Error: ' + (r.error||'Unknown'));
+  } else alert('Error: ' + (r.error || 'Unknown'));
 }
 
 // ─── Promotions: load ─────────────────────────────────────────────────
