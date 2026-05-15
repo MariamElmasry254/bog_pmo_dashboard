@@ -4702,16 +4702,21 @@ def api_effort_all_months(phase_key):
         emp_promos = []
         for pr in all_promotions:
             matched_pr = False
-            # Code match
-            if emp_code and pr.get('odoo_employee_code'):
+            # 1. Odoo employee ID match (most reliable)
+            if _emp_odoo_id and pr.get('odoo_employee_id'):
+                try:
+                    matched_pr = int(pr['odoo_employee_id']) == int(_emp_odoo_id)
+                except: pass
+            # 2. Code match (E259 etc)
+            if not matched_pr and emp_code and pr.get('odoo_employee_code'):
                 matched_pr = emp_code.upper() == str(pr['odoo_employee_code']).upper().strip()
-            # Name match
+            # 3. Name match (fuzzy)
             if not matched_pr:
                 pn = (pr.get('name') or '').strip().lower()
                 matched_pr = (pn == en_clean or pn in en_clean or en_clean in pn)
             if matched_pr:
                 emp_promos.append(pr)
-        emp_promos.sort(key=lambda x: x.get('promotion_date', ''))
+        emp_promos.sort(key=lambda x: x.get('promotion_date') or x.get('effective_date') or '')
 
         def _date_is_onsite(date_str):
             for period in emp_travel_periods:
