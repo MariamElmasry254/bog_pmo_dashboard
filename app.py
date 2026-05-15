@@ -1906,6 +1906,69 @@ def api_estimated_rows_import_excel():
                     'sheet_used': ws.title})
 
 
+@app.route('/debug/phases-for-project')
+def debug_phases_for_project():
+    """Debug: show all phases and task.types for current project."""
+    try:
+        if not odoo.uid: odoo.connect()
+        _proj_name = active_project_name()
+        projects = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.project', 'search_read',
+            [[('name', 'ilike', _proj_name)]],
+            {'fields': ['id', 'name'], 'limit': 5}
+        )
+        if not projects:
+            return jsonify({'error': f'Project not found: {_proj_name}'})
+        pid = projects[0]['id']
+
+        # Try project.phase with different domain options
+        phases_by_project = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.phase', 'search_read',
+            [[('project_id', '=', pid)]],
+            {'fields': ['id', 'name', 'project_id'], 'limit': 50}
+        )
+        phases_by_project_in = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.phase', 'search_read',
+            [[('project_id', 'in', [pid])]],
+            {'fields': ['id', 'name', 'project_id'], 'limit': 50}
+        )
+        # Get all phases (no filter) to see what exists
+        all_phases_sample = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.phase', 'search_read',
+            [[]],
+            {'fields': ['id', 'name', 'project_id'], 'limit': 20}
+        )
+        # Task types (stages)
+        task_types = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task.type', 'search_read',
+            [[('project_ids', 'in', [pid])]],
+            {'fields': ['id', 'name'], 'limit': 50}
+        )
+        # Sample tasks with phase_id
+        tasks_sample = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [[('project_id', '=', pid)]],
+            {'fields': ['id', 'name', 'phase_id', 'stage_id'], 'limit': 10}
+        )
+        return jsonify({
+            'project': projects[0],
+            'phases_by_project_eq': phases_by_project,
+            'phases_by_project_in': phases_by_project_in,
+            'all_phases_sample': all_phases_sample,
+            'task_types_stages': task_types,
+            'tasks_sample': tasks_sample,
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'trace': traceback.format_exc()})
+
+
 @app.route('/debug/projects-raw')
 def debug_projects_raw():
     """Debug: show raw Odoo project data to verify fields."""
