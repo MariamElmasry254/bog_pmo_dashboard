@@ -161,6 +161,7 @@ tr:hover td{background:#FAFAFA;}
       <input type="date" class="filter-sel" id="travelDateFrom" onchange="loadTravel()" title="Travel from" style="min-width:130px;color:var(--muted);">
       <input type="date" class="filter-sel" id="travelDateTo" onchange="loadTravel()" title="Travel to" style="min-width:130px;color:var(--muted);">
       <button class="btn btn-ghost" onclick="autoLink('travel')">⚡ Auto-Link All</button>
+      <button class="btn btn-ghost" onclick="fetchCodes()" title="Get E/R/T codes from Odoo timesheets">🔢 Fetch Codes</button>
       <button class="btn btn-ghost" onclick="toggleForm('travelForm')">+ Add Manually</button>
     </div>
     <div class="result-bar" id="autoLinkTravelResult"></div>
@@ -557,6 +558,24 @@ async function delTravel(id) {
 }
 
 // ─── Auto-Link ────────────────────────────────────────────────────────
+async function fetchCodes() {
+  const resId = 'autoLinkTravelResult';
+  showResult(resId, 'info', '⏳ Fetching codes from Odoo timesheets…');
+  try {
+    const res = await fetch('/api/global/travel/fetch-codes', {method:'POST'});
+    const d   = await res.json();
+    if (d.ok) {
+      showResult(resId, 'ok',
+        `✅ Found ${d.codes_found} codes · Updated ${d.travel_updated} travel · ${d.promos_updated} promotions`);
+      loadTravel();
+    } else {
+      showResult(resId, 'err', '⚠️ ' + (d.error||'Error'));
+    }
+  } catch(e) {
+    showResult(resId, 'err', '⚠️ ' + e.message);
+  }
+}
+
 async function autoLink(type) {
   const resId = type === 'travel' ? 'autoLinkTravelResult' : 'autoLinkPromoResult';
   showResult(resId, 'info', '⏳ Matching with Odoo employees…');
