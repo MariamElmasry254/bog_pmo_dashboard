@@ -807,15 +807,21 @@ def api_parse_ticket():
     result = {}
 
     # ── Passenger Name ──
+    # Handles: "MR . Kareem Elsafy - ADT", "MR. Name - ADT", "MRS Name/ADT"
     for pat in [
-        r'Passenger(?:\s+Name)?\s*[:\-]\s*(?:MR\.?\s+|MRS\.?\s+|MS\.?\s+|DR\.?\s+)?([A-Za-z][A-Za-z ]{2,35}?)(?:\s*[-/]\s*ADT|\n|$)',
-        r'(?:MR|MRS|MS|DR)\.?\s+([A-Za-z][A-Za-z\s]{2,35}?)(?:\s*[-/]\s*ADT|\n|$)',
-        r'Name\s*:\s*(?:MR\.?\s+|MRS\.?\s+|MS\.?\s+)?([A-Za-z][A-Za-z ]{2,35}?)\n',
+        r'(?:MR|MRS|MS|DR)\s*\.?\s+([A-Za-z][A-Za-z ]{2,35}?)\s*[-/]\s*ADT',
+        r'Passenger\s+Name\s*[:\-]\s*(?:MR|MRS|MS|DR)?\s*\.?\s*([A-Za-z][A-Za-z ]{2,35}?)\s*[-/]\s*ADT',
+        r'Name\s*[:\-]\s*(?:MR|MRS|MS|DR)?\s*\.?\s*([A-Za-z][A-Za-z ]{2,35}?)\s*[-/]\s*ADT',
+        r'Passenger\s+Name\s*[:\-]\s*([A-Za-z][A-Za-z ]{2,35}?)(?:\n|$)',
     ]:
         m = re.search(pat, text, re.IGNORECASE)
         if m:
-            result['name'] = m.group(1).strip().title()
-            break
+            name = m.group(1).strip().title()
+            # Clean up any trailing noise
+            name = re.sub(r'\s*(ADT|ADU|CHD|INF)\s*$', '', name, flags=re.IGNORECASE).strip()
+            if len(name) > 3:
+                result['name'] = name
+                break
 
     # ── Dates (all formats) ──
     mo_map = {'jan':'01','feb':'02','mar':'03','apr':'04','may':'05','jun':'06',
