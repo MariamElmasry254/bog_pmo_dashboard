@@ -766,11 +766,117 @@ async function doLink(odooId, odooName, odooCode) {
     if (d.ok) {
       if (linkType === 'travel') loadTravel();
       else loadPromos();
+    } else if (d.conflict && d.conflicts) {
+      // Show conflict dialog
+      showConflictDialog(d.conflicts, odooId, odooName, odooCode, linkId, linkType);
     } else {
       alert('Error: ' + (d.error||'Unknown'));
     }
   } catch(e) {
     alert('Network error: ' + e.message);
+  }
+}
+
+function showConflictDialog(conflicts, odooId, odooName, odooCode, linkId, linkType) {
+  const fmtDate = d => d || '—';
+  const rows = conflicts.map(c => `
+    <tr style="font-size:12px;">
+      <td style="padding:6px 8px;font-weight:600;">${c.name}</td>
+      <td style="padding:6px 8px;color:var(--muted);">${c.position||'—'}</td>
+      <td style="padding:6px 8px;font-family:monospace;">${fmtDate(c.start_date)}</td>
+      <td style="padding:6px 8px;font-family:monospace;">${fmtDate(c.end_date)||'<span style="color:var(--amber)">open</span>'}</td>
+      <td style="padding:6px 8px;">
+        <button onclick="deleteConflictRecord(${c.id},'${linkId}','${linkType}',${odooId},'${odooName}','${odooCode}',this)"
+          style="background:#FEE2E2;color:#DC2626;border:1px solid #FECACA;border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;font-weight:600;">
+          🗑 Delete
+        </button>
+      </td>
+    </tr>`).join('');
+
+  // Create inline conflict banner above the table
+  const banner = document.createElement('div');
+  banner.id = 'conflictBanner';
+  banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#FEF3C7;border-bottom:2px solid #F59E0B;padding:16px 24px;box-shadow:0 4px 12px rgba(0,0,0,.15);';
+  banner.innerHTML = `
+    <div style="max-width:900px;margin:0 auto;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;">
+        <div>
+          <div style="font-size:14px;font-weight:700;color:#92400E;margin-bottom:4px;">
+            ⚠️ This employee already has ${conflicts.length} overlapping travel record${conflicts.length>1?'s':''}.
+          </div>
+          <div style="font-size:12px;color:#92400E;">
+            Delete the duplicate record(s) below, then the link will be applied automatically.
+          </div>
+        </div>
+        <button onclick="dismissConflict()" style="background:none;border:none;cursor:pointer;font-size:20px;color:#92400E;padding:0;line-height:1;">×</button>
+      </div>
+      <table style="width:100%;margin-top:10px;border-collapse:collapse;background:white;border-radius:6px;overflow:hidden;">
+        <thead>
+          <tr style="background:#FEF9C3;font-size:10px;font-weight:700;color:#92400E;text-transform:uppercase;letter-spacing:.4px;">
+            <th style="padding:6px 8px;text-align:left;">Name</th>
+            <th style="padding:6px 8px;text-align:left;">Position</th>
+            <th style="padding:6px 8px;text-align:left;">Start</th>
+            <th style="padding:6px 8px;text-align:left;">End</th>
+            <th style="padding:6px 8px;"></th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div style="margin-top:8px;display:flex;gap:8px;">
+        <button onclick="forceLink(${odooId},'${odooName}','${odooCode}',${linkId},'${linkType}')"
+          style="background:#3B82F6;color:white;border:none;border-radius:6px;padding:6px 16px;font-size:12px;font-weight:600;cursor:pointer;">
+          Link Anyway (keep duplicates)
+        </button>
+        <button onclick="dismissConflict()" style="background:white;border:1px solid #D1D5DB;border-radius:6px;padding:6px 16px;font-size:12px;cursor:pointer;">
+          Cancel
+        </button>
+      </div>
+    </div>`;
+  document.body.appendChild(banner);
+  // Store pending link info
+  window._pendingLink = {odooId, odooName, odooCode, linkId, linkType};
+}
+
+function dismissConflict() {
+  const b = document.getElementById('conflictBanner');
+  if (b) b.remove();
+  window._pendingLink = null;
+}
+
+async function deleteConflictRecord(recordId, linkId, linkType, odooId, odooName, odooCode, btn) {
+  btn.disabled = true;
+  btn.textContent = '⏳';
+  try {
+    await fetch('/api/global/travel/' + recordId, {method: 'DELETE'});
+    const row = btn.closest('tr');
+    if (row) row.remove();
+    // Check if no more conflicts
+    const banner = document.getElementById('conflictBanner');
+    const remaining = banner ? banner.querySelectorAll('tbody tr').length : 0;
+    if (remaining === 0) {
+      // All conflicts deleted — now do the link with force
+      dismissConflict();
+      await forceLink(odooId, odooName, odooCode, linkId, linkType);
+    }
+  } catch(e) {
+    btn.disabled = false;
+    btn.textContent = '🗑 Delete';
+    alert('Error: ' + e.message);
+  }
+}
+
+async function forceLink(odooId, odooName, odooCode, linkId, linkType) {
+  try {
+    const res = await fetch(`/api/global/${linkType}/${linkId}`, {
+      method: 'PUT', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({odoo_employee_id: odooId, odoo_employee_name: odooName, odoo_employee_code: odooCode, force: true})
+    });
+    const d = await res.json();
+    dismissConflict();
+    if (linkType === 'travel') loadTravel();
+    else loadPromos();
+  } catch(e) {
+    alert('Error: ' + e.message);
   }
 }
 
