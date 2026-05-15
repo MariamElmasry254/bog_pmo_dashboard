@@ -1983,14 +1983,15 @@ def api_project_config_comment():
     if request.method == 'GET':
         proj  = request.args.get('project', '')
         phase = request.args.get('phase', '')
-        comment = db.get_override('project_config_comments', proj, phase) or ''
+        saved = db.get_override('project_config_comments', proj, phase) or {}
+        comment = saved.get('text', '') if isinstance(saved, dict) else str(saved or '')
         return jsonify({'ok': True, 'comment': comment})
     else:
         body  = request.json or {}
         proj  = body.get('project', '')
         phase = body.get('phase', '')
         val   = body.get('comment', '')
-        db.set_override('project_config_comments', proj, phase, val)
+        db.set_override('project_config_comments', proj, phase, {'text': val})
         return jsonify({'ok': True})
 
 
