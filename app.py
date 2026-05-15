@@ -5565,7 +5565,7 @@ def api_effort_all_months(phase_key):
                 extra = odoo.models.execute_kw(
                     ODOO_DB, odoo.uid, ODOO_PASSWORD,
                     'project.phase', 'search_read',
-                    [[('name', 'ilike', pname.strip())]],
+                    [[('name', 'ilike', pname.strip()), ('project_id', '=', project_id)]],
                     {'fields': ['id', 'name'], 'limit': 1}
                 )
                 if extra:
@@ -5626,8 +5626,9 @@ def api_effort_all_months(phase_key):
             {'fields': ['employee_id', 'date', 'unit_amount'], 'limit': 100000}
         )
     except Exception as e:
-        logger.error(f"all-months effort fetch failed: {e}")
-        return jsonify({'error': str(e), 'employees': [], 'months': []}), 500
+        import traceback
+        logger.error(f"all-months effort fetch failed: {e}\n{traceback.format_exc()}")
+        return jsonify({'error': str(e), 'trace': traceback.format_exc(), 'employees': [], 'months': []}), 500
 
     if not timesheets:
         return jsonify({'employees': [], 'months': [], 'project_start_month': None})
