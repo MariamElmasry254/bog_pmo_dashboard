@@ -206,12 +206,34 @@ class OdooClient:
                 phase_names = [p for p in phase_names if p]  # remove empties
                 if phase_names:
                     try:
+                        # Try project.phase first (BOG), then project.task.type (non-BOG)
                         phases = self.models.execute_kw(
                             ODOO_DB, self.uid, ODOO_PASSWORD,
                             'project.phase', 'search_read',
                             [[('name', 'in', phase_names)]],
                             {'fields': ['id'], 'limit': 50}
                         )
+                        # If no project.phase found, try task.type and filter by stage_id
+                        if not phases:
+                            task_types = self.models.execute_kw(
+                                ODOO_DB, self.uid, ODOO_PASSWORD,
+                                'project.task.type', 'search_read',
+                                [[('name', 'in', phase_names)]],
+                                {'fields': ['id'], 'limit': 50}
+                            )
+                            if task_types:
+                                type_ids = [t['id'] for t in task_types]
+                                type_tasks = self.models.execute_kw(
+                                    ODOO_DB, self.uid, ODOO_PASSWORD,
+                                    'project.task', 'search_read',
+                                    [[('stage_id', 'in', type_ids),
+                                      ('project_id.name', 'ilike', project_name)]],
+                                    {'fields': ['id'], 'limit': 5000}
+                                )
+                                if type_tasks:
+                                    type_task_ids = [t['id'] for t in type_tasks]
+                                    domain.append(('task_id', 'in', type_task_ids))
+                                phases = []  # skip the phase_ids block below
                         phase_ids = [p['id'] for p in phases]
                         if phase_ids:
                             # Get ALL tasks with phase_id in our phases (not just parent tasks)
@@ -3557,32 +3579,45 @@ def api_phases():
     _proj_id   = session.get('project_id')
     _is_bog    = not _proj_id or str(_proj_id) == '228'
 
-    phases = odoo.get_phases(project_name=_proj_name)
-    if phases is None:
-        fallback = [
-            {'name': 'Consultation phase - Initiation'},
-            {'name': 'Consultation phase - Analysis'},
-            {'name': 'Consultation phase - General'},
-            {'name': 'Consultation phase - UX'},
-            {'name': 'Development Phase'},
-        ] if _is_bog else []
-        return jsonify({
-            'connected': False,
-            'phases': fallback,
-            'default': 'Development Phase' if _is_bog else '',
-        })
-
-    # Sort: for non-BOG, put services phases first
-    default_phase = phases[0]['name'] if phases else ''
     if _is_bog:
-        default_phase = 'Development Phase'
-
-    return jsonify({
-        'connected': True,
-        'phases': [{'id': p['id'], 'name': p['name']} for p in phases],
-        'default': default_phase,
-        'is_bog': _is_bog,
-    })
+        # BOG: use project.phase model
+        phases = odoo.get_phases(project_name=_proj_name)
+        if phases is None:
+            return jsonify({'connected': False, 'is_bog': True, 'phases': [
+                {'name': 'Consultation phase - Initiation'},
+                {'name': 'Consultation phase - Analysis'},
+                {'name': 'Consultation phase - General'},
+                {'name': 'Consultation phase - UX'},
+                {'name': 'Development Phase'},
+            ], 'default': 'Development Phase'})
+        return jsonify({'connected': True, 'is_bog': True,
+                        'phases': [{'id': p['id'], 'name': p['name']} for p in phases],
+                        'default': 'Development Phase'})
+    else:
+        # Non-BOG: use project.task.type (Kanban stages) — more reliable
+        try:
+            if not odoo.uid: odoo.connect()
+            projects = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.project', 'search_read',
+                [[('name', 'ilike', _proj_name)]],
+                {'fields': ['id', 'name'], 'limit': 3}
+            )
+            if not projects:
+                return jsonify({'connected': True, 'is_bog': False, 'phases': [], 'default': ''})
+            pid = projects[0]['id']
+            task_types = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.task.type', 'search_read',
+                [[('project_ids', 'in', [pid])]],
+                {'fields': ['id', 'name'], 'limit': 50}
+            )
+            default = task_types[0]['name'] if task_types else ''
+            return jsonify({'connected': True, 'is_bog': False,
+                            'phases': [{'id': t['id'], 'name': t['name']} for t in task_types],
+                            'default': default})
+        except Exception as e:
+            return jsonify({'connected': False, 'is_bog': False, 'phases': [], 'default': '', 'error': str(e)})
 
 def parse_phases_param(args):
     """Parse phases query param. Accepts 'phases=A,B,C' or 'phases=A&phases=B'."""
