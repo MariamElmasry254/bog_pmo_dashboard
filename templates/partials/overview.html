@@ -66,6 +66,10 @@
           <span style="font-size:10px;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:.3px;" id="labelDevCost">Development</span>
           <span style="font-size:12px;font-weight:600;" id="kpiDevCost">—</span>
         </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;" id="rowSupCost" style="display:none;">
+          <span style="font-size:10px;font-weight:600;color:var(--amber);text-transform:uppercase;letter-spacing:.3px;" id="labelSupCost">Support</span>
+          <span style="font-size:12px;font-weight:600;" id="kpiSupCost">—</span>
+        </div>
       </div>
     </div>
 
@@ -82,12 +86,16 @@
           <span style="font-size:10px;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:.3px;" id="labelDevEAC">Development</span>
           <span style="font-size:12px;font-weight:600;" id="kpiDevEAC">—</span>
         </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;" id="rowSupEAC" style="display:none;">
+          <span style="font-size:10px;font-weight:600;color:var(--amber);text-transform:uppercase;letter-spacing:.3px;" id="labelSupEAC">Support</span>
+          <span style="font-size:12px;font-weight:600;" id="kpiSupEAC">—</span>
+        </div>
       </div>
     </div>
   </div>
 
   <!-- Progress row -->
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:24px;">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:24px;" id="progressRow">
     <div style="background:var(--bg-card);border:1px solid var(--border);border-top:3px solid var(--blue);border-radius:10px;padding:16px 20px;">
       <div style="font-size:10px;font-weight:700;color:var(--blue);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;" id="labelConProgress">Consultation — Progress</div>
       <div style="display:flex;align-items:baseline;gap:4px;margin-bottom:6px;">
