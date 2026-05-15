@@ -85,26 +85,50 @@ window.loadVariance = async function() {
   const isBog = AppState._overviewData?.is_bog !== false;  // default true if not loaded yet
 
   if (!isBog) {
-    // Non-BOG: same structure as BOG but no variance.xlsx — all data from DB + Odoo
-    AppState.varianceData = { tabs: {
-      development: { label:'Development', sections:[
-        {key:'budget',         label:'Budget',        data:{approved:{},final:{},changes:[]}},
-        {key:'profitability',  label:'Profitability',  data:{months:[]}},
-        {key:'effort',         label:'Current Effort', data:{}},
-        {key:'estimated',      label:'Estimated Cost', data:{positions:[],columns:[]}},
-      ]},
-      consultation: { label:'Consultation', sections:[
-        {key:'budget',         label:'Budget',        data:{approved:{},final:{},changes:[]}},
-        {key:'profitability',  label:'Profitability',  data:{months:[]}},
-        {key:'effort',         label:'Current Effort', data:{}},
-        {key:'estimated',      label:'Estimated Cost', data:{positions:[],columns:[]}},
-      ]},
-      support: { label:'Support', sections:[
-        {key:'budget',         label:'Budget',        data:{approved:{},final:{},changes:[]}},
-        {key:'estimated',      label:'Estimated Cost', data:{positions:[],columns:[]}},
-      ]},
-    }};
-    switchSubTab('development');
+    // Non-BOG: Services + Support tabs (auto-detect phases from Odoo)
+    // Check which tabs exist for this project
+    fetch('/api/project-phases-available').then(r=>r.json()).then(d => {
+      const hasSupport = d.has_support !== false;
+      const tabs = {
+        services: { label:'Services', sections:[
+          {key:'budget',        label:'Budget',        data:{approved:{},final:{},changes:[]}},
+          {key:'profitability', label:'Profitability',  data:{months:[]}},
+          {key:'effort',        label:'Current Effort', data:{}},
+          {key:'estimated',     label:'Estimated Cost', data:{positions:[],columns:[]}},
+        ]},
+      };
+      if (hasSupport) {
+        tabs.support = { label:'Support', sections:[
+          {key:'budget',        label:'Budget',        data:{approved:{},final:{},changes:[]}},
+          {key:'profitability', label:'Profitability',  data:{months:[]}},
+          {key:'effort',        label:'Current Effort', data:{}},
+          {key:'estimated',     label:'Estimated Cost', data:{positions:[],columns:[]}},
+        ]};
+      }
+      AppState.varianceData = { tabs };
+      // Update sub-tab buttons
+      const subTabBar = document.querySelector('#variance .sub-tabs-bar, .sub-tabs-bar');
+      if (subTabBar) {
+        subTabBar.innerHTML = `
+          <button class="sub-tab active" data-subtab="services">Services</button>
+          ${hasSupport ? '<button class="sub-tab" data-subtab="support">Support</button>' : ''}`;
+        subTabBar.querySelectorAll('.sub-tab').forEach(b => {
+          b.addEventListener('click', () => switchSubTab(b.dataset.subtab));
+        });
+      }
+      switchSubTab('services');
+    }).catch(() => {
+      // Fallback: just show services
+      AppState.varianceData = { tabs: {
+        services: { label:'Services', sections:[
+          {key:'budget',        label:'Budget',        data:{approved:{},final:{},changes:[]}},
+          {key:'profitability', label:'Profitability',  data:{months:[]}},
+          {key:'effort',        label:'Current Effort', data:{}},
+          {key:'estimated',     label:'Estimated Cost', data:{positions:[],columns:[]}},
+        ]},
+      }};
+      switchSubTab('services');
+    });
     return;
   }
 
