@@ -1771,17 +1771,28 @@ def api_project_phases_available():
             'source':       'excel_config',
         })
 
-    # Fallback: check Odoo phases directly
+    # Fallback: check Odoo project.phase records directly
     try:
         pid = get_project_odoo_id(_proj_name)
         if not pid:
             return jsonify({'has_services': True, 'has_support': False})
-        support_phases = auto_detect_phases_for_project(pid, 'support')
+        # Get all project.phase for this project
+        all_phases = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.phase', 'search_read',
+            [[('project_id', '=', pid)]],
+            {'fields': ['id', 'name'], 'limit': 100}
+        )
+        support_phases = [p for p in all_phases
+                          if any(kw in p['name'].lower() for kw in SUPPORT_KWS)]
+        service_phases = [p for p in all_phases
+                          if not any(kw in p['name'].lower() for kw in SUPPORT_KWS)]
         return jsonify({
-            'is_bog':       False,
-            'has_services': True,
-            'has_support':  len(support_phases) > 0,
-            'source':       'odoo_detect',
+            'is_bog':        False,
+            'has_services':  len(service_phases) > 0 or len(all_phases) == 0,
+            'has_support':   len(support_phases) > 0,
+            'source':        'odoo_phases',
+            'all_phases':    [p['name'] for p in all_phases],
         })
     except Exception as e:
         return jsonify({'has_services': True, 'has_support': False, 'error': str(e)})
@@ -2617,7 +2628,7 @@ def api_overview_analysis(phase_group):
     if employees_param:
         employees_filter = [e.strip() for e in employees_param.split(',') if e.strip()]
 
-    # For non-BOG: auto-detect phases from Odoo task types if empty
+    # For non-BOG: get project phases from Odoo project.phase filtered by services/support keywords
     _proj_odoo_id = None
     if not phase_names and not _is_bog:
         if not odoo.uid: odoo.connect()
@@ -2630,13 +2641,31 @@ def api_overview_analysis(phase_group):
             )
             if projects:
                 _proj_odoo_id = projects[0]['id']
-                phase_names = auto_detect_phases_for_project(_proj_odoo_id, phase_group)
-        except Exception: pass
+                # Get ALL project.phase records for this project
+                all_proj_phases = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'project.phase', 'search_read',
+                    [[('project_id', '=', _proj_odoo_id)]],
+                    {'fields': ['id', 'name'], 'limit': 100}
+                )
+                if all_proj_phases:
+                    # Split by support keywords
+                    if phase_group == 'support':
+                        phase_names = [p['name'] for p in all_proj_phases
+                                       if any(kw in p['name'].lower() for kw in SUPPORT_KWS)]
+                    else:  # services = all except support
+                        phase_names = [p['name'] for p in all_proj_phases
+                                       if not any(kw in p['name'].lower() for kw in SUPPORT_KWS)]
+                else:
+                    # No project.phase — use ALL tasks (no phase filter)
+                    phase_names = ['__all__']
+        except Exception as _e:
+            logger.warning(f"Phase detect failed: {_e}")
 
     if not phase_names and not _is_bog:
         return jsonify({'tasks': [], 'connected': True, 'phases_active': [],
                         'phases_available': [], 'employees_available': [], 'stages_used': [],
-                        'note': f'No phases found for {phase_group}'})
+                        'note': f'No {phase_group} phases found for this project'})
 
     if not phase_names:
         return jsonify({'tasks': [], 'error': f'No phases for {phase_group}'})
@@ -2657,34 +2686,31 @@ def api_overview_analysis(phase_group):
         phase_ids = [p['id'] for p in phases]
         phase_id_to_name = {p['id']: p['name'] for p in phases}
 
-        # Non-BOG: tasks have no phase_id, use ALL project tasks
-        # Services/Support split is Excel-config-based, not Odoo-phase-based
-        use_stage_domain = False
-        if not phase_ids and not _is_bog:
+        # Handle __all__ sentinel (no project.phase records — use all project tasks)
+        use_all_tasks = '__all__' in phase_names
+        if use_all_tasks:
+            phase_ids = []
+            phase_id_to_name = {}
             if not _proj_odoo_id:
                 _proj_odoo_id = get_project_odoo_id(_proj_name)
-            if _proj_odoo_id:
-                use_stage_domain = True  # signal to use project_id domain
-                phase_id_to_name = {}   # no phase names for non-BOG
+        
+        if not phase_ids and not _is_bog and not use_all_tasks:
+            if not _proj_odoo_id:
+                _proj_odoo_id = get_project_odoo_id(_proj_name)
 
-        if not phase_ids and not _is_bog and not _proj_odoo_id:
-            return jsonify({'tasks': [], 'connected': True,
-                            'phases_active': [], 'phases_available': [],
-                            'employees_available': [], 'stages_used': [],
-                            'note': 'Project not found in Odoo'})
-
-        if not phase_ids and not use_stage_domain:
-            return jsonify({'tasks': [], 'error': f'No phases for {phase_group}'})
-
-        # Step 1: Get parent tasks — by phase (BOG) or all project tasks (non-BOG)
-        if use_stage_domain:
-            # Non-BOG: all tasks in project, no phase filter
+        # Step 1: Get parent tasks — by phase_id or all project tasks
+        if use_all_tasks and _proj_odoo_id:
             project_domain = [('project_id', '=', _proj_odoo_id),
-                               ('parent_id', '=', False)]  # parent tasks only first
-        else:
+                               ('parent_id', '=', False)]
+        elif phase_ids:
             project_domain = [('phase_id', 'in', phase_ids)]
             if _proj_name:
                 project_domain.append(('project_id.name', 'ilike', _proj_name))
+        elif _proj_odoo_id:
+            project_domain = [('project_id', '=', _proj_odoo_id),
+                               ('parent_id', '=', False)]
+        else:
+            return jsonify({'tasks': [], 'error': f'No phases for {phase_group}'})
 
         # Try to detect available assignment fields in this Odoo version.
         # Common multi-assignee field names:
@@ -5499,14 +5525,32 @@ def api_effort_all_months(phase_key):
             return jsonify({'employees': [], 'months': []})
         project_id = projects[0]['id']
 
-        # BOG only: resolve phase names
+        # BOG: resolve phase names from mapping
         if _is_bog_eff and not phase_names:
             phase_names = auto_detect_phases_for_project(project_id, phase_key)
-            logger.info(f"Auto-detected phases for {_proj_name}/{phase_key}: {phase_names}")
 
         if _is_bog_eff and not phase_names:
             return jsonify({'employees': [], 'months': [], 'total_employees': 0,
                             'note': f'No phases found for {phase_key} in this project'})
+
+        # Non-BOG: get project.phase records split by support keywords
+        use_all_tasks_eff = False
+        if not _is_bog_eff:
+            all_proj_phases = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.phase', 'search_read',
+                [[('project_id', '=', project_id)]],
+                {'fields': ['id', 'name'], 'limit': 100}
+            )
+            if all_proj_phases:
+                if phase_key == 'support':
+                    phase_names = [p['name'] for p in all_proj_phases
+                                   if any(kw in p['name'].lower() for kw in SUPPORT_KWS)]
+                else:
+                    phase_names = [p['name'] for p in all_proj_phases
+                                   if not any(kw in p['name'].lower() for kw in SUPPORT_KWS)]
+            else:
+                use_all_tasks_eff = True  # no phases → all tasks
 
         # Find phases: try project.phase first (BOG), then project.task.type (non-BOG stages)
         phases = odoo.models.execute_kw(
@@ -5545,10 +5589,18 @@ def api_effort_all_months(phase_key):
                 ph = t.get('phase_id')
                 if ph and isinstance(ph, list) and ph[0] in phase_ids:
                     relevant_ids.add(t['id'])
+        elif not _is_bog_eff and phase_ids:
+            # Non-BOG with phases: filter by phase_id
+            relevant_ids = set()
+            for t in all_proj_tasks:
+                ph = t.get('phase_id')
+                if ph and isinstance(ph, list) and ph[0] in phase_ids:
+                    relevant_ids.add(t['id'])
+            logger.info(f"Non-BOG effort {phase_key}: {len(relevant_ids)} tasks in {len(phase_ids)} phases")
         else:
-            # Non-BOG: use ALL project tasks (split is Excel-config-based, not Odoo-phase-based)
+            # Non-BOG with no phases: all project tasks
             relevant_ids = {t['id'] for t in all_proj_tasks}
-            logger.info(f"Non-BOG effort {phase_key}: using all {len(relevant_ids)} project tasks")
+            logger.info(f"Non-BOG effort {phase_key}: using all {len(relevant_ids)} tasks (no phases)")
 
         # Walk parent chains to include sub-tasks of phase tasks
         for t in all_proj_tasks:
