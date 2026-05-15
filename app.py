@@ -1787,15 +1787,6 @@ def api_project_phases_available():
         return jsonify({'has_services': True, 'has_support': False, 'error': str(e)})
 
 
-@app.route('/api/estimated-summary', methods=['GET'])
-def api_get_estimated_summary():
-    """Get saved estimated cost summary for current project + phase."""
-    phase = request.args.get('phase', 'development')
-    proj_id = session.get('project_id') or ''
-    summary = db.get_override('estimated_summary', str(proj_id), phase)
-    return jsonify({'ok': True, 'summary': summary or {}})
-
-
 @app.route('/api/estimated-rows/import-excel', methods=['POST'])
 def api_estimated_rows_import_excel():
     """Import Estimated Cost rows from Excel sheet.
@@ -1977,6 +1968,51 @@ def api_upload_project_config_excel():
 
     return jsonify({'ok': True, 'projects_found': len(projects),
                     'projects': projects})
+
+
+@app.route('/api/project-config/all', methods=['GET'])
+def api_get_all_project_configs():
+    """Get all saved project configs."""
+    configs = db.get_override('project_config', 'global', 'phase_configs') or {}
+    return jsonify({'ok': True, 'configs': configs})
+
+
+@app.route('/api/project-config/comment', methods=['GET', 'POST'])
+def api_project_config_comment():
+    """Get or save a comment for a project+phase."""
+    if request.method == 'GET':
+        proj  = request.args.get('project', '')
+        phase = request.args.get('phase', '')
+        comment = db.get_override('project_config_comments', proj, phase) or ''
+        return jsonify({'ok': True, 'comment': comment})
+    else:
+        body  = request.json or {}
+        proj  = body.get('project', '')
+        phase = body.get('phase', '')
+        val   = body.get('comment', '')
+        db.set_override('project_config_comments', proj, phase, val)
+        return jsonify({'ok': True})
+
+
+@app.route('/api/estimated-summary', methods=['GET'])
+def api_get_estimated_summary_v2():
+    """Get saved estimated cost summary — supports optional project_name param."""
+    phase = request.args.get('phase', 'development')
+    proj_name = request.args.get('project_name', '')
+    if proj_name:
+        # Look up project_id by name match
+        configs = db.get_override('project_config', 'global', 'phase_configs') or {}
+        matched_id = None
+        for k in configs:
+            if k.lower().strip() in proj_name.lower() or proj_name.lower() in k.lower():
+                matched_id = k
+                break
+        if matched_id:
+            summary = db.get_override('estimated_summary', matched_id, phase)
+            return jsonify({'ok': True, 'summary': summary or {}})
+    proj_id = session.get('project_id') or ''
+    summary = db.get_override('estimated_summary', str(proj_id), phase)
+    return jsonify({'ok': True, 'summary': summary or {}})
 
 
 @app.route('/api/project-config', methods=['GET'])
@@ -2620,45 +2656,30 @@ def api_overview_analysis(phase_group):
         phase_ids = [p['id'] for p in phases]
         phase_id_to_name = {p['id']: p['name'] for p in phases}
 
-        # Non-BOG: get tasks by stage_id filter
+        # Non-BOG: tasks have no phase_id, use ALL project tasks
+        # Services/Support split is Excel-config-based, not Odoo-phase-based
         use_stage_domain = False
-        stage_ids_for_group = []
         if not phase_ids and not _is_bog:
             if not _proj_odoo_id:
                 _proj_odoo_id = get_project_odoo_id(_proj_name)
             if _proj_odoo_id:
-                # Get all stages for this project
-                all_stages = odoo.models.execute_kw(
-                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                    'project.task.type', 'search_read',
-                    [[('project_ids', 'in', [_proj_odoo_id])]],
-                    {'fields': ['id', 'name'], 'limit': 50}
-                )
-                # Filter by group: support stages vs services stages
-                if phase_group == 'support':
-                    filtered = [s for s in all_stages
-                                if any(kw in s['name'].lower() for kw in SUPPORT_KWS)]
-                else:  # services = all except support
-                    filtered = [s for s in all_stages
-                                if not any(kw in s['name'].lower() for kw in SUPPORT_KWS)]
-                    if not filtered:
-                        filtered = all_stages  # fallback: all
+                use_stage_domain = True  # signal to use project_id domain
+                phase_id_to_name = {}   # no phase names for non-BOG
 
-                stage_ids_for_group = [s['id'] for s in filtered]
-                phase_id_to_name = {s['id']: s['name'] for s in filtered}
-                phase_ids = stage_ids_for_group
-                use_stage_domain = True
-
-        if not phase_ids and not use_stage_domain:
+        if not phase_ids and not _is_bog and not _proj_odoo_id:
             return jsonify({'tasks': [], 'connected': True,
                             'phases_active': [], 'phases_available': [],
                             'employees_available': [], 'stages_used': [],
-                            'note': 'No phases/stages found for this project and phase group'})
+                            'note': 'Project not found in Odoo'})
 
-        # Step 1: Get parent tasks filtered by phase or stage
+        if not phase_ids and not use_stage_domain:
+            return jsonify({'tasks': [], 'error': f'No phases for {phase_group}'})
+
+        # Step 1: Get parent tasks — by phase (BOG) or all project tasks (non-BOG)
         if use_stage_domain:
-            project_domain = [('stage_id', 'in', phase_ids),
-                               ('project_id', '=', _proj_odoo_id)]
+            # Non-BOG: all tasks in project, no phase filter
+            project_domain = [('project_id', '=', _proj_odoo_id),
+                               ('parent_id', '=', False)]  # parent tasks only first
         else:
             project_domain = [('phase_id', 'in', phase_ids)]
             if _proj_name:
@@ -3040,8 +3061,8 @@ def api_overview_analysis(phase_group):
         return jsonify({
             'tasks': ordered,
             'connected': True,
-            'phases_available': list(phase_id_to_name.values()) if use_stage_domain else [p['name'] for p in phases],
-            'phases_active': list(phase_id_to_name.values()) if use_stage_domain else phase_names,
+            'phases_available': [],  # Non-BOG: no phase filter shown
+            'phases_active': [],
             'employees_available': sorted(all_employees_set),
             'employees_filter': employees_filter,
             'stages_used': [{'id': sid, 'name': name} for sid, name in stages_used.items()],
@@ -4489,11 +4510,10 @@ def get_phase_mapping():
 SUPPORT_KWS = ['support', 'operation', 'maintenance', 'hypercare']
 
 def auto_detect_phases_for_project(project_id, phase_key):
-    """Auto-detect task.type names for a non-BOG project.
-    Returns list of task.type name strings.
-    For 'services': all stages EXCEPT support/operation keywords.
-    For 'support':  only stages WITH support/operation keywords.
-    If no support stages exist, returns [] for 'support'.
+    """For non-BOG projects: tasks have no phase_id, only stage_id (Kanban).
+    The Services/Support split comes from the Excel config, NOT from Odoo.
+    So we return ALL stages for both keys — the split is handled at the project level.
+    Returns list of stage_id values (integers) for direct filtering.
     """
     try:
         if not odoo.uid: odoo.connect()
@@ -4503,15 +4523,25 @@ def auto_detect_phases_for_project(project_id, phase_key):
             [[('project_ids', 'in', [project_id])]],
             {'fields': ['id', 'name'], 'limit': 50}
         )
-        if phase_key == 'support':
-            return [s['name'] for s in all_stages
-                    if any(kw in (s['name'] or '').lower() for kw in SUPPORT_KWS)]
-        else:  # 'services' or 'development'
-            non_support = [s['name'] for s in all_stages
-                           if not any(kw in (s['name'] or '').lower() for kw in SUPPORT_KWS)]
-            return non_support if non_support else [s['name'] for s in all_stages]
+        # Return all stage names — Services/Support split is Excel-config-based
+        return [s['name'] for s in all_stages]
     except Exception as _e:
         logger.warning(f"auto_detect_phases: {_e}")
+        return []
+
+
+def get_all_stage_ids_for_project(project_id):
+    """Get all task.type IDs for a project."""
+    try:
+        if not odoo.uid: odoo.connect()
+        stages = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task.type', 'search_read',
+            [[('project_ids', 'in', [project_id])]],
+            {'fields': ['id', 'name'], 'limit': 50}
+        )
+        return stages
+    except Exception:
         return []
 
 
@@ -5508,36 +5538,17 @@ def api_effort_all_months(phase_key):
         _is_bog_effort = not session.get('project_id') or str(session.get('project_id')) == '228'
 
         if _is_bog_effort and phase_ids:
-            # BOG: filter by project.phase
+            # BOG: filter by project.phase (phase_id on task)
             relevant_ids = set()
             for t in all_proj_tasks:
                 ph = t.get('phase_id')
                 if ph and isinstance(ph, list) and ph[0] in phase_ids:
                     relevant_ids.add(t['id'])
-        elif not _is_bog_effort:
-            # Non-BOG: filter by stage_id (task.type)
-            all_stages = odoo.models.execute_kw(
-                ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                'project.task.type', 'search_read',
-                [[('project_ids', 'in', [project_id])]],
-                {'fields': ['id', 'name'], 'limit': 50}
-            )
-            if phase_key == 'support':
-                stage_ids = [s['id'] for s in all_stages
-                             if any(kw in s['name'].lower() for kw in SUPPORT_KWS)]
-            else:
-                stage_ids = [s['id'] for s in all_stages
-                             if not any(kw in s['name'].lower() for kw in SUPPORT_KWS)]
-                if not stage_ids:
-                    stage_ids = [s['id'] for s in all_stages]
-            relevant_ids = set()
-            for t in all_proj_tasks:
-                st = t.get('stage_id')
-                if st and isinstance(st, list) and st[0] in stage_ids:
-                    relevant_ids.add(t['id'])
-            logger.info(f"Non-BOG effort {phase_key}: {len(stage_ids)} stages, {len(relevant_ids)} tasks")
         else:
+            # Non-BOG: tasks have no phase_id, use ALL project tasks
+            # Services/Support split is at project level (Excel config), not task level
             relevant_ids = {t['id'] for t in all_proj_tasks}
+            logger.info(f"Non-BOG effort {phase_key}: using all {len(relevant_ids)} project tasks")
 
         # Walk parent chains to include sub-tasks of phase tasks
         for t in all_proj_tasks:
