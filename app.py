@@ -1656,6 +1656,139 @@ def api_fetch_employee_positions():
         return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
 
 
+@app.route('/api/estimated-rows/import-excel', methods=['POST'])
+def api_estimated_rows_import_excel():
+    """Import Estimated Cost rows from Excel sheet.
+    Reads columns: Position | Hour Rate | Actual Time (MH) | Cost per month | Estimated # of Months
+    Hour rate is auto-filled from DB positions catalog if not in Excel.
+    """
+    import io
+    f = request.files.get('file')
+    phase = (request.form.get('phase') or 'development').strip()
+    if not f:
+        return jsonify({'ok': False, 'error': 'No file uploaded'}), 400
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(f.read()), data_only=True)
+    except Exception as e:
+        return jsonify({'ok': False, 'error': f'Cannot read Excel: {e}'}), 400
+
+    # Find the right sheet — prefer phase-specific sheets
+    phase_sheet_map = {
+        'development':  ['Estimated Cost - Development', 'Estimated Cost - Dev', 'Development'],
+        'consultation': ['Estimated Cost - Consultation', 'Estimated Cost - Con', 'Consultation'],
+        'support':      ['Estimated Cost - Support', 'Support'],
+    }
+    preferred = phase_sheet_map.get(phase, [])
+    ws = None
+    for name in preferred:
+        if name in wb.sheetnames:
+            ws = wb[name]; break
+    if ws is None:
+        # Try any sheet with "Estimated Cost" in name
+        for sname in wb.sheetnames:
+            if 'estimated cost' in sname.lower():
+                ws = wb[sname]; break
+    if ws is None:
+        ws = wb.active  # fallback: first sheet
+
+    # Parse rows — find header row first
+    all_pos = get_all_positions(db)
+    def _find_rate(pos_name):
+        if not pos_name: return None
+        import re as _re_r
+        def _norm(s):
+            s = _re_r.sub(r'senior', 'Sr.', s, flags=_re_r.IGNORECASE)
+            s = _re_r.sub(r'sr(?!\.)', 'Sr.', s, flags=_re_r.IGNORECASE)
+            s = _re_r.sub(r'\s*-\s*', ' - ', s)
+            return s.strip().lower()
+        target = _norm(pos_name)
+        # Exact match
+        for p in all_pos:
+            if _norm(p.get('position','')) == target and p.get('hour_rate'):
+                return float(p['hour_rate'])
+        # Partial: strip country prefix and try
+        stripped = _re_r.sub(r'^(EGY|KSA|TUN)\s*-\s*', '', pos_name, flags=_re_r.IGNORECASE).strip()
+        stripped_norm = _norm(stripped)
+        for p in all_pos:
+            pstripped = _re_r.sub(r'^(EGY|KSA|TUN)\s*-\s*', '', p.get('position',''), flags=_re_r.IGNORECASE).strip()
+            if _norm(pstripped) == stripped_norm and p.get('hour_rate'):
+                return float(p['hour_rate'])
+        return None
+
+    # Find header row (contains "Position" or "Hour Rate")
+    header_row = None
+    header_idx = None
+    for i, row in enumerate(ws.iter_rows(values_only=True), 1):
+        vals = [str(v or '').strip().lower() for v in row]
+        if any('position' in v for v in vals) and any('hour' in v or 'actual' in v or 'month' in v for v in vals):
+            header_row = [str(v or '').strip() for v in row]
+            header_idx = i
+            break
+
+    if not header_row:
+        return jsonify({'ok': False, 'error': 'Could not find header row with Position/Hour Rate columns'}), 400
+
+    # Map column indices
+    def _col(keywords):
+        for kw in keywords:
+            for j, h in enumerate(header_row):
+                if kw.lower() in h.lower():
+                    return j
+        return None
+
+    col_pos    = _col(['Position', 'position'])
+    col_rate   = _col(['Hour Rate', 'Rate'])
+    col_time   = _col(['Actual Time', 'MH', 'Hours/month'])
+    col_months = _col(['Estimated #', 'No of Month', '# of Month', 'Months'])
+
+    if col_pos is None:
+        return jsonify({'ok': False, 'error': 'Position column not found'}), 400
+
+    rows = []
+    import time
+    for row in ws.iter_rows(min_row=header_idx + 1, values_only=True):
+        pos = str(row[col_pos] if col_pos is not None and col_pos < len(row) and row[col_pos] else '').strip()
+        if not pos or pos.lower() in ('total', 'position', 'none', ''):
+            continue
+        # Skip summary rows
+        if pos.upper() == pos and len(pos) > 30:
+            continue
+
+        hr_val = row[col_rate] if col_rate is not None and col_rate < len(row) else None
+        at_val = row[col_time] if col_time is not None and col_time < len(row) else 176
+        em_val = row[col_months] if col_months is not None and col_months < len(row) else None
+
+        try: hr = float(hr_val) if hr_val else None
+        except: hr = None
+        try: at = float(at_val) if at_val else 176
+        except: at = 176
+        try: em = float(em_val) if em_val else None
+        except: em = None
+
+        # Auto-fill hour rate from DB if not in Excel
+        if not hr:
+            hr = _find_rate(pos)
+
+        rows.append({
+            'id':         time.time() + len(rows),
+            'position':   pos,
+            'hourRate':   hr or '',
+            'actualTime': at,
+            'estMonths':  em or '',
+        })
+
+    if not rows:
+        return jsonify({'ok': False, 'error': 'No data rows found in sheet'}), 400
+
+    # Save to DB
+    proj_id = session.get('project_id') or ''
+    db.set_override('estimated_rows', str(proj_id), phase, rows)
+
+    return jsonify({'ok': True, 'phase': phase, 'rows': rows, 'count': len(rows),
+                    'sheet_used': ws.title})
+
+
 @app.route('/debug/projects-raw')
 def debug_projects_raw():
     """Debug: show raw Odoo project data to verify fields."""
