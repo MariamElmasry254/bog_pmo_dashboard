@@ -814,57 +814,109 @@ def api_parse_ticket():
 
     result = {}
 
-    # ── Passenger Name ──
-    # Handles: "MR . Kareem Elsafy - ADT", "MR. Name - ADT", "MRS Name/ADT"
-    for pat in [
-        r'(?:MR|MRS|MS|DR)\s*\.?\s+([A-Za-z][A-Za-z ]{2,35}?)\s*[-/]\s*ADT',
-        r'Passenger\s+Name\s*[:\-]\s*(?:MR|MRS|MS|DR)?\s*\.?\s*([A-Za-z][A-Za-z ]{2,35}?)\s*[-/]\s*ADT',
-        r'Name\s*[:\-]\s*(?:MR|MRS|MS|DR)?\s*\.?\s*([A-Za-z][A-Za-z ]{2,35}?)\s*[-/]\s*ADT',
-        r'Passenger\s+Name\s*[:\-]\s*([A-Za-z][A-Za-z ]{2,35}?)(?:\n|$)',
-    ]:
-        m = re.search(pat, text, re.IGNORECASE)
-        if m:
-            name = m.group(1).strip().title()
-            # Clean up any trailing noise
-            name = re.sub(r'\s*(ADT|ADU|CHD|INF)\s*$', '', name, flags=re.IGNORECASE).strip()
-            if len(name) > 3:
-                result['name'] = name
-                break
+    # ── Passenger Name — handles multiple ticket formats ──
+    _LABEL_WORDS = {'PASSENGER','PASSPORT','AIRLINE','AGENT','FLIGHT','CITY',
+                    'ARRIVAL','DEPARTURE','LUGGAGE','FARE','TAXES','TOTAL',
+                    'ATTENTION','RECEIPT','ITINERARY','TICKET','BOOKING','NAME'}
 
-    # ── Dates (all formats) ──
+    def _extract_name(text):
+        # 1. Saudia: "MR . Kareem Elsafy - ADT" / "MRS. Name/ADT"
+        m = re.search(r'(?:MR|MRS|MS|DR)\s*\.?\s+([A-Za-z][A-Za-z ]{2,35}?)\s*[-/]\s*ADT', text, re.IGNORECASE)
+        if m:
+            return m.group(1).strip().title()
+        # 2. "Passenger Name : Kareem Elsafy - ADT"
+        m = re.search(r'(?:Passenger\s+)?Name\s*[:\-]\s*(?:MR|MRS|MS|DR)?\s*\.?\s*([A-Za-z][A-Za-z ]{2,35}?)\s*[-/]\s*ADT', text, re.IGNORECASE)
+        if m:
+            return m.group(1).strip().title()
+        # 3. Tumodo/generic: ALL-CAPS name before passport number line (letter+7+digits)
+        m = re.search(r'([A-Z][A-Z ]{3,35})\n[A-Z]\d{6,}', text)
+        if m:
+            raw = m.group(1).strip()
+            # Strip known label words from front
+            raw = re.sub(r'^(?:' + '|'.join(_LABEL_WORDS) + r')[,\s]*', '', raw, flags=re.IGNORECASE).strip()
+            if raw and len(raw) > 3:
+                return raw.title()
+        # 4. Tumodo inline: trailing ALL-CAPS words on line containing PASSENGER/AGENT labels
+        for line in text.split('\n'):
+            if 'PASSENGER' in line.upper() or 'AGENT' in line.upper():
+                words = line.split()
+                name_words = []
+                for w in reversed(words):
+                    wc = re.sub(r'[,.()/]', '', w)
+                    if wc.upper() in _LABEL_WORDS: break
+                    if re.match(r'^[A-Z]{2,}$', wc): name_words.insert(0, wc)
+                    else: break
+                if len(name_words) >= 2:
+                    return ' '.join(name_words).title()
+        # 5. Generic: "Passenger Name:\nKAREEM ELSAFY"
+        m = re.search(r'(?:Passenger\s+)?Name\s*:\s*\n?\s*([A-Za-z][A-Za-z ]{2,35}?)(?:\n|$)', text, re.IGNORECASE)
+        if m:
+            return m.group(1).strip().title()
+        return None
+
+    _name = _extract_name(text)
+    if _name:
+        # Clean trailing noise (ADT/ADU/etc)
+        _name = re.sub(r'\s*(Adt|Adu|Chd|Inf)\s*$', '', _name, flags=re.IGNORECASE).strip()
+        if len(_name) > 3:
+            result['name'] = _name
+
+    # ── IATA airport code → city name mapping ──
+    IATA_MAP = {
+        'RUH':'Riyadh','JED':'Jeddah','DMM':'Dammam','MED':'Medina','TIF':'Taif',
+        'CAI':'Cairo','ALY':'Alexandria','HRG':'Hurghada','LXR':'Luxor','SSH':'Sharm El Sheikh',
+        'DXB':'Dubai','AUH':'Abu Dhabi','DOH':'Doha','AMM':'Amman','BEY':'Beirut',
+        'IST':'Istanbul','LHR':'London','FRA':'Frankfurt','CDG':'Paris',
+    }
+    EGYPT_IATA = {'CAI','ALY','HRG','LXR','SSH','HBE'}
+    KSA_IATA   = {'RUH','JED','DMM','MED','TIF','AHB','GIZ','TUU'}
+    EGYPT_CITIES = ['Cairo','Alexandria','Hurghada','Luxor','Sharm','Egypt']
+    KSA_CITIES   = ['Riyadh','Jeddah','Dammam','Medina','Mecca','Khobar','Saudi Arabia','Saudi']
+    ALL_CITIES   = EGYPT_CITIES + KSA_CITIES + ['Dubai','Doha','Amman','Beirut','Istanbul','London','Frankfurt','Paris','Abu Dhabi']
+
+    # Expand IATA codes in text for city detection
+    text_exp = text
+    for code, city in IATA_MAP.items():
+        text_exp = re.sub(r'\b' + code + r'\b', city, text_exp)
+
+    # ── Dates — all formats ──
     mo_map = {'jan':'01','feb':'02','mar':'03','apr':'04','may':'05','jun':'06',
                'jul':'07','aug':'08','sep':'09','oct':'10','nov':'11','dec':'12'}
     dates_found = []
-    # 15Jan2026 or 15 Jan 2026
+
+    # Extract flight date from route line first: "RUH — CAI, 16.04.2026" or "CAI-RUH 26Jan2026"
+    flight_date = None
+    route_date_m = re.search(
+        r'\b(?:' + '|'.join(list(IATA_MAP.keys())) + r')\s*[—\-]+\s*(?:' + '|'.join(list(IATA_MAP.keys())) + r')[,\s]+(\d{2})\.(\d{2})\.(20\d{2})',
+        text, re.IGNORECASE)
+    if route_date_m:
+        flight_date = f"{route_date_m.group(3)}-{route_date_m.group(2)}-{route_date_m.group(1)}"
+
+    # DD.MM.YYYY
+    for m in re.finditer(r'\b(\d{2})\.(\d{2})\.(20\d{2})\b', text):
+        iso = f"{m.group(3)}-{m.group(2)}-{m.group(1)}"
+        if '2020' <= iso[:4] <= '2030' and iso not in dates_found:
+            dates_found.append(iso)
+    # DDMonYYYY / DD Mon YYYY
     for m in re.finditer(r'(\d{1,2})\s*-?\s*(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s*-?\s*(\d{4})', text, re.IGNORECASE):
         iso = '{}-{}-{:02d}'.format(m.group(3), mo_map[m.group(2).lower()], int(m.group(1)))
-        if '2020' <= iso[:4] <= '2030':
+        if '2020' <= iso[:4] <= '2030' and iso not in dates_found:
             dates_found.append(iso)
     # YYYY-MM-DD
-    for m in re.finditer(r'\b(20\d{2})-(\d{2})-(\d{2})\b', text):
-        iso = m.group(0)
-        if '2020' <= iso[:4] <= '2030':
-            dates_found.append(iso)
+    for m in re.finditer(r'\b(20\d{2}-\d{2}-\d{2})\b', text):
+        if m.group(1) not in dates_found: dates_found.append(m.group(1))
     # DD/MM/YYYY
     for m in re.finditer(r'\b(\d{2})/(\d{2})/(20\d{2})\b', text):
-        iso = '{}-{}-{}'.format(m.group(3), m.group(2), m.group(1))
-        if '2020' <= iso[:4] <= '2030':
-            dates_found.append(iso)
+        iso = f"{m.group(3)}-{m.group(2)}-{m.group(1)}"
+        if iso not in dates_found: dates_found.append(iso)
     dates_found = sorted(set(dates_found))
 
-    # ── Cities / Route detection ──
-    EGYPT_CITIES   = ['Cairo', 'Alexandria', 'Hurghada', 'Luxor', 'Aswan', 'CAI']
-    KSA_CITIES     = ['Riyadh', 'Jeddah', 'Dammam', 'Mecca', 'Medina', 'Khobar', 'RUH', 'JED', 'DMM']
-    OTHER_CITIES   = ['Dubai', 'Doha', 'Amman', 'Beirut', 'Istanbul', 'London', 'Frankfurt', 'Paris', 'Abu Dhabi']
-    ALL_CITIES     = EGYPT_CITIES + KSA_CITIES + OTHER_CITIES
-
-    # Find all city mentions in order
+    # ── Cities ──
     city_hits = []
     for city in ALL_CITIES:
-        for m in re.finditer(r'\b' + re.escape(city) + r'\b', text, re.IGNORECASE):
+        for m in re.finditer(r'\b' + re.escape(city) + r'\b', text_exp, re.IGNORECASE):
             city_hits.append((m.start(), city.title()))
     city_hits.sort(key=lambda x: x[0])
-    # Deduplicate consecutive same city
     seen_order = []
     for _, city in city_hits:
         if not seen_order or seen_order[-1].lower() != city.lower():
@@ -872,33 +924,41 @@ def api_parse_ticket():
 
     from_city = seen_order[0] if seen_order else None
     to_city   = seen_order[1] if len(seen_order) > 1 else None
-
     result['from_city'] = from_city or ''
     result['to_city']   = to_city   or ''
 
-    # ── Direction logic ──
-    # Outbound = Egypt→KSA/other  (person LEAVING Egypt)
-    # Return   = KSA/other→Egypt  (person COMING BACK to Egypt)
-    def _is_egypt(city):
-        if not city: return False
-        return any(c.lower() in city.lower() for c in EGYPT_CITIES)
-    def _is_ksa(city):
-        if not city: return False
-        return any(c.lower() in city.lower() for c in KSA_CITIES)
+    # ── Direction ──
+    def _is_egypt(c):
+        if not c: return False
+        return any(x.lower() in c.lower() for x in EGYPT_CITIES + ['egypt'])
+    def _is_ksa(c):
+        if not c: return False
+        return any(x.lower() in c.lower() for x in KSA_CITIES + ['saudi'])
 
     is_outbound = _is_egypt(from_city) and not _is_egypt(to_city)
-    is_return   = not _is_egypt(from_city) and _is_egypt(to_city)
+    is_return   = _is_egypt(to_city)   and not _is_egypt(from_city)
 
+    # Fallback: check IATA route pattern in raw text "XXX — YYY"
+    if not is_outbound and not is_return:
+        route_m = re.search(r'\b([A-Z]{3})\s*[—\-]+\s*([A-Z]{3})\b', text)
+        if route_m:
+            orig, dest = route_m.group(1), route_m.group(2)
+            is_outbound = orig in EGYPT_IATA and dest in KSA_IATA
+            is_return   = orig in KSA_IATA   and dest in EGYPT_IATA
+            if is_outbound: from_city, to_city = IATA_MAP.get(orig, orig), IATA_MAP.get(dest, dest)
+            if is_return:   from_city, to_city = IATA_MAP.get(orig, orig), IATA_MAP.get(dest, dest)
+            result['from_city'] = from_city or ''
+            result['to_city']   = to_city   or ''
+
+    result['ok'] = True
     if is_outbound:
         result['direction']  = 'outbound'
-        result['start_date'] = dates_found[0] if dates_found else ''
+        result['start_date'] = flight_date or (dates_found[0] if dates_found else '')
         result['end_date']   = ''
-        result['ok'] = True
     elif is_return:
         result['direction'] = 'return'
-        result['end_date']  = dates_found[0] if dates_found else ''
+        result['end_date']  = flight_date or (dates_found[-1] if dates_found else '')
         result['start_date'] = ''
-        result['ok'] = True
         # Check if there's an open travel record for this person
         if result.get('name'):
             travel_records = _global_get('travel') or []
@@ -906,21 +966,22 @@ def api_parse_ticket():
             open_record = None
             for tr in travel_records:
                 tr_name = (tr.get('name') or '').lower().strip()
-                if tr_name == clean_name or clean_name in tr_name or tr_name in clean_name:
-                    if not tr.get('end_date'):  # open-ended travel
+                # Fuzzy: all words of clean_name appear in tr_name or vice versa
+                cn_words = set(clean_name.split())
+                tr_words = set(tr_name.split())
+                if cn_words == tr_words or cn_words.issubset(tr_words) or tr_words.issubset(cn_words):
+                    if not tr.get('end_date'):
                         open_record = tr
                         break
             if open_record:
-                result['open_travel_id']   = open_record['id']
+                result['open_travel_id']    = open_record['id']
                 result['open_travel_start'] = open_record.get('start_date', '')
             else:
                 result['warning'] = 'No open outbound travel record found for this person. Please add the outbound ticket first.'
     else:
-        # Can't determine direction from cities
         result['direction']  = 'unknown'
-        result['start_date'] = dates_found[0] if dates_found else ''
-        result['end_date']   = dates_found[-1] if len(dates_found) > 1 else ''
-        result['ok'] = True
+        result['start_date'] = flight_date or (dates_found[0] if dates_found else '')
+        result['end_date']   = ''
 
     # ── Odoo employee match + position ──
     if result.get('name') and odoo.uid:
