@@ -805,49 +805,144 @@ def api_parse_ticket():
             return jsonify({'error': str(e2)}), 500
 
     result = {}
-    # Name
+
+    # ── Passenger Name ──
     for pat in [
-        r'Passenger Name\s*[:\-]\s*(?:MR\.?\s+|MRS\.?\s+|MS\.?\s+)?([A-Za-z][A-Za-z ]{3,35}?)(?:\s*-\s*ADT|\n)',
-        r'(?:MR|MRS|MS|DR)\.?\s+([A-Za-z][A-Za-z\s]{3,35}?)(?:\s*-\s*ADT|\n)',
+        r'Passenger(?:\s+Name)?\s*[:\-]\s*(?:MR\.?\s+|MRS\.?\s+|MS\.?\s+|DR\.?\s+)?([A-Za-z][A-Za-z ]{2,35}?)(?:\s*[-/]\s*ADT|\n|$)',
+        r'(?:MR|MRS|MS|DR)\.?\s+([A-Za-z][A-Za-z\s]{2,35}?)(?:\s*[-/]\s*ADT|\n|$)',
+        r'Name\s*:\s*(?:MR\.?\s+|MRS\.?\s+|MS\.?\s+)?([A-Za-z][A-Za-z ]{2,35}?)\n',
     ]:
         m = re.search(pat, text, re.IGNORECASE)
         if m:
             result['name'] = m.group(1).strip().title()
             break
 
-    # Dates
+    # ── Dates (all formats) ──
     mo_map = {'jan':'01','feb':'02','mar':'03','apr':'04','may':'05','jun':'06',
                'jul':'07','aug':'08','sep':'09','oct':'10','nov':'11','dec':'12'}
-    dates = []
-    for m in re.finditer(r'(\d{1,2})(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)(\d{4})', text, re.IGNORECASE):
+    dates_found = []
+    # 15Jan2026 or 15 Jan 2026
+    for m in re.finditer(r'(\d{1,2})\s*-?\s*(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s*-?\s*(\d{4})', text, re.IGNORECASE):
         iso = '{}-{}-{:02d}'.format(m.group(3), mo_map[m.group(2).lower()], int(m.group(1)))
-        if iso not in dates and '2020' <= iso[:4] <= '2030':
-            dates.append(iso)
-    for m in re.finditer(r'\b(20\d{2}-\d{2}-\d{2})\b', text):
-        if m.group(1) not in dates:
-            dates.append(m.group(1))
-    dates = sorted(set(dates))
-    if dates:
-        result['departure_date'] = dates[0]
-    if len(dates) > 1:
-        result['return_date'] = dates[-1]
+        if '2020' <= iso[:4] <= '2030':
+            dates_found.append(iso)
+    # YYYY-MM-DD
+    for m in re.finditer(r'\b(20\d{2})-(\d{2})-(\d{2})\b', text):
+        iso = m.group(0)
+        if '2020' <= iso[:4] <= '2030':
+            dates_found.append(iso)
+    # DD/MM/YYYY
+    for m in re.finditer(r'\b(\d{2})/(\d{2})/(20\d{2})\b', text):
+        iso = '{}-{}-{}'.format(m.group(3), m.group(2), m.group(1))
+        if '2020' <= iso[:4] <= '2030':
+            dates_found.append(iso)
+    dates_found = sorted(set(dates_found))
 
-    # Cities
-    cities = ['Cairo','Riyadh','Jeddah','Dubai','Doha','Amman','Beirut','Istanbul','London','Frankfurt']
-    cm = re.search(r'(' + '|'.join(cities) + r').*?(' + '|'.join(cities) + r')', text, re.IGNORECASE | re.DOTALL)
-    if cm:
-        result['from_city'] = cm.group(1).title()
-        result['to_city']   = cm.group(2).title()
+    # ── Cities / Route detection ──
+    EGYPT_CITIES   = ['Cairo', 'Alexandria', 'Hurghada', 'Luxor', 'Aswan', 'CAI']
+    KSA_CITIES     = ['Riyadh', 'Jeddah', 'Dammam', 'Mecca', 'Medina', 'Khobar', 'RUH', 'JED', 'DMM']
+    OTHER_CITIES   = ['Dubai', 'Doha', 'Amman', 'Beirut', 'Istanbul', 'London', 'Frankfurt', 'Paris', 'Abu Dhabi']
+    ALL_CITIES     = EGYPT_CITIES + KSA_CITIES + OTHER_CITIES
 
-    # Odoo employee match
+    # Find all city mentions in order
+    city_hits = []
+    for city in ALL_CITIES:
+        for m in re.finditer(r'\b' + re.escape(city) + r'\b', text, re.IGNORECASE):
+            city_hits.append((m.start(), city.title()))
+    city_hits.sort(key=lambda x: x[0])
+    # Deduplicate consecutive same city
+    seen_order = []
+    for _, city in city_hits:
+        if not seen_order or seen_order[-1].lower() != city.lower():
+            seen_order.append(city)
+
+    from_city = seen_order[0] if seen_order else None
+    to_city   = seen_order[1] if len(seen_order) > 1 else None
+
+    result['from_city'] = from_city or ''
+    result['to_city']   = to_city   or ''
+
+    # ── Direction logic ──
+    # Outbound = Egypt→KSA/other  (person LEAVING Egypt)
+    # Return   = KSA/other→Egypt  (person COMING BACK to Egypt)
+    def _is_egypt(city):
+        if not city: return False
+        return any(c.lower() in city.lower() for c in EGYPT_CITIES)
+    def _is_ksa(city):
+        if not city: return False
+        return any(c.lower() in city.lower() for c in KSA_CITIES)
+
+    is_outbound = _is_egypt(from_city) and not _is_egypt(to_city)
+    is_return   = not _is_egypt(from_city) and _is_egypt(to_city)
+
+    if is_outbound:
+        result['direction']  = 'outbound'
+        result['start_date'] = dates_found[0] if dates_found else ''
+        result['end_date']   = ''
+        result['ok'] = True
+    elif is_return:
+        result['direction'] = 'return'
+        result['end_date']  = dates_found[0] if dates_found else ''
+        result['start_date'] = ''
+        result['ok'] = True
+        # Check if there's an open travel record for this person
+        if result.get('name'):
+            travel_records = _global_get('travel') or []
+            clean_name = result['name'].lower().strip()
+            open_record = None
+            for tr in travel_records:
+                tr_name = (tr.get('name') or '').lower().strip()
+                if tr_name == clean_name or clean_name in tr_name or tr_name in clean_name:
+                    if not tr.get('end_date'):  # open-ended travel
+                        open_record = tr
+                        break
+            if open_record:
+                result['open_travel_id']   = open_record['id']
+                result['open_travel_start'] = open_record.get('start_date', '')
+            else:
+                result['warning'] = 'No open outbound travel record found for this person. Please add the outbound ticket first.'
+    else:
+        # Can't determine direction from cities
+        result['direction']  = 'unknown'
+        result['start_date'] = dates_found[0] if dates_found else ''
+        result['end_date']   = dates_found[-1] if len(dates_found) > 1 else ''
+        result['ok'] = True
+
+    # ── Odoo employee match + position ──
     if result.get('name') and odoo.uid:
         try:
             first = result['name'].split()[0]
             emps = odoo.models.execute_kw(ODOO_DB, odoo.uid, ODOO_PASSWORD,
                 'hr.employee', 'search_read',
                 [[('name', 'ilike', first), ('active', '=', True)]],
-                {'fields': ['id', 'name', 'job_title'], 'limit': 5})
-            result['odoo_matches'] = [{'id': e['id'], 'name': e['name'], 'job': e.get('job_title','')} for e in emps]
+                {'fields': ['id', 'name', 'job_title', 'job_id', 'number', 'barcode', 'identification_id'], 'limit': 5})
+            result['odoo_matches'] = []
+            for e in emps:
+                job = e.get('job_id')
+                title = e.get('job_title') or (job[1] if isinstance(job, list) and len(job) > 1 else '')
+                # Get employee code
+                import re as _re_t
+                code = ''
+                for field in ['number', 'barcode', 'identification_id']:
+                    val = (e.get(field) or '').strip()
+                    if val and _re_t.match(r'^[ERT]\d+$', val, _re_t.IGNORECASE):
+                        code = val.upper(); break
+                result['odoo_matches'].append({
+                    'id': e['id'], 'name': e['name'],
+                    'job': title, 'code': code
+                })
+            # Auto-fill position from best match (exact name match preferred)
+            name_lower = result['name'].lower()
+            best = None
+            for e in result['odoo_matches']:
+                if e['name'].lower() == name_lower:
+                    best = e; break
+            if not best and result['odoo_matches']:
+                best = result['odoo_matches'][0]
+            if best:
+                result['odoo_id']   = best['id']
+                result['odoo_code'] = best['code']
+                result['position']  = best['job']  # job_title from Odoo
         except Exception as _e:
             logger.warning('Odoo match: %s', _e)
 
