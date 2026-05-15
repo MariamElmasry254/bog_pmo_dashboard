@@ -4137,7 +4137,9 @@ def save_budget_override(phase, path, value):
 
 def apply_budget_overrides(budget_info, phase_key):
     """Apply saved overrides on top of the parsed budget data."""
-    overrides = db.get_namespace_overrides('budget', phase_key)
+    pfx = active_db_prefix()
+    full_ns = f'{pfx}_budget' if pfx else 'budget'
+    overrides = db.get_namespace_overrides(full_ns, phase_key)
     if not overrides:
         return budget_info
     for path, value in overrides.items():
@@ -6753,8 +6755,15 @@ def api_employee_odoo_position():
         'suggested_old_position': suggested_old,
     })
 
-@app.route('/api/budget-changes', methods=['GET'])
+@app.route('/api/budget-changes', methods=['GET', 'POST'])
 def api_budget_changes_get():
+    if request.method == 'POST':
+        body = request.json or {}
+        phase = body.get('phase', 'development')
+        changes = body.get('changes', [])
+        proj_set_override('budget_changes', '', phase, changes)
+        return jsonify({'ok': True, 'phase': phase, 'saved': len(changes)})
+
     phase = request.args.get('phase', 'development')
     changes = proj_get_override('budget_changes', '', phase) or []
     if isinstance(changes, str):
