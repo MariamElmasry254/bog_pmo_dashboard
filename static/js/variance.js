@@ -1487,15 +1487,9 @@ async function loadEffortLive(phaseKey, containerId) {
 
 function renderEstimated(data, phaseKey) {
   const isBog = AppState._overviewData?.is_bog !== false;
-  if (!isBog) {
-    // Non-BOG: show summary card (loaded from DB or upload)
-    return `<div id="estimatedLiveWrap">
-      <div class="loading">Loading estimated cost…</div>
-    </div>`;
-  }
-  // BOG: editable rows table (original behavior)
-  return `<div id="estimatedLiveWrap">
-    <div class="loading">Loading estimated cost table…</div>
+  // Both BOG and non-BOG use same wrapper — loadEstimatedLive handles the difference
+  return `<div id="estimatedLiveWrap-${phaseKey}">
+    <div class="loading">Loading estimated cost…</div>
   </div>`;
 }
 
@@ -1514,24 +1508,24 @@ function makeEstRow(position = '', hourRate = '', actualTime = 176, estMonths = 
 }
 
 async function loadEstimatedLive(phaseKey, containerId) {
-  const wrap = document.getElementById(containerId || 'estimatedLiveWrap');
-  if (!wrap) { console.warn('estimatedLiveWrap not found'); return; }
-  wrap.innerHTML = '<div class="loading">Loading estimated cost table…</div>';
+  const cid = containerId || `estimatedLiveWrap-${phaseKey}` || 'estimatedLiveWrap';
+  const wrap = document.getElementById(cid) || document.getElementById('estimatedLiveWrap');
+  if (!wrap) { console.warn('estimatedLiveWrap not found for', phaseKey); return; }
+  wrap.innerHTML = '<div class="loading">Loading estimated cost…</div>';
 
   // Non-BOG: try to load saved summary first
   const isBog = AppState._overviewData?.is_bog !== false;
   if (!isBog) {
     if (window.estLoadSummaryIfSaved) {
-      const loaded = await estLoadSummaryIfSaved(phaseKey, containerId || 'estimatedLiveWrap');
+      const loaded = await estLoadSummaryIfSaved(phaseKey, wrap.id);
       if (loaded) return;
     }
     // No saved summary — show upload prompt
-    const w = document.getElementById(containerId || 'estimatedLiveWrap');
-    if (w) w.innerHTML = `
+    wrap.innerHTML = `
       <div style="text-align:center;padding:40px;color:#6B7280;">
         <div style="font-size:32px;margin-bottom:12px;">📊</div>
         <div style="font-size:14px;font-weight:600;margin-bottom:8px;">No Estimated Cost data yet</div>
-        <div style="font-size:12px;margin-bottom:16px;">Upload the Estimated Cost Excel file to import summary data</div>
+        <div style="font-size:12px;margin-bottom:16px;">Upload the Estimated Cost Excel file</div>
         <label style="cursor:pointer;">
           <input type="file" accept=".xlsx,.xls" style="display:none;"
             onchange="estImportExcel(this,'${phaseKey}')">
