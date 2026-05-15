@@ -744,32 +744,9 @@ async function doLink(odooId, odooName, odooCode) {
   const d = await res.json();
   if (d.ok) {
     closeModal();
-    // Update the specific row immediately without full reload
-    const rowEl = document.querySelector(`[data-id="${_linkId}"]`);
-    if (rowEl) {
-      const tr = rowEl.closest('tr');
-      if (tr) {
-        // Update the name cell's code badge immediately
-        const nameDiv = tr.querySelector('div[style*="font-weight:600"], td:nth-child(2)');
-        if (nameDiv) {
-          // Remove old badge
-          const oldBadge = nameDiv.querySelector('.code-badge, span[style*="D1FAE5"], a[style*="9CA3AF"]');
-          if (oldBadge) oldBadge.remove();
-          // Add new badge
-          const badge = document.createElement('span');
-          if (odooCode && /^[ERT]\d+$/.test(odooCode)) {
-            badge.className = 'code-badge';
-            badge.textContent = odooCode.toUpperCase();
-          } else {
-            badge.style.cssText = 'font-size:10px;background:#D1FAE5;color:#065F46;padding:2px 7px;border-radius:4px;margin-left:3px;font-weight:600;';
-            badge.textContent = odooName || ('ID:'+odooId);
-          }
-          nameDiv.appendChild(badge);
-        }
-      }
-    }
-    // Full reload after short delay to sync
-    setTimeout(() => { if (_linkType === 'travel') loadTravel(); else loadPromos(); }, 300);
+    // Reload immediately to reflect the link (no delay needed)
+    if (_linkType === 'travel') loadTravel();
+    else loadPromos();
   } else alert('Error: ' + (d.error||'Unknown'));
 }
 
