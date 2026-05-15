@@ -1,99 +1,20 @@
-<!DOCTYPE html>
-<html lang="en" dir="ltr">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BOG Digital Transformation — PMO Dashboard</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Cairo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-</head>
-<body>
+/* Main: tab navigation */
+document.querySelectorAll('.exec-tab').forEach(t => {
+  t.addEventListener('click', () => {
+    const target = t.dataset.tab;
+    document.querySelectorAll('.exec-tab').forEach(x => x.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    t.classList.add('active');
+    document.getElementById(target).classList.add('active');
 
-<!-- ============ EXECUTIVE HEADER ============ -->
-<header class="exec-header">
-  <div class="exec-content">
-    <div class="exec-top">
-      <div style="display:flex;align-items:center;gap:16px;">
-        <a href="/projects" style="font-size:11px;color:rgba(255,255,255,.6);text-decoration:none;
-           letter-spacing:.1em;text-transform:uppercase;font-weight:600;transition:color .15s;"
-           onmouseover="this.style.color='white'" onmouseout="this.style.color='rgba(255,255,255,.6)'">
-          ← All Projects
-        </a>
-        <span class="exec-label">PMO DASHBOARD</span>
-      </div>
-      <div class="exec-meta">
-        <div><span>PROJECT MANAGER</span><b id="headerPM">—</b></div>
-        <div><span>COORDINATOR</span><b id="headerCoord">—</b></div>
-        <div><span>GENERATED</span><b id="generatedTime">—</b></div>
-        <div style="display:flex;gap:12px;align-items:center;margin-left:16px;">
-          <a href="/manage" style="font-size:11px;color:rgba(255,255,255,.6);text-decoration:none;
-             padding:5px 10px;border:1px solid rgba(255,255,255,.15);border-radius:6px;
-             transition:all .15s;" onmouseover="this.style.background='rgba(255,255,255,.1)'"
-             onmouseout="this.style.background='transparent'">⚙ Manage</a>
-          <a href="/logout" style="font-size:11px;color:rgba(255,255,255,.5);text-decoration:none;
-             padding:5px 10px;border:1px solid rgba(255,255,255,.1);border-radius:6px;
-             transition:all .15s;" onmouseover="this.style.color='white'"
-             onmouseout="this.style.color='rgba(255,255,255,.5)'">Sign out</a>
-        </div>
-      </div>
-    </div>
-    <h1 class="exec-title" id="headerProjectTitle">{{ project_name }}</h1>
+    if (target === 'services' && !AppState.loaded.services) loadServices();
+    else if (target === 'timesheets') loadTimesheets();
+    else if (target === 'missing') loadMissing();
+    else if (target === 'risks') loadRisks();
+    else if (target === 'roadmap' && !AppState.loaded.roadmap) loadRoadmap();
+    else if (target === 'variance') loadVariance();
+  });
+});
 
-
-    <nav class="exec-tabs">
-      <button class="exec-tab active" data-tab="overview"><span class="tab-num">01</span> Overview</button>
-      <button class="exec-tab" data-tab="variance"><span class="tab-num">02</span> Variance</button>
-      <button class="exec-tab" data-tab="services"><span class="tab-num">03</span> Services &amp; Scope</button>
-      <button class="exec-tab" data-tab="timesheets"><span class="tab-num">04</span> Timesheets</button>
-      <button class="exec-tab" data-tab="missing"><span class="tab-num">05</span> Missing Hours</button>
-      <button class="exec-tab" data-tab="risks"><span class="tab-num">06</span> ⚠️ Risks &amp; Issues</button>
-      <button class="exec-tab" data-tab="roadmap"><span class="tab-num">07</span> Roadmap</button>
-    </nav>
-  </div>
-</header>
-
-<main class="content">
-  {% include 'partials/overview.html' %}
-  {% include 'partials/variance.html' %}
-  {% include 'partials/services.html' %}
-  {% include 'partials/timesheets.html' %}
-  {% include 'partials/missing.html' %}
-  {% include 'partials/risks.html' %}
-  {% include 'partials/roadmap.html' %}
-</main>
-
-<footer class="footer">
-  <span>BOG · Digital Transformation — Internal PMO Dashboard</span>
-  <span>v3.0 · Modular</span>
-</footer>
-
-<!-- Modular JS -->
-<script src="{{ url_for('static', filename='js/utils.js') }}"></script>
-<script src="{{ url_for('static', filename='js/overview.js') }}"></script>
-<script src="{{ url_for('static', filename='js/variance.js') }}"></script>
-<script src="{{ url_for('static', filename='js/services.js') }}"></script>
-<script src="{{ url_for('static', filename='js/timesheets.js') }}"></script>
-<script src="{{ url_for('static', filename='js/missing.js') }}"></script>
-<script src="{{ url_for('static', filename='js/risks.js') }}"></script>
-<script src="{{ url_for('static', filename='js/roadmap.js') }}"></script>
-<script src="{{ url_for('static', filename='js/main.js') }}"></script>
-<script>
-// Activate tab from URL hash on load (e.g. /#overview)
-(function() {
-  const hash = window.location.hash.replace('#', '');
-  if (hash) {
-    // Wait for main.js to set up tabs
-    window.addEventListener('load', function() {
-      const btn = document.querySelector('.exec-tab[data-tab="' + hash + '"]');
-      if (btn) btn.click();
-      // Clear hash so refresh doesn't force same tab
-      history.replaceState(null, '', '/');
-    });
-  }
-})();
-</script>
-</body>
-</html>
+// Initial load
+loadOverview();
