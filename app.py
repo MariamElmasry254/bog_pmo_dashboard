@@ -447,12 +447,13 @@ def get_demo_timesheets():
 
 def get_all_timesheets(date_from=None, date_to=None, phases=None, all_projects=False):
     """Unified getter — Odoo if available, else demo. phases = list or None."""
-    ts = odoo.get_timesheets(date_from=date_from, date_to=date_to,
+    _proj_name = active_project_name()
+    ts = odoo.get_timesheets(project_name=_proj_name, date_from=date_from, date_to=date_to,
                              phase_filter=phases, all_projects=all_projects)
     if ts is None:
         data = get_demo_timesheets()
         if not all_projects:
-            data = [d for d in data if d['project'] == PROJECT_NAME]
+            data = [d for d in data if d['project'] == _proj_name]
         if date_from:
             data = [d for d in data if d.get('date', '') >= date_from]
         if date_to:
