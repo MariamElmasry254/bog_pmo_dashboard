@@ -1012,25 +1012,40 @@ def api_parse_ticket():
         result['direction'] = 'return'
         result['end_date']  = flight_date or (dates_found[-1] if dates_found else '')
         result['start_date'] = ''
-        # Check if there's an open travel record for this person
+        # Find matching travel record — open-ended OR overlapping the return date
         if result.get('name'):
             travel_records = _global_get('travel') or []
             clean_name = result['name'].lower().strip()
+            return_date = result.get('end_date') or ''
+
+            def _nm(n1, n2):
+                w1 = set(n1.lower().split())
+                w2 = set(n2.lower().split())
+                return w1 == w2 or w1.issubset(w2) or w2.issubset(w1)
+
+            # Priority 1: open-ended record (no end_date)
             open_record = None
             for tr in travel_records:
-                tr_name = (tr.get('name') or '').lower().strip()
-                # Fuzzy: all words of clean_name appear in tr_name or vice versa
-                cn_words = set(clean_name.split())
-                tr_words = set(tr_name.split())
-                if cn_words == tr_words or cn_words.issubset(tr_words) or tr_words.issubset(cn_words):
-                    if not tr.get('end_date'):
-                        open_record = tr
-                        break
-            if open_record:
-                result['open_travel_id']    = open_record['id']
-                result['open_travel_start'] = open_record.get('start_date', '')
+                if _nm(clean_name, (tr.get('name') or '').lower().strip()) and not tr.get('end_date'):
+                    open_record = tr; break
+
+            # Priority 2: record where return_date falls within [start_date, end_date]
+            overlap_record = None
+            if not open_record and return_date:
+                for tr in travel_records:
+                    if not _nm(clean_name, (tr.get('name') or '').lower().strip()):
+                        continue
+                    tr_start = tr.get('start_date') or ''
+                    tr_end   = tr.get('end_date')   or '9999-12-31'
+                    if tr_start <= return_date <= tr_end:
+                        overlap_record = tr; break
+
+            matched = open_record or overlap_record
+            if matched:
+                result['open_travel_id']    = matched['id']
+                result['open_travel_start'] = matched.get('start_date', '')
             else:
-                result['warning'] = 'No open outbound travel record found for this person. Please add the outbound ticket first.'
+                result['warning'] = 'No outbound travel record found for this person covering the return date. Please add the outbound ticket first.'
     else:
         result['direction']  = 'unknown'
         result['start_date'] = flight_date or (dates_found[0] if dates_found else '')
