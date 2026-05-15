@@ -683,10 +683,12 @@ function searchLink(q) {
     }
     window._linkEmps = emps;
     box.innerHTML = emps.map((e,i) => `
-      <div class="sug-item" data-idx="${i}" onclick="pickLinkEmp(this)">
+      <div class="sug-item${i===0?' sug-item-selected':''}" data-idx="${i}" onclick="pickLinkEmp(this)"
+           style="${i===0?'background:#EFF6FF;border-left:3px solid #3B82F6;':''}">
         <span style="font-weight:600;">${esc(e.name)}</span>
         ${e.code ? `<span class="code-badge">${e.code}</span>` : ''}
         <span style="color:var(--muted);font-size:11px;"> ${esc(e.title||'')}</span>
+        ${i===0 && emps.length===1 ? '<span style="font-size:10px;color:#3B82F6;margin-left:6px;">← press Link</span>' : ''}
       </div>`).join('');
     box.style.display = 'block';
   }, 300);
@@ -694,7 +696,19 @@ function searchLink(q) {
 
 async function confirmManual() {
   const raw = document.getElementById('manualCode').value.trim();
-  if (!raw) return;
+  const searchQ = document.getElementById('linkSearch').value.trim();
+
+  // If manual code field is empty but search has results → auto-pick first result
+  if (!raw && window._linkEmps && window._linkEmps.length > 0) {
+    const e = window._linkEmps[0];
+    doLink(e.id, e.name, e.code || '');
+    return;
+  }
+
+  if (!raw) {
+    alert('Type a name in the search box and select an employee, or enter an E-code (e.g. E259)');
+    return;
+  }
   // If it's a code like E259
   if (/^[ERT]\d+$/i.test(raw)) {
     const res = await fetch('/api/global/employees/search?q=' + encodeURIComponent(raw));
