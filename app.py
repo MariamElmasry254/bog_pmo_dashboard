@@ -651,9 +651,47 @@ def api_global_travel_add():
 def api_global_travel_update(rec_id):
     records = _global_get('travel') or []
     body = request.json or {}
+
+    # Find the record being updated
+    target = next((r for r in records if r.get('id') == rec_id), None)
+    if not target:
+        return jsonify({'error': 'not found'}), 404
+
+    # If linking to an Odoo employee, check for overlapping records with same Odoo ID
+    new_odoo_id = body.get('odoo_employee_id')
+    if new_odoo_id and not body.get('force'):
+        t_start = target.get('start_date') or ''
+        t_end   = target.get('end_date')   or '9999-12-31'
+        conflicts = []
+        for r in records:
+            if r.get('id') == rec_id:
+                continue
+            # Match by Odoo ID
+            if str(r.get('odoo_employee_id') or '') != str(new_odoo_id):
+                continue
+            r_start = r.get('start_date') or ''
+            r_end   = r.get('end_date')   or '9999-12-31'
+            # Overlap check
+            if r_start <= t_end and t_start <= r_end:
+                conflicts.append({
+                    'id':         r.get('id'),
+                    'name':       r.get('name'),
+                    'position':   r.get('position',''),
+                    'start_date': r.get('start_date',''),
+                    'end_date':   r.get('end_date',''),
+                })
+        if conflicts:
+            return jsonify({
+                'ok': False,
+                'conflict': True,
+                'conflicts': conflicts,
+                'message': f'This employee already has {len(conflicts)} record(s) overlapping this travel period.'
+            }), 409
+
+    # Apply update
     for i, r in enumerate(records):
         if r.get('id') == rec_id:
-            records[i] = {**r, **{k: v for k, v in body.items() if k != 'id'}}
+            records[i] = {**r, **{k: v for k, v in body.items() if k not in ('id', 'force')}}
             _global_set('travel', records)
             return jsonify({'ok': True, 'record': records[i]})
     return jsonify({'error': 'not found'}), 404
