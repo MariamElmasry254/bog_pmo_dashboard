@@ -1656,6 +1656,77 @@ def api_fetch_employee_positions():
         return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
 
 
+@app.route('/api/estimated-rows/import-summary-excel', methods=['POST'])
+def api_import_summary_excel():
+    """Read sheets from the summary Excel and return sheet names + optionally parse one sheet."""
+    import io, re as _re_s
+    f = request.files.get('file')
+    if not f:
+        return jsonify({'ok': False, 'error': 'No file'}), 400
+    raw = f.read()
+    phase = (request.form.get('phase') or 'development').strip()
+    sheet = (request.form.get('sheet') or '').strip()
+
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(raw), data_only=True)
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 400
+
+    def _parse_num(v):
+        if v is None: return None
+        if isinstance(v, (int, float)): return float(v)
+        s = str(v).replace(',','').replace('SAR','').replace('USD','').strip()
+        try: return float(s)
+        except: return None
+
+    def _read_summary(ws):
+        result = {}
+        labels = {
+            'total_usd_per_month': ['TOTAL USD per month'],
+            'total_sar_per_month': ['TOTAL Estimated Cost per month'],
+            'est_mds_per_month':   ['Estimated MDs / Month'],
+            'cost_per_md_sar':     ['TOTAL Estimated Cost per MD'],
+            'total_cost_sar':      ['Total project estimated Cost'],
+            'total_mds':           ['Total No of MDs'],
+            'total_cost_usd':      ['Total cost USD'],
+        }
+        for row in ws.iter_rows(values_only=True):
+            label = str(row[0] or '').strip()
+            if not label: continue
+            for key, keywords in labels.items():
+                if any(kw.lower() in label.lower() for kw in keywords):
+                    for v in row[1:]:
+                        n = _parse_num(v)
+                        if n is not None:
+                            result[key] = n; break
+                    break
+        return result
+
+    # If sheet specified → parse and save
+    if sheet and sheet in wb.sheetnames:
+        ws = wb[sheet]
+        summary = _read_summary(ws)
+        if not summary:
+            return jsonify({'ok': False, 'error': f'No summary data found in sheet "{sheet}"'}), 400
+        # Save to DB per project+phase
+        proj_id = session.get('project_id') or ''
+        db.set_override('estimated_summary', str(proj_id), phase, summary)
+        return jsonify({'ok': True, 'phase': phase, 'sheet': sheet, 'summary': summary})
+
+    # No sheet specified → return list of sheets
+    return jsonify({'ok': True, 'sheets': wb.sheetnames, 'needs_sheet_selection': True})
+
+
+@app.route('/api/estimated-summary', methods=['GET'])
+def api_get_estimated_summary():
+    """Get saved estimated cost summary for current project + phase."""
+    phase = request.args.get('phase', 'development')
+    proj_id = session.get('project_id') or ''
+    summary = db.get_override('estimated_summary', str(proj_id), phase)
+    return jsonify({'ok': True, 'summary': summary or {}})
+
+
 @app.route('/api/estimated-rows/import-excel', methods=['POST'])
 def api_estimated_rows_import_excel():
     """Import Estimated Cost rows from Excel sheet.
@@ -2044,6 +2115,9 @@ def api_overview():
         'time_progress_pct':  time_progress_pct,
         'days_elapsed':       days_elapsed,
         'days_remaining':     days_remaining,
+        # Project identity
+        'project_id':         session.get('project_id'),
+        'is_bog':             _is_bog,
     })
 
 
