@@ -963,10 +963,7 @@ async function confirmTicket() {
 
   // RETURN ticket but no open record → warn
   if (dir === 'return' && !d.open_travel_id) {
-    if (!confirm('⚠️ No open outbound record found for ' + d.name + '.
-Add outbound (departure) ticket first.
-
-Add as new record anyway?')) return;
+    if (!confirm('No open outbound record found for ' + d.name + '. Add outbound ticket first. Add anyway?')) return;
   }
 
   // OUTBOUND or unknown → create new travel record
