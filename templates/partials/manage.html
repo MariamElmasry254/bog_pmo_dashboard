@@ -149,24 +149,31 @@ tr:hover td{background:#FAFAFA;}
     </div>
     <div class="result-bar" id="travelImportResult"></div>
 
-    <!-- Toolbar -->
-    <div class="toolbar">
-      <input class="search-inp" id="travelSearch" placeholder="🔍 Search by name…" oninput="loadTravel()">
-      <select class="filter-sel" id="travelFilter" onchange="loadTravel()">
+    <!-- Toolbar — Row 1: Filters -->
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+      <input class="search-inp" id="travelSearch" placeholder="🔍 Search by name…" oninput="loadTravel()" style="flex:2;min-width:200px;">
+      <select class="search-inp" id="travelFilter" onchange="loadTravel()" style="flex:1;min-width:120px;">
         <option value="all">All</option>
         <option value="linked">✅ Linked</option>
         <option value="unlinked">⚠ Unlinked</option>
       </select>
-      <input type="text" class="filter-sel" id="travelPosFilter" placeholder="🔍 Position…" style="min-width:120px;" oninput="loadTravel()" title="Filter by position">
-      <input type="date" class="filter-sel" id="travelDateFrom" onchange="loadTravel()" title="Travel from" style="min-width:130px;color:var(--muted);">
-      <input type="date" class="filter-sel" id="travelDateTo" onchange="loadTravel()" title="Travel to" style="min-width:130px;color:var(--muted);">
-      <button class="btn btn-ghost" onclick="fetchCodes()" title="Get codes from Odoo">🔢 Fetch Codes</button>
-      <button class="btn btn-ghost" onclick="fetchPositions()" title="Get job positions from Odoo">📋 Fetch Positions</button>
-      <select class="filter-sel" id="travelGroupBy" onchange="loadTravel()" title="Group by" style="min-width:130px;">
-        <option value="">No grouping</option>
-        <option value="position">Group by Position</option>
+      <input type="text" class="search-inp" id="travelPosFilter" placeholder="🔍 Filter position…"
+        style="flex:2;min-width:160px;" oninput="loadTravel()">
+      <input type="date" class="search-inp" id="travelDateFrom" onchange="loadTravel()"
+        title="From" style="flex:1;min-width:130px;color:var(--muted);">
+      <span style="color:var(--muted);font-size:11px;white-space:nowrap;">→</span>
+      <input type="date" class="search-inp" id="travelDateTo" onchange="loadTravel()"
+        title="To" style="flex:1;min-width:130px;color:var(--muted);">
+    </div>
+    <!-- Toolbar — Row 2: Actions -->
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+      <select class="filter-sel" id="travelGroupBy" onchange="loadTravel()" style="min-width:155px;">
+        <option value="">⊞ No grouping</option>
+        <option value="position">📋 Group by Position</option>
       </select>
-      <button class="btn btn-ghost" onclick="toggleForm('travelForm')">+ Add Manually</button>
+      <button class="btn btn-ghost" onclick="fetchCodes()">🔢 Fetch Codes</button>
+      <button class="btn btn-ghost" onclick="fetchPositions()">📋 Fetch Positions</button>
+      <button class="btn btn-ghost" onclick="toggleForm('travelForm')" style="margin-left:auto;">+ Add Manually</button>
     </div>
     <div class="result-bar" id="autoLinkTravelResult"></div>
 
