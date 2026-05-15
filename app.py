@@ -1875,7 +1875,11 @@ def api_projects_list():
 def api_overview():
     """KPIs from Roadmap + Odoo project details"""
     _proj_name = active_project_name()
-    roadmap_services = ROADMAP or []
+    _proj_id   = session.get('project_id')
+    _is_bog    = not _proj_id or str(_proj_id) == '228'
+
+    # Roadmap data only for BOG — other projects get empty roadmap
+    roadmap_services = (ROADMAP or []) if _is_bog else []
     total_wd_roadmap = sum(s.get('wd') or 0 for s in roadmap_services)
 
     teams = set()
@@ -1883,7 +1887,7 @@ def api_overview():
         if s.get('team'):
             teams.add(s['team'])
 
-    milestones_count = len(MILESTONES) if MILESTONES else 0
+    milestones_count = len(MILESTONES) if (_is_bog and MILESTONES) else 0
 
     # ── Fetch live project data from Odoo ──────────────────────────────
     odoo_project = {}
@@ -1903,7 +1907,7 @@ def api_overview():
             )
             if projects:
                 # Prefer exact match
-                proj = next((p for p in projects if 'BOG Digital Transformation 25' in (p.get('name') or '')), projects[0])
+                proj = next((p for p in projects if (p.get('name') or '').strip().lower() == (_proj_name or '').strip().lower()), projects[0])
                 odoo_project = proj
     except Exception as _e:
         logger.warning(f"Odoo project fetch for overview failed: {_e}")
@@ -2057,7 +2061,7 @@ def api_overview_tags_analysis():
     if phases_param:
         phase_names = [p.strip() for p in phases_param.split(',') if p.strip()]
     else:
-        phase_names = PHASE_MAPPING.get(phase_group, [])
+        phase_names = get_phase_mapping().get(phase_group, [])
 
     try:
         # Resolve phase IDs
@@ -2284,7 +2288,7 @@ def api_overview_analysis(phase_group):
     if phases_param:
         phase_names = [p.strip() for p in phases_param.split(',') if p.strip()]
     else:
-        phase_names = PHASE_MAPPING.get(phase_group, [])
+        phase_names = get_phase_mapping().get(phase_group, [])
 
     employees_param = request.args.get('employees')
     employees_filter = []
@@ -4089,12 +4093,35 @@ def parse_estimated_sheet(df):
 # ============================================================
 
 # Phase mapping: variance tab → list of Odoo phases
-PHASE_MAPPING = {
-    'development': ['Development Phase'],
+# Default PHASE_MAPPING for BOG (id=228)
+# For other projects, phases are auto-detected from Odoo or set via /manage
+PHASE_MAPPING_DEFAULT = {
+    'development':  ['Development Phase'],
     'consultation': ['Consultation phase - Initiation', 'Consultation phase -  Analysis',
                      'Consultation phase - General', 'Consultation phase -  UX'],
-    'support': [],  # Support phase doesn't exist as Odoo phase yet
+    'support':      [],
 }
+
+def get_phase_mapping():
+    """Get phase mapping for active project.
+    Priority:
+    1. Per-project override saved in DB (via manage page)
+    2. BOG default if project_id == 228 or no project set
+    3. Auto-detect from Odoo task phases
+    """
+    from flask import session as _sess
+    proj_id = _sess.get('project_id')
+    # Check DB override for this project
+    override = db.get_override('phase_mapping', str(proj_id or ''), 'mapping')
+    if override and isinstance(override, dict):
+        return override
+    # BOG default (id=228 or legacy no-id)
+    if not proj_id or str(proj_id) == '228':
+        return PHASE_MAPPING_DEFAULT
+    # Other projects: return empty (will auto-detect in each API)
+    return {'development': [], 'consultation': [], 'support': []}
+
+PHASE_MAPPING = PHASE_MAPPING_DEFAULT  # keep for backward compat
 
 # Ramadan dates (current year). Update annually.
 RAMADAN_RANGES = {
@@ -4269,7 +4296,7 @@ def compute_effort_from_odoo(phase_key, year, month, position_lookup=None):
     """Compute Regular / Ramadan / Overtime hours per person for a specific month.
     Now also tracks onsite days based on travel records and computes effective rate.
     """
-    phases = PHASE_MAPPING.get(phase_key, [])
+    phases = get_phase_mapping().get(phase_key, [])
     if not phases and phase_key != 'support':
         return {'team': [], 'months': [], 'error': f'No phases mapped for {phase_key}'}
 
@@ -5017,9 +5044,7 @@ def api_effort_all_months(phase_key):
             return jsonify({'error': 'Odoo unreachable', 'employees': [], 'months': []}), 503
 
     # Step 1: Determine the relevant tasks (under the phase)
-    phase_names = PHASE_MAPPING.get(phase_key, [])
-    if not phase_names:
-        return jsonify({'error': f'Unknown phase: {phase_key}'}), 400
+    phase_names = get_phase_mapping().get(phase_key, [])
 
     try:
         # Find project
@@ -5032,6 +5057,30 @@ def api_effort_all_months(phase_key):
         if not projects:
             return jsonify({'employees': [], 'months': []})
         project_id = projects[0]['id']
+
+        # Auto-detect phases for non-BOG projects (phase_names empty)
+        if not phase_names:
+            all_phases = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.task.type', 'search_read',
+                [[('project_ids', 'in', [project_id])]],
+                {'fields': ['id', 'name'], 'limit': 50}
+            )
+            # For development: pick phases with "dev" in name, else all
+            phase_kw = {'development': ['dev'], 'consultation': ['consult', 'analysis', 'ux'],
+                        'support': ['support', 'maintenance']}
+            keywords = phase_kw.get(phase_key, [])
+            if keywords:
+                matched = [p['name'] for p in all_phases
+                           if any(kw.lower() in (p['name'] or '').lower() for kw in keywords)]
+                phase_names = matched or [p['name'] for p in all_phases]
+            else:
+                phase_names = [p['name'] for p in all_phases]
+            logger.info(f"Auto-detected phases for {_proj_name}/{phase_key}: {phase_names}")
+
+        if not phase_names:
+            return jsonify({'employees': [], 'months': [], 'total_employees': 0,
+                            'note': f'No phases found for {phase_key} in this project'})
 
         # Find phases — try exact match first, then ilike fallback for name variations
         phases = odoo.models.execute_kw(
@@ -5955,7 +6004,7 @@ def fill_current_effort_from_odoo(xlsx_path):
     # Fetch all timesheets for this project (within Development phase)
     try:
         # Get tasks under Development Phase
-        dev_phase_names = PHASE_MAPPING.get('development', ['Development Phase'])
+        dev_phase_names = get_phase_mapping().get('development', ['Development Phase'])
         phases = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'project.phase', 'search_read',
@@ -6714,7 +6763,7 @@ def debug_effort_phase():
         if not odoo.connect():
             return jsonify({'error': 'Odoo unreachable'})
 
-    phase_names = PHASE_MAPPING.get(phase_key, [])
+    phase_names = get_phase_mapping().get(phase_key, [])
     info = {'phase_key': phase_key, 'phase_names': phase_names}
 
     try:
