@@ -1743,22 +1743,45 @@ def api_import_summary_excel():
 
 @app.route('/api/project-phases-available')
 def api_project_phases_available():
-    """Check which phase groups exist for this project in Odoo."""
+    """Check which phase groups exist for this project — uses Excel config first."""
     proj_id = session.get('project_id')
     is_bog  = not proj_id or str(proj_id) == '228'
     if is_bog:
         return jsonify({'is_bog': True, 'has_services': True, 'has_support': True})
+
+    _proj_name = active_project_name()
+
+    # Check saved Excel config first
+    configs = db.get_override('project_config', 'global', 'phase_configs') or {}
+    def _match_cfg(pn, cfgs):
+        pl = pn.lower().strip()
+        for k, v in cfgs.items():
+            kl = k.lower().strip()
+            if kl == pl or kl in pl or pl in kl:
+                return v
+        return None
+
+    cfg = _match_cfg(_proj_name, configs)
+    if cfg:
+        return jsonify({
+            'is_bog':       False,
+            'has_services': cfg.get('has_services', True),
+            'has_support':  cfg.get('has_support', False),
+            'sheets':       cfg.get('sheets', {}),
+            'source':       'excel_config',
+        })
+
+    # Fallback: check Odoo phases directly
     try:
-        _proj_name = active_project_name()
         pid = get_project_odoo_id(_proj_name)
         if not pid:
             return jsonify({'has_services': True, 'has_support': False})
         support_phases = auto_detect_phases_for_project(pid, 'support')
         return jsonify({
-            'is_bog':        False,
-            'has_services':  True,
-            'has_support':   len(support_phases) > 0,
-            'support_phases': support_phases,
+            'is_bog':       False,
+            'has_services': True,
+            'has_support':  len(support_phases) > 0,
+            'source':       'odoo_detect',
         })
     except Exception as e:
         return jsonify({'has_services': True, 'has_support': False, 'error': str(e)})
@@ -1904,6 +1927,85 @@ def api_estimated_rows_import_excel():
 
     return jsonify({'ok': True, 'phase': phase, 'rows': rows, 'count': len(rows),
                     'sheet_used': ws.title})
+
+
+@app.route('/api/project-config/upload-excel', methods=['POST'])
+def api_upload_project_config_excel():
+    """Upload the Estimated Cost Excel to auto-configure project phase configs.
+    Reads sheet names to determine which projects have Services/Support.
+    Saves config to DB per project name match.
+    """
+    import io, re as _re
+    f = request.files.get('file')
+    if not f:
+        return jsonify({'ok': False, 'error': 'No file'}), 400
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(f.read()), data_only=True)
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 400
+
+    def _is_support(name):
+        return bool(_re.search(r'support|suppo\b', name, _re.IGNORECASE))
+
+    def _is_service(name):
+        return bool(_re.search(r'service|serv\b|\bCR\b', name, _re.IGNORECASE))
+
+    def _proj_key(name):
+        n = name.strip()
+        n = _re.sub(r'[\s_]*(support|suppo|service|serv|CR)\s*$', '', n, flags=_re.IGNORECASE).strip()
+        return n
+
+    projects = {}
+    for sheet in wb.sheetnames:
+        is_sup = _is_support(sheet)
+        is_svc = _is_service(sheet)
+        if not is_sup and not is_svc:
+            is_svc = True  # standalone = services only
+        key = _proj_key(sheet)
+        if key not in projects:
+            projects[key] = {'has_services': False, 'has_support': False, 'sheets': {}}
+        if is_sup:
+            projects[key]['has_support'] = True
+            projects[key]['sheets']['support'] = sheet.strip()
+        if is_svc:
+            projects[key]['has_services'] = True
+            projects[key]['sheets']['services'] = sheet.strip()
+
+    # Save global config
+    db.set_override('project_config', 'global', 'phase_configs', projects)
+
+    return jsonify({'ok': True, 'projects_found': len(projects),
+                    'projects': projects})
+
+
+@app.route('/api/project-config', methods=['GET'])
+def api_get_project_config():
+    """Get phase config for current project from saved Excel config."""
+    _proj_name = active_project_name()
+    configs = db.get_override('project_config', 'global', 'phase_configs') or {}
+
+    # Find best match for current project name
+    def _match(proj_name, configs):
+        pn = proj_name.lower().strip()
+        # Exact
+        for k, v in configs.items():
+            if k.lower().strip() == pn:
+                return v
+        # Substring both ways
+        for k, v in configs.items():
+            kl = k.lower().strip()
+            if kl in pn or pn in kl:
+                return v
+        return None
+
+    cfg = _match(_proj_name, configs)
+    if cfg:
+        return jsonify({'ok': True, 'project': _proj_name, 'config': cfg,
+                        'has_services': cfg.get('has_services', True),
+                        'has_support': cfg.get('has_support', False)})
+    return jsonify({'ok': True, 'project': _proj_name, 'config': None,
+                    'has_services': True, 'has_support': False})
 
 
 @app.route('/debug/phases-for-project')
