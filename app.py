@@ -716,10 +716,11 @@ def api_global_promos_add():
         if r.get('name','').lower()==name.lower() and str(r.get('year',''))==str(year):
             return jsonify({'error': 'duplicate', 'existing': r}), 409
     rec = {'id': _next_id(records), 'name': name,
-        'new_title': (body.get('new_title') or '').strip(),
+        'old_title':      (body.get('old_title')      or '').strip(),
+        'new_title':      (body.get('new_title')      or '').strip(),
         'effective_date': (body.get('effective_date') or '').strip(),
         'year': int(year) if year else None, 'notes': (body.get('notes') or '').strip(),
-        'odoo_employee_id': body.get('odoo_employee_id'),
+        'odoo_employee_id':   body.get('odoo_employee_id'),
         'odoo_employee_code': body.get('odoo_employee_code')}
     records.append(rec); _global_set('promotions', records)
     return jsonify({'ok': True, 'record': rec})
@@ -5491,9 +5492,12 @@ def load_promotions():
             # Normalize date field
             if 'effective_date' in r and 'promotion_date' not in r:
                 r['promotion_date'] = r['effective_date']
-            # Keep both new_title and new_position for compatibility
+            # Map new_title → new_position for _base_position_on_date
             if 'new_title' in r:
-                r['new_position'] = r['new_title']  # used by _base_position_on_date
+                r['new_position'] = r['new_title']
+            # Map old_title → old_position for before-promotion calculation
+            if 'old_title' in r and r['old_title']:
+                r['old_position'] = r['old_title']
             if 'new_title' in r and 'position' not in r:
                 r['position'] = r['new_title']
         global_recs.sort(key=lambda x: (x.get('name',''), x.get('promotion_date','')))
