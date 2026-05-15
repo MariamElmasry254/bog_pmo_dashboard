@@ -828,27 +828,35 @@ def api_parse_ticket():
         m = re.search(r'(?:Passenger\s+)?Name\s*[:\-]\s*(?:MR|MRS|MS|DR)?\s*\.?\s*([A-Za-z][A-Za-z ]{2,35}?)\s*[-/]\s*ADT', text, re.IGNORECASE)
         if m:
             return m.group(1).strip().title()
-        # 3. Tumodo/generic: ALL-CAPS name before passport number line (letter+7+digits)
-        m = re.search(r'([A-Z][A-Z ]{3,35})\n[A-Z]\d{6,}', text)
+        # 3. Tumodo: line after "PASSENGER, PASSPORT AIRLINE AGENT" header
+        #    Next line: "KAREEM ELSAFY Saudia (SV) Tumodo" — take leading ALL-CAPS words
+        lines = text.split('\n')
+        for i, line in enumerate(lines):
+            if re.search(r'PASSENGER.*AGENT', line, re.IGNORECASE) and i+1 < len(lines):
+                next_line = lines[i+1]
+                words = next_line.split()
+                name_words = []
+                for w in words:
+                    wc = re.sub(r'[(),./]', '', w)
+                    if re.match(r'^[A-Z]{2,}$', wc) and wc not in _LABEL_WORDS:
+                        name_words.append(wc)
+                    else:
+                        break
+                if len(name_words) >= 1:
+                    return ' '.join(name_words).title()
+        # 4. Tumodo variant: name on same line before airline "(SV)" or "(MS)" code
+        m = re.search(r'\n([A-Z][A-Z ]{2,35}?)\s+(?:Saudia|EgyptAir|flydubai|Emirates|Qatar|Air\s+Arabia|Nile\s+Air|\w+\s*\([A-Z]{2}\))', text)
         if m:
             raw = m.group(1).strip()
-            # Strip known label words from front
-            raw = re.sub(r'^(?:' + '|'.join(_LABEL_WORDS) + r')[,\s]*', '', raw, flags=re.IGNORECASE).strip()
+            if len(raw) > 3 and raw.upper() not in _LABEL_WORDS:
+                return raw.title()
+        # 5. ALL-CAPS name before passport number (letter + 6+ digits)
+        m = re.search(r'\n([A-Z][A-Z ]{3,35})\n[A-Z]\d{6,}', text)
+        if m:
+            raw = re.sub(r'^(?:' + '|'.join(_LABEL_WORDS) + r')[,\s]*', '', m.group(1).strip(), flags=re.IGNORECASE).strip()
             if raw and len(raw) > 3:
                 return raw.title()
-        # 4. Tumodo inline: trailing ALL-CAPS words on line containing PASSENGER/AGENT labels
-        for line in text.split('\n'):
-            if 'PASSENGER' in line.upper() or 'AGENT' in line.upper():
-                words = line.split()
-                name_words = []
-                for w in reversed(words):
-                    wc = re.sub(r'[,.()/]', '', w)
-                    if wc.upper() in _LABEL_WORDS: break
-                    if re.match(r'^[A-Z]{2,}$', wc): name_words.insert(0, wc)
-                    else: break
-                if len(name_words) >= 2:
-                    return ' '.join(name_words).title()
-        # 5. Generic: "Passenger Name:\nKAREEM ELSAFY"
+        # 6. Generic: "Passenger Name: KAREEM ELSAFY"
         m = re.search(r'(?:Passenger\s+)?Name\s*:\s*\n?\s*([A-Za-z][A-Za-z ]{2,35}?)(?:\n|$)', text, re.IGNORECASE)
         if m:
             return m.group(1).strip().title()
@@ -860,6 +868,13 @@ def api_parse_ticket():
         _name = re.sub(r'\s*(Adt|Adu|Chd|Inf)\s*$', '', _name, flags=re.IGNORECASE).strip()
         if len(_name) > 3:
             result['name'] = _name
+
+    # ── VALIDATION: reject if no passenger name found ──
+    if not result.get('name'):
+        return jsonify({
+            'ok': False,
+            'error': 'Could not extract passenger name from this ticket. Please make sure the PDF is a valid flight ticket with a passenger name, or add the record manually.'
+        }), 422
 
     # ── IATA airport code → city name mapping ──
     IATA_MAP = {
