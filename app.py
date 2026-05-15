@@ -5610,13 +5610,13 @@ def api_effort_all_months(phase_key):
             visited = set()
             while cur and cur['id'] not in visited:
                 visited.add(cur['id'])
-                if cur['id'] in parent_ids:
+                if cur['id'] in relevant_ids:
                     relevant_ids.add(t['id'])
                     break
                 if not cur.get('parent_id'):
                     break
-                pid = cur['parent_id'][0] if isinstance(cur['parent_id'], list) else cur['parent_id']
-                cur = task_map.get(pid)
+                par = cur['parent_id'][0] if isinstance(cur['parent_id'], list) else cur['parent_id']
+                cur = task_map.get(par)
 
         # Fetch all timesheets for these tasks (no date filter - want full history)
         timesheets = odoo.models.execute_kw(
