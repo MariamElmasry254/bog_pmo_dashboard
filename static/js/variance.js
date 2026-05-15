@@ -1462,7 +1462,14 @@ async function loadEffortLive(phaseKey, containerId) {
 }
 
 function renderEstimated(data, phaseKey) {
-  // Build interactive estimated cost table — editable rows, auto-calc from positions catalog
+  const isBog = AppState._overviewData?.is_bog !== false;
+  if (!isBog) {
+    // Non-BOG: show summary card (loaded from DB or upload)
+    return `<div id="estimatedLiveWrap">
+      <div class="loading">Loading estimated cost…</div>
+    </div>`;
+  }
+  // BOG: editable rows table (original behavior)
   return `<div id="estimatedLiveWrap">
     <div class="loading">Loading estimated cost table…</div>
   </div>`;
@@ -1486,6 +1493,30 @@ async function loadEstimatedLive(phaseKey, containerId) {
   const wrap = document.getElementById(containerId || 'estimatedLiveWrap');
   if (!wrap) { console.warn('estimatedLiveWrap not found'); return; }
   wrap.innerHTML = '<div class="loading">Loading estimated cost table…</div>';
+
+  // Non-BOG: try to load saved summary first
+  const isBog = AppState._overviewData?.is_bog !== false;
+  if (!isBog) {
+    if (window.estLoadSummaryIfSaved) {
+      const loaded = await estLoadSummaryIfSaved(phaseKey, containerId || 'estimatedLiveWrap');
+      if (loaded) return;
+    }
+    // No saved summary — show upload prompt
+    const w = document.getElementById(containerId || 'estimatedLiveWrap');
+    if (w) w.innerHTML = `
+      <div style="text-align:center;padding:40px;color:#6B7280;">
+        <div style="font-size:32px;margin-bottom:12px;">📊</div>
+        <div style="font-size:14px;font-weight:600;margin-bottom:8px;">No Estimated Cost data yet</div>
+        <div style="font-size:12px;margin-bottom:16px;">Upload the Estimated Cost Excel file to import summary data</div>
+        <label style="cursor:pointer;">
+          <input type="file" accept=".xlsx,.xls" style="display:none;"
+            onchange="estImportExcel(this,'${phaseKey}')">
+          <span style="background:#3B82F6;color:white;padding:10px 20px;border-radius:8px;
+                       font-size:13px;font-weight:600;cursor:pointer;">⬆ Upload Excel</span>
+        </label>
+      </div>`;
+    return;
+  }
 
   // Load positions catalog from DB
   let positions = [];
