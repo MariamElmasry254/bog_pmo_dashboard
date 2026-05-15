@@ -1552,6 +1552,110 @@ def api_fetch_employee_codes():
         return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
 
 
+@app.route('/api/global/travel/fetch-positions', methods=['POST'])
+def api_fetch_employee_positions():
+    """Fetch job positions from Odoo hr.employee (job_id field) and update travel + promo records."""
+    try:
+        if not odoo.uid: odoo.connect()
+
+        # Get job_id (Job Position) + job_title for all active employees
+        all_emps = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'hr.employee', 'search_read',
+            [[('active', '=', True)]],
+            {'fields': ['id', 'name', 'job_id', 'job_title', 'number', 'barcode'], 'limit': 2000}
+        )
+
+        import re as _re_pos
+        # Build map: odoo_id → position string
+        id_to_position = {}
+        id_to_code = {}
+        for e in all_emps:
+            eid = e['id']
+            # Job position (hr.job name) — most reliable
+            job = e.get('job_id')
+            job_name = job[1] if isinstance(job, list) and len(job) > 1 else ''
+            # Job title fallback
+            job_title = (e.get('job_title') or '').strip()
+            pos = job_name or job_title or ''
+            if pos:
+                id_to_position[eid] = pos
+            # Also collect codes
+            num = (e.get('number') or '').strip()
+            if num and _re_pos.match(r'^[ERT]\d+$', num, _re_pos.IGNORECASE):
+                id_to_code[eid] = num.upper()
+            elif (e.get('barcode') or '').strip():
+                bc = e['barcode'].strip()
+                if _re_pos.match(r'^[ERT]\d+$', bc, _re_pos.IGNORECASE):
+                    id_to_code[eid] = bc.upper()
+
+        # Map Odoo job title → DB position key (EGY - Sr. Software Engineer etc)
+        all_db_pos = get_all_positions(db)
+        def _map_to_db_pos(raw_job, country='EGY'):
+            if not raw_job: return raw_job
+            def _norm(s):
+                import re as _rn
+                s = _rn.sub(r'senior', 'Sr.', s, flags=_rn.IGNORECASE)
+                s = _rn.sub(r'sr(?!\.)', 'Sr.', s, flags=_rn.IGNORECASE)
+                return s.strip().lower()
+            job_norm = _norm(raw_job)
+            for p in all_db_pos:
+                pname = (p.get('position') or '').replace('EGY - ', '').replace('KSA - ', '').replace('TUN - ', '')
+                if _norm(pname) == job_norm:
+                    return p.get('position')
+            return raw_job  # fallback: keep raw
+
+        # Update travel records (only those linked to Odoo)
+        travel = _global_get('travel') or []
+        updated_travel = 0
+        for r in travel:
+            oid = r.get('odoo_employee_id')
+            if not oid: continue
+            oid_int = int(oid)
+            changed = False
+            # Update position
+            if oid_int in id_to_position:
+                raw = id_to_position[oid_int]
+                # Try to detect country from existing record or code
+                code = r.get('odoo_employee_code') or id_to_code.get(oid_int, '')
+                country = 'KSA' if str(code).startswith('R') else 'EGY'
+                new_pos = _map_to_db_pos(raw, country)
+                if r.get('position') != new_pos:
+                    r['position'] = new_pos; changed = True
+            # Update code if missing
+            if not r.get('odoo_employee_code') and oid_int in id_to_code:
+                r['odoo_employee_code'] = id_to_code[oid_int]; changed = True
+            if changed: updated_travel += 1
+
+        _global_set('travel', travel)
+
+        # Update promotion records
+        promos = _global_get('promotions') or []
+        updated_promos = 0
+        for r in promos:
+            oid = r.get('odoo_employee_id')
+            if not oid: continue
+            oid_int = int(oid)
+            # Only update position if new_title is empty (don't override promo data)
+            if oid_int in id_to_position and not r.get('new_title') and not r.get('new_position'):
+                r['new_title'] = id_to_position[oid_int]
+                updated_promos += 1
+            if not r.get('odoo_employee_code') and oid_int in id_to_code:
+                r['odoo_employee_code'] = id_to_code[oid_int]
+
+        _global_set('promotions', promos)
+
+        return jsonify({
+            'ok': True,
+            'positions_found': len(id_to_position),
+            'travel_updated': updated_travel,
+            'promos_updated': updated_promos,
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
+
+
 @app.route('/debug/projects-raw')
 def debug_projects_raw():
     """Debug: show raw Odoo project data to verify fields."""
