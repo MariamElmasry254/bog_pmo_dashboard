@@ -625,9 +625,17 @@ def api_global_travel_add():
     start = (body.get('start_date') or '').strip()
     if not name or not start:
         return jsonify({'error': 'name and start_date required'}), 400
+    name_lower = name.lower()
     for r in records:
-        if r.get('name','').lower()==name.lower() and r.get('start_date')==start:
-            return jsonify({'error': 'duplicate', 'existing': r}), 409
+        if r.get('name','').lower() != name_lower:
+            continue
+        r_start = r.get('start_date') or ''
+        r_end   = r.get('end_date')   or '9999-12-31'
+        new_end = (body.get('end_date') or '').strip() or '9999-12-31'
+        # Overlap: two periods overlap if one starts before the other ends
+        if r_start <= new_end and start <= r_end:
+            return jsonify({'error': 'duplicate', 'existing': r,
+                'message': f'{name} already has a travel record overlapping this period ({r_start} → {r.get("end_date") or "open"})'}), 409
     rec = {'id': _next_id(records), 'name': name,
         'position': (body.get('position') or '').strip(),
         'start_date': start, 'end_date': (body.get('end_date') or '').strip(),
@@ -948,7 +956,24 @@ def api_parse_ticket():
             if best:
                 result['odoo_id']   = best['id']
                 result['odoo_code'] = best['code']
-                result['position']  = best['job']  # job_title from Odoo
+                # Map Odoo job_title to DB position key
+                raw_job = best['job'] or ''
+                # Try to find matching DB position (fuzzy: normalize Sr/Senior/Lead)
+                import re as _re_pos2
+                def _norm_pos(s):
+                    s = _re_pos2.sub(r'\bsenior\b', 'Sr.', s, flags=_re_pos2.IGNORECASE)
+                    s = _re_pos2.sub(r'\bsr\b(?!\.)', 'Sr.', s, flags=_re_pos2.IGNORECASE)
+                    s = _re_pos2.sub(r'\blead\b', 'Lead', s, flags=_re_pos2.IGNORECASE)
+                    return s.strip()
+                all_db_pos = get_all_positions(db)
+                matched_pos = None
+                job_norm = _norm_pos(raw_job).lower()
+                for p in all_db_pos:
+                    pname = (p.get('position') or '').replace('EGY - ', '').replace('KSA - ', '')
+                    if _norm_pos(pname).lower() == job_norm:
+                        matched_pos = p.get('position')
+                        break
+                result['position'] = matched_pos or raw_job
         except Exception as _e:
             logger.warning('Odoo match: %s', _e)
 
