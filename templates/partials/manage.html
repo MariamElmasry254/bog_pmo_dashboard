@@ -275,7 +275,11 @@ tr:hover td{background:#FAFAFA;}
           <input type="text" id="pm_name" placeholder="Full name">
         </div>
         <div class="form-field">
-          <label>New Title</label>
+          <label>Previous Title (before promotion)</label>
+          <input type="text" id="pm_old_title" placeholder="e.g. Business Analyst">
+        </div>
+        <div class="form-field">
+          <label>New Title (after promotion)</label>
           <input type="text" id="pm_title" placeholder="e.g. Senior BA">
         </div>
         <div class="form-field">
@@ -495,8 +499,9 @@ function openEdit(r, type) {
     document.getElementById('travelForm').scrollIntoView({behavior:'smooth',block:'start'});
   } else {
     _editPromo = r;
-    document.getElementById('pm_name').value  = r.name           || '';
-    document.getElementById('pm_title').value = r.new_title      || '';
+    document.getElementById('pm_name').value      = r.name           || '';
+    document.getElementById('pm_old_title').value = r.old_title      || '';
+    document.getElementById('pm_title').value     = r.new_title      || '';
     document.getElementById('pm_date').value  = r.effective_date || '';
     document.getElementById('pm_year').value  = r.year           || '';
     document.getElementById('pm_notes').value = r.notes          || '';
@@ -855,7 +860,10 @@ async function loadPromos() {
         <td>
           <div style="font-weight:600;font-size:13px;">${esc(r.name)} ${codeTag(r,'promotions')}</div>
         </td>
-        <td style="font-size:12px;">${esc(r.new_title||'—')}</td>
+        <td style="font-size:12px;">
+          ${r.old_title ? `<span style="color:var(--muted);text-decoration:line-through;font-size:11px;">${esc(r.old_title)}</span> → ` : ''}
+          <span style="font-weight:500;">${esc(r.new_title||'—')}</span>
+        </td>
         <td style="font-size:12px;">${r.effective_date||'—'}</td>
         <td><span class="badge badge-blue" style="font-size:10px;">${r.year||'—'}</span></td>
         <td style="font-size:11px;color:var(--muted);">${esc(r.notes||'')}</td>
@@ -915,7 +923,7 @@ async function bulkDeletePromos() {
 
 function cancelPromo() {
   _editPromo = null;
-  ['pm_name','pm_title','pm_date','pm_year','pm_notes'].forEach(id => document.getElementById(id).value='');
+  ['pm_name','pm_old_title','pm_title','pm_date','pm_year','pm_notes'].forEach(id => document.getElementById(id).value='');
   document.getElementById('promoForm').classList.remove('open');
   document.getElementById('promoSaveBtn').textContent = 'Save Record';
 }
@@ -925,6 +933,7 @@ async function savePromo() {
   if (!name) { alert('Name is required'); return; }
   const body = {
     name,
+    old_title:      document.getElementById('pm_old_title').value.trim(),
     new_title:      document.getElementById('pm_title').value.trim(),
     effective_date: document.getElementById('pm_date').value,
     year:           parseInt(document.getElementById('pm_year').value) || new Date().getFullYear(),
