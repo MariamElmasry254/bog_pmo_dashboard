@@ -4867,11 +4867,33 @@ def api_effort_all_months(phase_key):
             import re as _re_strip
             return _re_strip.sub(r'^(EGY|KSA|TUN|UAE|KWT|BHR|OMN|QAT|JOR|LBN|SAU)\s*-\s*', '', (pos_str or '').strip())
 
+        def _downgrade_position(pos_str):
+            """Infer the position BEFORE a promotion by reversing the level.
+            Lead X      → Sr X
+            Sr X / Sr. X → X  (drop Sr prefix)
+            Senior X    → X
+            If no level prefix found, returns None (can't infer).
+            """
+            import re as _re_dg
+            s = (pos_str or '').strip()
+            # Lead → Sr
+            m = _re_dg.match(r'^Lead\s+(.+)$', s, _re_dg.IGNORECASE)
+            if m:
+                return 'Sr. ' + m.group(1).strip()
+            # Sr. / Sr / Senior → base
+            m = _re_dg.match(r'^(?:Sr\.?|Senior)\s+(.+)$', s, _re_dg.IGNORECASE)
+            if m:
+                return m.group(1).strip()
+            return None  # can't infer (already at base level or unknown pattern)
+
         def _base_position_on_date(date_str):
             """Return raw position for employee on given date, considering promotions.
             Priority:
-            1. Before promotion date → old_title if set, else odoo current position
-            2. After promotion date → new_title from promotion record
+            1. Before promotion date:
+               a. old_title if explicitly set → use it
+               b. old_title empty → infer from new_title by reversing level (Lead→Sr, Sr→base)
+               c. can't infer → use Odoo current position (fallback, log warning)
+            2. On or after promotion date → new_title from applicable promo record
             3. No promotions → odoo current position
             """
             base = _strip_country(odoo_pos or '')
@@ -4882,7 +4904,7 @@ def api_effort_all_months(phase_key):
             sorted_promos = sorted(emp_promos,
                 key=lambda x: x.get('promotion_date') or x.get('effective_date') or '')
 
-            # Find the applicable promotion for this date
+            # Find the last promotion whose date <= date_str
             applicable = None
             for promo in sorted_promos:
                 promo_date = promo.get('promotion_date') or promo.get('effective_date') or ''
@@ -4890,10 +4912,20 @@ def api_effort_all_months(phase_key):
                     applicable = promo
 
             if applicable is None:
-                # Before any promotion — use old_title of earliest promo
+                # date_str is BEFORE any promotion — use old_title of earliest promo
                 first = sorted_promos[0]
                 old = (first.get('old_position') or first.get('old_title') or '').strip()
-                return _strip_country(old) if old else base
+                if old:
+                    return _strip_country(old)
+                # old_title is empty → try to infer from new_title
+                new_for_infer = (first.get('new_position') or first.get('new_title') or '').strip()
+                inferred = _downgrade_position(_strip_country(new_for_infer))
+                if inferred:
+                    logger.debug(f"[promo] {emp_name}: old_title missing, inferred '{inferred}' from '{new_for_infer}' for {date_str}")
+                    return inferred
+                # Can't infer → log warning and use Odoo base (least bad option)
+                logger.warning(f"[promo] {emp_name}: old_title missing & can't infer for {date_str}, using Odoo pos '{base}'")
+                return base
             else:
                 # On or after this promotion date — use new_title
                 new_pos = (applicable.get('new_position') or applicable.get('new_title') or '').strip()
