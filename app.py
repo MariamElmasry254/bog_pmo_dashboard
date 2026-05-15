@@ -5327,15 +5327,18 @@ PLAN_FILE = os.path.join(PERSIST_DIR, 'plan_overrides.json')  # legacy path (kep
 
 
 def load_plan_overrides():
-    """Load plan overrides from DB.
+    """Load plan overrides from DB with project prefix.
     Returns structure compatible with old JSON format:
     {
       'plan_overrides': {phase: {month_key: {field: value}}},
       'position_overrides': {emp_name: position_name}
     }
     """
+    pfx = active_db_prefix()
+    plan_ns = f'{pfx}_plan' if pfx else 'plan'
+
     # Plan overrides: namespace='plan', phase=<phase>, key='<month_key>.<field>'
-    plan_data = db.get_namespace_overrides('plan')
+    plan_data = db.get_namespace_overrides(plan_ns)
     plan_overrides = {}
     for phase, items in plan_data.items():
         if not phase:
@@ -5359,10 +5362,10 @@ def load_plan_overrides():
 
 
 def save_plan_overrides(data):
-    """Save plan_overrides back to DB. Diff against existing to avoid bulk re-writes.
-    This is kept for backward compat with restore endpoint.
-    """
-    # Plan
+    """Save plan_overrides back to DB with project prefix."""
+    pfx = active_db_prefix()
+    plan_ns = f'{pfx}_plan' if pfx else 'plan'
+
     plan = data.get('plan_overrides', {}) or {}
     for phase, months in plan.items():
         if not isinstance(months, dict):
@@ -5371,9 +5374,8 @@ def save_plan_overrides(data):
             if not isinstance(fields, dict):
                 continue
             for field, value in fields.items():
-                db.set_override('plan', phase, f"{month_key}.{field}", value)
+                db.set_override(plan_ns, phase, f"{month_key}.{field}", value)
 
-    # Position
     pos = data.get('position_overrides', {}) or {}
     for emp_name, pos_val in pos.items():
         db.set_override('position', '', emp_name, pos_val)
@@ -6150,8 +6152,19 @@ def api_effort_all_months(phase_key):
     })
 
 
-@app.route('/api/plan-overrides', methods=['GET'])
+@app.route('/api/plan-overrides', methods=['GET', 'POST'])
 def api_plan_overrides_get():
+    if request.method == 'POST':
+        body = request.json or {}
+        phase     = body.get('phase', '')
+        month_key = body.get('month_key', '')
+        field     = body.get('field', '')
+        value     = body.get('value')
+        if not phase or not month_key or not field:
+            return jsonify({'error': 'phase, month_key, field required'}), 400
+        # Save: namespace=plan, subkey=phase, key=month_key.field
+        proj_set_override('plan', phase, f'{month_key}.{field}', value)
+        return jsonify({'ok': True, 'phase': phase, 'month_key': month_key, 'field': field})
     return jsonify(load_plan_overrides())
 
 
@@ -6775,9 +6788,16 @@ def api_budget_changes_get():
                     'planned_profit_history': history if isinstance(history, dict) else {}})
 
 
-@app.route('/api/estimated-rows', methods=['GET'])
+@app.route('/api/estimated-rows', methods=['GET', 'POST'])
 def api_estimated_rows_get():
-    """Get saved estimated cost rows for a phase."""
+    """Get or save estimated cost rows for a phase."""
+    if request.method == 'POST':
+        body = request.json or {}
+        phase = body.get('phase', 'development')
+        rows  = body.get('rows', [])
+        proj_set_override('estimated_rows', '', phase, rows)
+        return jsonify({'ok': True, 'phase': phase, 'saved': len(rows)})
+
     phase = request.args.get('phase', 'development')
     rows = proj_get_override('estimated_rows', '', phase) or []
     if isinstance(rows, str):
