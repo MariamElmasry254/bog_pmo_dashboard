@@ -161,6 +161,11 @@ tr:hover td{background:#FAFAFA;}
       <input type="date" class="filter-sel" id="travelDateFrom" onchange="loadTravel()" title="Travel from" style="min-width:130px;color:var(--muted);">
       <input type="date" class="filter-sel" id="travelDateTo" onchange="loadTravel()" title="Travel to" style="min-width:130px;color:var(--muted);">
       <button class="btn btn-ghost" onclick="fetchCodes()" title="Get codes from Odoo">🔢 Fetch Codes</button>
+      <button class="btn btn-ghost" onclick="fetchPositions()" title="Get job positions from Odoo">📋 Fetch Positions</button>
+      <select class="filter-sel" id="travelGroupBy" onchange="loadTravel()" title="Group by" style="min-width:130px;">
+        <option value="">No grouping</option>
+        <option value="position">Group by Position</option>
+      </select>
       <button class="btn btn-ghost" onclick="toggleForm('travelForm')">+ Add Manually</button>
     </div>
     <div class="result-bar" id="autoLinkTravelResult"></div>
@@ -396,6 +401,43 @@ async function loadTravel() {
   if (dateTo)   rows = rows.filter(r => r.start_date && r.start_date <= dateTo);
   // Update count after client filter
   document.getElementById('travelCount').textContent = rows.length;
+
+  const groupBy = document.getElementById('travelGroupBy')?.value || '';
+
+  if (groupBy === 'position' && rows.length) {
+    // Group by position
+    const groups = {};
+    rows.forEach(r => {
+      const pos = (r.position || '—').trim();
+      if (!groups[pos]) groups[pos] = [];
+      groups[pos].push(r);
+    });
+    const sortedPos = Object.keys(groups).sort();
+    document.getElementById('travelBody').innerHTML = sortedPos.map(pos => {
+      const groupRows = groups[pos];
+      const headerRow = `<tr style="background:#EFF6FF;">
+        <td colspan="7" style="padding:6px 12px;font-size:11px;font-weight:700;color:#1E40AF;letter-spacing:.05em;text-transform:uppercase;">
+          📋 ${esc(pos)} <span style="font-weight:400;color:#6B7280;">(${groupRows.length})</span>
+        </td>
+      </tr>`;
+      const dataRows = groupRows.map(r => `
+        <tr id="tr${r.id}">
+          <td style="width:36px;"><input type="checkbox" class="tcb" data-id="${r.id}" onclick="onTravelCb(this)" style="cursor:pointer;width:15px;height:15px;"></td>
+          <td><div style="font-weight:600;font-size:13px;">${esc(r.name)} ${codeTag(r)}</div></td>
+          <td style="font-size:12px;">${esc(r.position||'—')}</td>
+          <td style="font-size:12px;">${r.start_date||'—'}</td>
+          <td style="font-size:12px;">${r.end_date||'—'}</td>
+          <td style="font-size:11px;color:var(--muted);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(r.notes||'')}</td>
+          <td style="white-space:nowrap;">
+            <button class="btn btn-ghost btn-sm" onclick='openEdit(${JSON.stringify(r).replace(/'/g,"\'")},"travel")'>✎</button>
+            <button class="btn btn-danger btn-sm" onclick="delTravel(${r.id})">✕</button>
+          </td>
+        </tr>`).join('');
+      return headerRow + dataRows;
+    }).join('');
+    return;
+  }
+
   document.getElementById('travelBody').innerHTML = rows.length
     ? rows.map(r => `
       <tr id="tr${r.id}">
@@ -567,6 +609,24 @@ async function delTravel(id) {
 }
 
 // ─── Auto-Link ────────────────────────────────────────────────────────
+async function fetchPositions() {
+  const resId = 'autoLinkTravelResult';
+  showResult(resId, 'info', '⏳ Fetching positions from Odoo…');
+  try {
+    const res = await fetch('/api/global/travel/fetch-positions', {method:'POST'});
+    const d   = await res.json();
+    if (d.ok) {
+      showResult(resId, 'ok',
+        `✅ Fetched ${d.positions_found} positions · Updated ${d.travel_updated} travel · ${d.promos_updated} promos`);
+      loadTravel();
+    } else {
+      showResult(resId, 'err', '⚠️ ' + (d.error||'Failed'));
+    }
+  } catch(e) {
+    showResult(resId, 'err', '⚠️ ' + e.message);
+  }
+}
+
 async function fetchCodes() {
   const resId = 'autoLinkTravelResult';
   showResult(resId, 'info', '⏳ Fetching codes from Odoo timesheets…');
