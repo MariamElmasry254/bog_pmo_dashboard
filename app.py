@@ -1155,6 +1155,61 @@ def debug_autolink_test():
         return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
 
 
+@app.route('/debug/effort-employee')
+def debug_effort_employee():
+    """Debug: show travel + promotions matching for a specific employee"""
+    name = request.args.get('name', 'Abeer AbdelHamed')
+    try:
+        if not odoo.uid: odoo.connect()
+        import re as _re
+
+        # Get Odoo employee
+        emps = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'hr.employee', 'search_read',
+            [[('name', 'ilike', name.split()[0])]],
+            {'fields': ['id', 'name', 'barcode', 'job_title'], 'limit': 10}
+        )
+
+        # Load travel + promotions
+        travel    = _global_get('travel') or []
+        promos    = _global_get('promotions') or []
+
+        def norm(s):
+            return _re.sub(r'\s+', '', (s or '').lower())
+
+        clean = _re.sub(r'\[[A-Z]\d+\]\s*', '', name).strip().lower()
+
+        matched_travel = []
+        for r in travel:
+            if r.get('name','').lower().replace(' ','') == clean.replace(' ','') or                clean in r.get('name','').lower() or r.get('name','').lower() in clean:
+                matched_travel.append(r)
+
+        matched_promos = []
+        for r in promos:
+            rname = (r.get('name') or '').lower()
+            emp_id = None
+            for e in emps:
+                if e['name'].lower() == name.lower():
+                    emp_id = e['id']
+            id_match = emp_id and r.get('odoo_employee_id') and int(r.get('odoo_employee_id',0)) == emp_id
+            name_match = clean in rname or rname in clean
+            if id_match or name_match:
+                matched_promos.append(r)
+
+        return jsonify({
+            'searched_name': name,
+            'odoo_employees': emps,
+            'travel_matches': matched_travel,
+            'promo_matches': matched_promos,
+            'total_travel': len(travel),
+            'total_promos': len(promos),
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
+
+
 @app.route('/debug/projects-raw')
 def debug_projects_raw():
     """Debug: show raw Odoo project data to verify fields."""
