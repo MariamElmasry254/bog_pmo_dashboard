@@ -1718,6 +1718,37 @@ def api_import_summary_excel():
     return jsonify({'ok': True, 'sheets': wb.sheetnames, 'needs_sheet_selection': True})
 
 
+@app.route('/api/project-phases-available')
+def api_project_phases_available():
+    """Check which phase groups exist for this project in Odoo."""
+    proj_id = session.get('project_id')
+    is_bog  = not proj_id or str(proj_id) == '228'
+    if is_bog:
+        return jsonify({'is_bog': True, 'has_services': True, 'has_support': True})
+    try:
+        if not odoo.uid: odoo.connect()
+        # Find project
+        _proj_name = active_project_name()
+        projects = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.project', 'search_read',
+            [[('name', 'ilike', _proj_name)]],
+            {'fields': ['id', 'name'], 'limit': 3}
+        )
+        if not projects:
+            return jsonify({'has_services': True, 'has_support': False})
+        pid = projects[0]['id']
+        support_phases = auto_detect_phases_for_project(pid, 'support')
+        return jsonify({
+            'is_bog':       False,
+            'has_services': True,
+            'has_support':  len(support_phases) > 0,
+            'support_phases': support_phases,
+        })
+    except Exception as e:
+        return jsonify({'has_services': True, 'has_support': False, 'error': str(e)})
+
+
 @app.route('/api/estimated-summary', methods=['GET'])
 def api_get_estimated_summary():
     """Get saved estimated cost summary for current project + phase."""
@@ -4179,21 +4210,45 @@ PHASE_MAPPING_DEFAULT = {
 def get_phase_mapping():
     """Get phase mapping for active project.
     Priority:
-    1. Per-project override saved in DB (via manage page)
+    1. Per-project override saved in DB
     2. BOG default if project_id == 228 or no project set
-    3. Auto-detect from Odoo task phases
+    3. Empty (auto-detect per API call)
     """
     from flask import session as _sess
     proj_id = _sess.get('project_id')
-    # Check DB override for this project
     override = db.get_override('phase_mapping', str(proj_id or ''), 'mapping')
     if override and isinstance(override, dict):
         return override
-    # BOG default (id=228 or legacy no-id)
     if not proj_id or str(proj_id) == '228':
         return PHASE_MAPPING_DEFAULT
-    # Other projects: return empty (will auto-detect in each API)
-    return {'development': [], 'consultation': [], 'support': []}
+    return {'services': [], 'support': []}
+
+
+def auto_detect_phases_for_project(project_id, phase_key):
+    """Auto-detect Odoo phase names for a non-BOG project.
+    phase_key 'services' = all phases except support/operation
+    phase_key 'support'  = phases with support/operation in name
+    Returns list of phase name strings.
+    """
+    try:
+        if not odoo.uid: odoo.connect()
+        all_phases = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task.type', 'search_read',
+            [[('project_ids', 'in', [project_id])]],
+            {'fields': ['id', 'name'], 'limit': 50}
+        )
+        support_kws = ['support', 'operation', 'maintenance', 'hypercare']
+        if phase_key == 'support':
+            return [p['name'] for p in all_phases
+                    if any(kw in (p['name'] or '').lower() for kw in support_kws)]
+        else:  # 'services' = everything except support
+            result = [p['name'] for p in all_phases
+                      if not any(kw in (p['name'] or '').lower() for kw in support_kws)]
+            return result or [p['name'] for p in all_phases]  # fallback: all phases
+    except Exception as _e:
+        logger.warning(f"auto_detect_phases: {_e}")
+        return []
 
 PHASE_MAPPING = PHASE_MAPPING_DEFAULT  # keep for backward compat
 
@@ -5134,22 +5189,7 @@ def api_effort_all_months(phase_key):
 
         # Auto-detect phases for non-BOG projects (phase_names empty)
         if not phase_names:
-            all_phases = odoo.models.execute_kw(
-                ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                'project.task.type', 'search_read',
-                [[('project_ids', 'in', [project_id])]],
-                {'fields': ['id', 'name'], 'limit': 50}
-            )
-            # For development: pick phases with "dev" in name, else all
-            phase_kw = {'development': ['dev'], 'consultation': ['consult', 'analysis', 'ux'],
-                        'support': ['support', 'maintenance']}
-            keywords = phase_kw.get(phase_key, [])
-            if keywords:
-                matched = [p['name'] for p in all_phases
-                           if any(kw.lower() in (p['name'] or '').lower() for kw in keywords)]
-                phase_names = matched or [p['name'] for p in all_phases]
-            else:
-                phase_names = [p['name'] for p in all_phases]
+            phase_names = auto_detect_phases_for_project(project_id, phase_key)
             logger.info(f"Auto-detected phases for {_proj_name}/{phase_key}: {phase_names}")
 
         if not phase_names:
