@@ -198,7 +198,9 @@ async function estLoadSummaryIfSaved(phase, containerId) {
     const res = await fetch('/api/estimated-summary?phase=' + phase);
     const d   = await res.json();
     if (d.summary && Object.keys(d.summary).length) {
-      const wrap = document.getElementById(containerId || 'estimatedLiveWrap');
+      const wrap = document.getElementById(containerId)
+                || document.getElementById(`estimatedLiveWrap-${phase}`)
+                || document.getElementById('estimatedLiveWrap');
       if (wrap) _renderEstSummary(d.summary, phase, wrap);
       return true;
     }
