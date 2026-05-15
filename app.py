@@ -1042,8 +1042,12 @@ def api_parse_ticket():
 
             matched = open_record or overlap_record
             if matched:
+                existing_end = (matched.get('end_date') or '').strip()
                 result['open_travel_id']    = matched['id']
                 result['open_travel_start'] = matched.get('start_date', '')
+                result['open_travel_end']   = existing_end
+                if existing_end:
+                    result['warning'] = f'This person already has a travel record ({matched.get("start_date","")} → {existing_end}). The return date is already set.'
             else:
                 result['warning'] = 'No outbound travel record found for this person covering the return date. Please add the outbound ticket first.'
     else:
