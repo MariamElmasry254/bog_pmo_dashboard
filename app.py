@@ -1749,23 +1749,15 @@ def api_project_phases_available():
     if is_bog:
         return jsonify({'is_bog': True, 'has_services': True, 'has_support': True})
     try:
-        if not odoo.uid: odoo.connect()
-        # Find project
         _proj_name = active_project_name()
-        projects = odoo.models.execute_kw(
-            ODOO_DB, odoo.uid, ODOO_PASSWORD,
-            'project.project', 'search_read',
-            [[('name', 'ilike', _proj_name)]],
-            {'fields': ['id', 'name'], 'limit': 3}
-        )
-        if not projects:
+        pid = get_project_odoo_id(_proj_name)
+        if not pid:
             return jsonify({'has_services': True, 'has_support': False})
-        pid = projects[0]['id']
         support_phases = auto_detect_phases_for_project(pid, 'support')
         return jsonify({
-            'is_bog':       False,
-            'has_services': True,
-            'has_support':  len(support_phases) > 0,
+            'is_bog':        False,
+            'has_services':  True,
+            'has_support':   len(support_phases) > 0,
             'support_phases': support_phases,
         })
     except Exception as e:
@@ -2463,51 +2455,49 @@ def api_overview_analysis(phase_group):
         phase_ids = [p['id'] for p in phases]
         phase_id_to_name = {p['id']: p['name'] for p in phases}
 
-        # Non-BOG fallback: use stage_id (project.task.type)
+        # Non-BOG: get tasks by stage_id filter
         use_stage_domain = False
+        stage_ids_for_group = []
         if not phase_ids and not _is_bog:
-            # Find project odoo id if not already found
             if not _proj_odoo_id:
-                projs = odoo.models.execute_kw(
-                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                    'project.project', 'search_read',
-                    [[('name', 'ilike', _proj_name)]],
-                    {'fields': ['id'], 'limit': 3}
-                )
-                _proj_odoo_id = projs[0]['id'] if projs else None
+                _proj_odoo_id = get_project_odoo_id(_proj_name)
             if _proj_odoo_id:
-                task_types = odoo.models.execute_kw(
+                # Get all stages for this project
+                all_stages = odoo.models.execute_kw(
                     ODOO_DB, odoo.uid, ODOO_PASSWORD,
                     'project.task.type', 'search_read',
-                    [[('name', 'in', phase_names), ('project_ids', 'in', [_proj_odoo_id])]],
+                    [[('project_ids', 'in', [_proj_odoo_id])]],
                     {'fields': ['id', 'name'], 'limit': 50}
                 )
-                if not task_types:
-                    task_types = odoo.models.execute_kw(
-                        ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                        'project.task.type', 'search_read',
-                        [[('project_ids', 'in', [_proj_odoo_id])]],
-                        {'fields': ['id', 'name'], 'limit': 50}
-                    )
-                    task_types = [t for t in task_types
-                                  if any(pn.lower() in t['name'].lower() for pn in phase_names)]
-                phase_ids = [t['id'] for t in task_types]
-                phase_id_to_name = {t['id']: t['name'] for t in task_types}
+                # Filter by group: support stages vs services stages
+                if phase_group == 'support':
+                    filtered = [s for s in all_stages
+                                if any(kw in s['name'].lower() for kw in SUPPORT_KWS)]
+                else:  # services = all except support
+                    filtered = [s for s in all_stages
+                                if not any(kw in s['name'].lower() for kw in SUPPORT_KWS)]
+                    if not filtered:
+                        filtered = all_stages  # fallback: all
+
+                stage_ids_for_group = [s['id'] for s in filtered]
+                phase_id_to_name = {s['id']: s['name'] for s in filtered}
+                phase_ids = stage_ids_for_group
                 use_stage_domain = True
 
-        if not phase_ids:
+        if not phase_ids and not use_stage_domain:
             return jsonify({'tasks': [], 'connected': True,
                             'phases_active': [], 'phases_available': [],
                             'employees_available': [], 'stages_used': [],
-                            'error': 'No matching phases in Odoo'})
+                            'note': 'No phases/stages found for this project and phase group'})
 
         # Step 1: Get parent tasks filtered by phase or stage
         if use_stage_domain:
-            project_domain = [('stage_id', 'in', phase_ids)]
+            project_domain = [('stage_id', 'in', phase_ids),
+                               ('project_id', '=', _proj_odoo_id)]
         else:
             project_domain = [('phase_id', 'in', phase_ids)]
-        if _proj_name:
-            project_domain.append(('project_id.name', 'ilike', _proj_name))
+            if _proj_name:
+                project_domain.append(('project_id.name', 'ilike', _proj_name))
 
         # Try to detect available assignment fields in this Odoo version.
         # Common multi-assignee field names:
@@ -2885,8 +2875,8 @@ def api_overview_analysis(phase_group):
         return jsonify({
             'tasks': ordered,
             'connected': True,
-            'phases_available': [p['name'] for p in phases],
-            'phases_active': phase_names,
+            'phases_available': list(phase_id_to_name.values()) if use_stage_domain else [p['name'] for p in phases],
+            'phases_active': list(phase_id_to_name.values()) if use_stage_domain else phase_names,
             'employees_available': sorted(all_employees_set),
             'employees_filter': employees_filter,
             'stages_used': [{'id': sid, 'name': name} for sid, name in stages_used.items()],
@@ -4331,31 +4321,48 @@ def get_phase_mapping():
     return {'services': [], 'support': []}
 
 
+SUPPORT_KWS = ['support', 'operation', 'maintenance', 'hypercare']
+
 def auto_detect_phases_for_project(project_id, phase_key):
-    """Auto-detect Odoo phase names for a non-BOG project.
-    phase_key 'services' = all phases except support/operation
-    phase_key 'support'  = phases with support/operation in name
-    Returns list of phase name strings.
+    """Auto-detect task.type names for a non-BOG project.
+    Returns list of task.type name strings.
+    For 'services': all stages EXCEPT support/operation keywords.
+    For 'support':  only stages WITH support/operation keywords.
+    If no support stages exist, returns [] for 'support'.
     """
     try:
         if not odoo.uid: odoo.connect()
-        all_phases = odoo.models.execute_kw(
+        all_stages = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'project.task.type', 'search_read',
             [[('project_ids', 'in', [project_id])]],
             {'fields': ['id', 'name'], 'limit': 50}
         )
-        support_kws = ['support', 'operation', 'maintenance', 'hypercare']
         if phase_key == 'support':
-            return [p['name'] for p in all_phases
-                    if any(kw in (p['name'] or '').lower() for kw in support_kws)]
-        else:  # 'services' = everything except support
-            result = [p['name'] for p in all_phases
-                      if not any(kw in (p['name'] or '').lower() for kw in support_kws)]
-            return result or [p['name'] for p in all_phases]  # fallback: all phases
+            return [s['name'] for s in all_stages
+                    if any(kw in (s['name'] or '').lower() for kw in SUPPORT_KWS)]
+        else:  # 'services' or 'development'
+            non_support = [s['name'] for s in all_stages
+                           if not any(kw in (s['name'] or '').lower() for kw in SUPPORT_KWS)]
+            return non_support if non_support else [s['name'] for s in all_stages]
     except Exception as _e:
         logger.warning(f"auto_detect_phases: {_e}")
         return []
+
+
+def get_project_odoo_id(proj_name):
+    """Get Odoo project ID by name."""
+    try:
+        if not odoo.uid: odoo.connect()
+        projs = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.project', 'search_read',
+            [[('name', 'ilike', proj_name)]],
+            {'fields': ['id', 'name'], 'limit': 3}
+        )
+        return projs[0]['id'] if projs else None
+    except Exception:
+        return None
 
 PHASE_MAPPING = PHASE_MAPPING_DEFAULT  # keep for backward compat
 
@@ -5324,68 +5331,48 @@ def api_effort_all_months(phase_key):
                     found_names_lower.add(extra[0]['name'].strip().lower())
         phase_ids = [p['id'] for p in phases]
 
-        # If no project.phase found → use task.type (stage_id) for non-BOG
-        use_stage_filter = False
-        stage_task_ids = set()
-        if not phase_ids:
-            task_types = odoo.models.execute_kw(
-                ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                'project.task.type', 'search_read',
-                [[('name', 'in', phase_names), ('project_ids', 'in', [project_id])]],
-                {'fields': ['id', 'name'], 'limit': 50}
-            )
-            if not task_types:
-                # try ilike
-                task_types = odoo.models.execute_kw(
-                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                    'project.task.type', 'search_read',
-                    [[('project_ids', 'in', [project_id])]],
-                    {'fields': ['id', 'name'], 'limit': 50}
-                )
-                task_types = [t for t in task_types
-                              if any(pn.lower() in t['name'].lower() for pn in phase_names)]
-            if task_types:
-                type_ids = [t['id'] for t in task_types]
-                stage_tasks = odoo.models.execute_kw(
-                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                    'project.task', 'search_read',
-                    [[('stage_id', 'in', type_ids), ('project_id', '=', project_id)]],
-                    {'fields': ['id'], 'limit': 10000}
-                )
-                stage_task_ids = {t['id'] for t in stage_tasks}
-                use_stage_filter = True
-                logger.info(f"Using stage_id filter for {_proj_name}/{phase_key}: {len(stage_task_ids)} tasks")
-
-        # Get ALL tasks that have phase_id in our phases (any level, not just parents)
-        if phase_ids:
-            phase_tasks_direct = odoo.models.execute_kw(
-                ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                'project.task', 'search_read',
-                [[('phase_id', 'in', phase_ids), ('project_id', '=', project_id)]],
-                {'fields': ['id', 'child_ids'], 'limit': 5000}
-            )
-        else:
-            phase_tasks_direct = []
-        parent_ids = {t['id'] for t in phase_tasks_direct}
-
-        # All project tasks → walk parents to find descendants of phase tasks
+        # All project tasks
         all_proj_tasks = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'project.task', 'search_read',
             [[('project_id', '=', project_id)]],
-            {'fields': ['id', 'parent_id', 'phase_id'], 'limit': 10000}
+            {'fields': ['id', 'parent_id', 'phase_id', 'stage_id'], 'limit': 10000}
         )
         task_map = {t['id']: t for t in all_proj_tasks}
 
-        if use_stage_filter:
-            relevant_ids = stage_task_ids
-        else:
-            relevant_ids = set(parent_ids)
-            # Also directly include any task whose phase_id is in our phases
+        _is_bog_effort = not session.get('project_id') or str(session.get('project_id')) == '228'
+
+        if _is_bog_effort and phase_ids:
+            # BOG: filter by project.phase
+            relevant_ids = set()
             for t in all_proj_tasks:
                 ph = t.get('phase_id')
                 if ph and isinstance(ph, list) and ph[0] in phase_ids:
                     relevant_ids.add(t['id'])
+        elif not _is_bog_effort:
+            # Non-BOG: filter by stage_id (task.type)
+            all_stages = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.task.type', 'search_read',
+                [[('project_ids', 'in', [project_id])]],
+                {'fields': ['id', 'name'], 'limit': 50}
+            )
+            if phase_key == 'support':
+                stage_ids = [s['id'] for s in all_stages
+                             if any(kw in s['name'].lower() for kw in SUPPORT_KWS)]
+            else:
+                stage_ids = [s['id'] for s in all_stages
+                             if not any(kw in s['name'].lower() for kw in SUPPORT_KWS)]
+                if not stage_ids:
+                    stage_ids = [s['id'] for s in all_stages]
+            relevant_ids = set()
+            for t in all_proj_tasks:
+                st = t.get('stage_id')
+                if st and isinstance(st, list) and st[0] in stage_ids:
+                    relevant_ids.add(t['id'])
+            logger.info(f"Non-BOG effort {phase_key}: {len(stage_ids)} stages, {len(relevant_ids)} tasks")
+        else:
+            relevant_ids = {t['id'] for t in all_proj_tasks}
 
         # Walk parent chains to include sub-tasks of phase tasks
         for t in all_proj_tasks:
