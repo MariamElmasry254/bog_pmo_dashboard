@@ -868,19 +868,20 @@ def api_search_employees():
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'hr.employee', 'search_read',
             [[('name', 'ilike', q), ('active', '=', True)]],
-            {'fields': ['id', 'name', 'job_title', 'job_id', 'barcode', 'identification_id'], 'limit': 20}
+            {'fields': ['id', 'name', 'job_title', 'job_id', 'barcode', 'identification_id', 'number'], 'limit': 20}
         )
         result = []
         for e in employees:
             job = e.get('job_id')
             # Try barcode first, then identification_id for the employee code
             import re as _re_emp
-            raw_bc = (e.get('barcode') or '').strip()
-            # Only use barcode if it's a valid employee code format
-            code = raw_bc if (raw_bc and _re_emp.match(r'^[ERT]\d+$', raw_bc)) else ''
-            if not code:
-                id_code = (e.get('identification_id') or '').strip()
-                code = id_code if (id_code and _re_emp.match(r'^[ERT]\d+$', id_code)) else ''
+            def _get_code(e):
+                for field in ['number', 'barcode', 'identification_id']:
+                    val = (e.get(field) or '').strip()
+                    if val and _re_emp.match(r'^[ERT]\d+$', val, _re_emp.IGNORECASE):
+                        return val.upper()
+                return ''
+            code = _get_code(e)
             result.append({
                 'id':    e['id'],
                 'name':  e['name'],
@@ -1204,6 +1205,88 @@ def debug_effort_employee():
             'promo_matches': matched_promos,
             'total_travel': len(travel),
             'total_promos': len(promos),
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
+
+
+@app.route('/api/global/travel/fetch-codes', methods=['POST'])
+def api_fetch_employee_codes():
+    """Fetch employee codes ([E403] format) from Odoo timesheets and update travel/promo records."""
+    try:
+        if not odoo.uid: odoo.connect()
+
+        import re as _re
+        id_to_code = {}
+
+        # Method 1: Get 'number' field directly from hr.employee (Job Number = R346, E259 etc)
+        all_emps = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'hr.employee', 'search_read',
+            [[('active', '=', True)]],
+            {'fields': ['id', 'name', 'number', 'barcode'], 'limit': 2000}
+        )
+        for e in all_emps:
+            emp_id = e['id']
+            # Try 'number' field first (Job Number like R346, E259)
+            num = (e.get('number') or '').strip()
+            if num and _re.match(r'^[ERT]\d+$', num, _re.IGNORECASE):
+                id_to_code[emp_id] = num.upper()
+            # Try barcode as fallback
+            elif (e.get('barcode') or '').strip():
+                bc = e['barcode'].strip()
+                if _re.match(r'^[ERT]\d+$', bc, _re.IGNORECASE):
+                    id_to_code[emp_id] = bc.upper()
+
+        # Method 2: Get from timesheet names [E403] format for any missing
+        timesheets = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'account.analytic.line', 'search_read',
+            [[('project_id', '!=', False)]],
+            {'fields': ['employee_id'], 'limit': 5000}
+        )
+        for ts in timesheets:
+            emp = ts.get('employee_id')
+            if not isinstance(emp, list) or len(emp) < 2: continue
+            emp_id   = emp[0]
+            emp_name = emp[1]
+            if emp_id not in id_to_code:
+                m = _re.match(r'^\[([ERT]\d+)\]', emp_name)
+                if m:
+                    id_to_code[emp_id] = m.group(1)
+
+        # Update travel records
+        travel = _global_get('travel') or []
+        updated_travel = 0
+        for r in travel:
+            oid = r.get('odoo_employee_id')
+            if oid and int(oid) in id_to_code:
+                new_code = id_to_code[int(oid)]
+                if r.get('odoo_employee_code') != new_code:
+                    r['odoo_employee_code'] = new_code
+                    updated_travel += 1
+
+        # Update promotion records
+        promos = _global_get('promotions') or []
+        updated_promos = 0
+        for r in promos:
+            oid = r.get('odoo_employee_id')
+            if oid and int(oid) in id_to_code:
+                new_code = id_to_code[int(oid)]
+                if r.get('odoo_employee_code') != new_code:
+                    r['odoo_employee_code'] = new_code
+                    updated_promos += 1
+
+        _global_set('travel', travel)
+        _global_set('promotions', promos)
+
+        return jsonify({
+            'ok': True,
+            'codes_found': len(id_to_code),
+            'travel_updated': updated_travel,
+            'promos_updated': updated_promos,
+            'sample_codes': dict(list(id_to_code.items())[:10])
         })
     except Exception as e:
         import traceback
