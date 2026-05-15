@@ -77,14 +77,84 @@ window.loadVariance = async function() {
       AppState.positions = [];
     }
   }
+
   const cont = document.getElementById('varianceContent');
   cont.innerHTML = '<div class="loading">Loading variance data…</div>';
+
+  // Check if this is BOG project (has variance.xlsx) or another project
+  const isBog = AppState._overviewData?.is_bog !== false;
+
+  // Update sub-tab buttons based on project type
+  const subTabBar = document.querySelector('#variance .sub-tabs-bar');
+  if (subTabBar) {
+    if (isBog) {
+      // BOG: Development / Consultation / Support / Travel / Promotions
+      subTabBar.innerHTML = `
+        <button class="sub-tab active" data-subtab="development">Development</button>
+        <button class="sub-tab" data-subtab="consultation">Consultation</button>
+        <button class="sub-tab" data-subtab="support">Support</button>
+        <button class="sub-tab" data-subtab="travel">Travel &amp; Onsite</button>
+        <button class="sub-tab" data-subtab="promotions">🎯 Promotions</button>`;
+    } else {
+      // Non-BOG: Services / Support (support shown after phase check)
+      subTabBar.innerHTML = `
+        <button class="sub-tab active" data-subtab="services">Services</button>
+        <button class="sub-tab" data-subtab="support">Support</button>`;
+    }
+    // Re-wire tab click handlers
+    subTabBar.querySelectorAll('.sub-tab').forEach(b => {
+      b.addEventListener('click', () => {
+        subTabBar.querySelectorAll('.sub-tab').forEach(x => x.classList.remove('active'));
+        b.classList.add('active');
+        switchSubTab(b.dataset.subtab);
+      });
+    });
+  }
+
+  if (!isBog) {
+    // Non-BOG: fetch config FIRST, then build tabs
+    cont.innerHTML = '<div class="loading">Loading…</div>';
+    let hasSupport = false;
+    try {
+      const cfg = await fetch('/api/project-phases-available').then(r=>r.json());
+      hasSupport = !!cfg.has_support;
+    } catch(e) {}
+
+    const _sections = () => ([
+      {key:'budget',        label:'Budget',        data:{approved:{},final:{},changes:[]}},
+      {key:'profitability', label:'Profitability',  data:{months:[]}},
+      {key:'effort',        label:'Current Effort', data:{}},
+      {key:'estimated',     label:'Estimated Cost', data:{positions:[],columns:[]}},
+    ]);
+
+    const tabs = { services: { label:'Services', sections: _sections() } };
+    if (hasSupport) tabs.support = { label:'Support', sections: _sections() };
+    AppState.varianceData = { tabs };
+
+    // Rebuild sub-tab buttons based on actual config
+    const subTabBar = document.querySelector('#variance .sub-tabs-bar');
+    if (subTabBar) {
+      subTabBar.innerHTML = `
+        <button class="sub-tab active" data-subtab="services">Services</button>
+        ${hasSupport ? '<button class="sub-tab" data-subtab="support">Support</button>' : ''}`;
+      subTabBar.querySelectorAll('.sub-tab').forEach(b => {
+        b.addEventListener('click', () => {
+          subTabBar.querySelectorAll('.sub-tab').forEach(x => x.classList.remove('active'));
+          b.classList.add('active');
+          switchSubTab(b.dataset.subtab);
+        });
+      });
+    }
+
+    switchSubTab('services');
+    return;
+  }
+
   try {
     const res = await fetch('/api/variance');
     const d = await res.json();
     if (!d.available) {
       cont.innerHTML = '<div class="banner banner-warn"><strong>Not configured:</strong> variance.xlsx not found in /data folder. Budget & Profitability still available below.</div>';
-      // Still show budget/estimated/effort tabs without Excel data
       AppState.varianceData = { tabs: {
         development: { label:'Development', sections:[
           {key:'budget', label:'Budget', data:{approved:{},final:{},changes:[]}},
@@ -221,28 +291,27 @@ function renderBudget(data, phaseKey) {
   const overrideBadge = data._has_overrides
     ? '<span class="badge badge-blue" style="margin-left:8px;">Has saved overrides</span>' : '';
 
-  // KPI strip — Presales MDs | Revenue | Cost | Profit
+  // KPI strip
   let html = `
     <div class="kpi-strip kpi-strip-small">
       <div class="kpi-card kpi-blue compact">
-        <div class="kpi-label">PRESALES MDs</div>
+        <div class="kpi-label">TOTAL MANDAYS</div>
         <div class="kpi-value" id="kpi-mds-${phaseKey}">${fmt.num(a.total_mandays || 0)}</div>
         <div class="kpi-foot">from Estimated Cost</div>
       </div>
       <div class="kpi-card kpi-navy compact">
-        <div class="kpi-label">REVENUE (FINAL)</div>
-        <div class="kpi-value" id="kpi-rev-${phaseKey}">—</div>
-        <div class="kpi-foot">after approved changes</div>
-      </div>
-      <div class="kpi-card kpi-navy compact">
-        <div class="kpi-label">TOTAL COST (FINAL)</div>
+        <div class="kpi-label">APPROVED COST (SAR)</div>
         <div class="kpi-value" id="kpi-cost-${phaseKey}">${fmt.money(a.cost_sar || 0)}</div>
-        <div class="kpi-foot">after approved changes</div>
       </div>
       <div class="kpi-card kpi-green compact">
-        <div class="kpi-label">PROFIT % (FINAL)</div>
+        <div class="kpi-label">APPROVED PROFIT</div>
+        <div class="kpi-value" id="kpi-profit-pct-${phaseKey}">—</div>
+        <div class="kpi-foot" id="kpi-profit-sar-${phaseKey}">—</div>
+      </div>
+      <div class="kpi-card kpi-amber compact">
+        <div class="kpi-label">FINAL PROFIT</div>
         <div class="kpi-value" id="kpi-final-pct-${phaseKey}">—</div>
-        <div class="kpi-foot" id="kpi-final-sar-${phaseKey}" style="font-size:13px;font-weight:700;color:inherit;">—</div>
+        <div class="kpi-foot" id="kpi-final-sar-${phaseKey}">—</div>
       </div>
     </div>
 
@@ -538,16 +607,27 @@ function budgetAutoCalc(phaseKey) {
     if (color) el.style.color = color;
   };
 
-  // Cost from Estimated Cost rows
-  let mds = 0, costUSD = 0;
-  if (_estPhase === phaseKey && _estRows && _estRows.length) {
+  // Cost from Estimated Cost rows (BOG) or summary (non-BOG)
+  let mds = 0, costUSD = 0, costSAR = 0;
+  const isBogBudget = AppState._overviewData?.is_bog !== false;
+
+  if (!isBogBudget && AppState._estSummary && AppState._estSummary[phaseKey]) {
+    // Non-BOG: use summary from Excel import
+    const s = AppState._estSummary[phaseKey];
+    mds     = s.total_mds      || 0;
+    costUSD = s.total_cost_usd || 0;
+    costSAR = s.total_cost_sar || (costUSD * 3.75);
+  } else if (_estPhase === phaseKey && _estRows && _estRows.length) {
+    // BOG: use editable rows
     _estRows.forEach(r => {
       const hr = parseFloat(r.hourRate)||0, at = parseFloat(r.actualTime)||0, em = parseFloat(r.estMonths)||0;
       mds     += at * em / 8;
       costUSD += hr * at * em;
     });
+    costSAR = costUSD * 3.75;
+  } else {
+    costSAR = costUSD * 3.75;
   }
-  const costSAR = costUSD * 3.75;
 
   // Revenue from input
   const revEl = document.getElementById(`inp-rev-${phaseKey}`);
@@ -628,11 +708,12 @@ function budgetAutoCalc(phaseKey) {
       }).catch(()=>{});
     }
   }
-  setEl(`kpi-mds-${phaseKey}`,       mds > 0 ? fmt.num(Math.round(mds)) : '—');
-  setEl(`kpi-rev-${phaseKey}`,       finRevSAR > 0 ? fmt.money(Math.round(finRevSAR)) : '—');
-  setEl(`kpi-cost-${phaseKey}`,      finCostSAR > 0 ? fmt.money(Math.round(finCostSAR)) : (costSAR > 0 ? fmt.money(Math.round(costSAR)) : '—'));
-  setEl(`kpi-final-pct-${phaseKey}`, finRevSAR > 0 ? fmt.decimal(finProfitPct)+'%' : '—', profColor(finProfitPct));
-  setEl(`kpi-final-sar-${phaseKey}`, finRevSAR > 0 ? fmt.money(Math.round(finProfit)) + ' SAR' : '—', profColor(finProfitPct));
+  setEl(`kpi-mds-${phaseKey}`,        mds > 0 ? fmt.num(Math.round(mds)) : '—');
+  setEl(`kpi-cost-${phaseKey}`,       costSAR > 0 ? fmt.money(Math.round(costSAR)) : '—');
+  setEl(`kpi-profit-pct-${phaseKey}`, approvedRevSAR > 0 ? fmt.decimal(appProfitPct)+'%' : '—', profColor(appProfitPct));
+  setEl(`kpi-profit-sar-${phaseKey}`, approvedRevSAR > 0 ? fmt.money(Math.round(appProfit)) + ' SAR' : '—');
+  setEl(`kpi-final-pct-${phaseKey}`,  finRevSAR > 0 ? fmt.decimal(finProfitPct)+'%' : '—', profColor(finProfitPct));
+  setEl(`kpi-final-sar-${phaseKey}`,  finRevSAR > 0 ? fmt.money(Math.round(finProfit)) + ' SAR' : '—');
 }
 
 // Wire up auto-save for budget inputs
@@ -909,27 +990,9 @@ async function profRecomputeAll(phaseKey) {
       }
     } catch(e) {}
   }
-  // Add delta changes (total for budget)
+  // Add delta changes
   const budgChanges = _budgetChanges[phaseKey] || [];
   totalRevSAR += budgChanges.reduce((s,c) => s + (parseFloat(c.delta_rev)||0), 0);
-
-  // Helpers: per-month revenue/cost applying only changes effective by that month
-  const _getMonthlyRev = (mk) => {
-    let rev = AppState._savedRevenue?.[phaseKey] || 0;
-    budgChanges.forEach(c => {
-      const cd = (c.change_date||'').slice(0,7); // YYYY-MM
-      if (!cd || cd <= mk) rev += parseFloat(c.delta_rev)||0;
-    });
-    return rev;
-  };
-  const _getMonthlyEstCost = (mk) => {
-    let cost = totalEstCostSAR;
-    budgChanges.forEach(c => {
-      const cd = (c.change_date||'').slice(0,7);
-      if (!cd || cd <= mk) cost += parseFloat(c.delta_cost)||0;
-    });
-    return cost;
-  };
 
   // ── 2. Estimated rows: cache → DB ──
   const estRows = (_estPhase === phaseKey && _estRows?.length) ? _estRows : null;
@@ -1110,11 +1173,9 @@ async function profRecomputeAll(phaseKey) {
       if (el) { el.innerHTML = val; if (color) el.style.color = color; }
     };
 
-    // Presales columns — revenue/cost reflect changes effective by this month
-    const monthRevSAR     = _getMonthlyRev(monthKey);
-    const monthEstCostSAR = _getMonthlyEstCost(monthKey);
-    tr.querySelectorAll(`.prof-rev-${phaseKey}`).forEach(el => el.textContent = monthRevSAR > 0 ? fSAR(monthRevSAR) : '—');
-    tr.querySelectorAll(`.prof-estcost-${phaseKey}`).forEach(el => el.textContent = monthEstCostSAR > 0 ? fSAR(monthEstCostSAR) : '—');
+    // Update presales columns (same every row)
+    tr.querySelectorAll(`.prof-rev-${phaseKey}`).forEach(el => el.textContent = totalRevSAR > 0 ? fSAR(totalRevSAR) : '—');
+    tr.querySelectorAll(`.prof-estcost-${phaseKey}`).forEach(el => el.textContent = totalEstCostSAR > 0 ? fSAR(totalEstCostSAR) : '—');
     tr.querySelectorAll(`.prof-estmds-${phaseKey}`).forEach(el => el.textContent = totalEstMDs > 0 ? fNum(totalEstMDs) : '—');
     // Current effort columns
     tr.querySelectorAll(`.prof-thismonth-${phaseKey}`).forEach(el => el.textContent = thisMonthMDs > 0 ? fNum(thisMonthMDs) : '—');
@@ -1189,16 +1250,18 @@ async function profRecomputeAll(phaseKey) {
     const issuedEl = tr.querySelector(`.pc-issued-${monthKey}`);
     if (issuedEl) issuedEl.textContent = issuedUpToMonth > 0 ? fSAR(issuedUpToMonth) : '—';
 
+    // Only update latestData if this month has a % completion or remaining entry
     if (completionPct || remainingMDs) {
       latestData = { completionPct, remainingMDs, eacMDs, cpi, profitAtComp, totalRevSAR, monthKey };
     }
     prevViAcc = viAcc;
   }  // end for..of rows
 
-  // Update KPI strip — use last month that has actual values entered
+  // Update KPI strip with last month that has actual values
   const setKPI = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  const kpiMonthLabel = latestData.monthKey ? `as of ${latestData.monthKey}` : 'latest month';
   const kpiFootEl = document.querySelector(`#prof-kpi-${phaseKey} .kpi-foot`);
-  if (kpiFootEl && latestData.monthKey) kpiFootEl.textContent = `as of ${latestData.monthKey}`;
+  if (kpiFootEl) kpiFootEl.textContent = kpiMonthLabel;
   setKPI(`prof-kpi-completion-${phaseKey}`, latestData.completionPct ? fmt.decimal(latestData.completionPct) + '%' : '—');
   setKPI(`prof-kpi-remaining-${phaseKey}`,  latestData.remainingMDs  ? fmt.decimal(latestData.remainingMDs) : '—');
   setKPI(`prof-kpi-eac-${phaseKey}`,        latestData.eacMDs        ? fmt.decimal(latestData.eacMDs) : '—');
@@ -1458,9 +1521,8 @@ async function loadEffortLive(phaseKey, containerId) {
 }
 
 function renderEstimated(data, phaseKey) {
-  // Build interactive estimated cost table — editable rows, auto-calc from positions catalog
   return `<div id="estimatedLiveWrap">
-    <div class="loading">Loading estimated cost table…</div>
+    <div class="loading">Loading estimated cost…</div>
   </div>`;
 }
 
@@ -1480,8 +1542,31 @@ function makeEstRow(position = '', hourRate = '', actualTime = 176, estMonths = 
 
 async function loadEstimatedLive(phaseKey, containerId) {
   const wrap = document.getElementById(containerId || 'estimatedLiveWrap');
-  if (!wrap) { console.warn('estimatedLiveWrap not found'); return; }
-  wrap.innerHTML = '<div class="loading">Loading estimated cost table…</div>';
+  if (!wrap) { console.warn('estimatedLiveWrap not found for', phaseKey); return; }
+  wrap.innerHTML = '<div class="loading">Loading estimated cost…</div>';
+
+  // Non-BOG: try to load saved summary first
+  const isBog = AppState._overviewData?.is_bog !== false;
+  if (!isBog) {
+    if (window.estLoadSummaryIfSaved) {
+      const loaded = await estLoadSummaryIfSaved(phaseKey, wrap.id);
+      if (loaded) return;
+    }
+    // No saved summary — show upload prompt
+    wrap.innerHTML = `
+      <div style="text-align:center;padding:40px;color:#6B7280;">
+        <div style="font-size:32px;margin-bottom:12px;">📊</div>
+        <div style="font-size:14px;font-weight:600;margin-bottom:8px;">No Estimated Cost data yet</div>
+        <div style="font-size:12px;margin-bottom:16px;">Upload the Estimated Cost Excel file</div>
+        <label style="cursor:pointer;">
+          <input type="file" accept=".xlsx,.xls" style="display:none;"
+            onchange="estImportExcel(this,'${phaseKey}')">
+          <span style="background:#3B82F6;color:white;padding:10px 20px;border-radius:8px;
+                       font-size:13px;font-weight:600;cursor:pointer;">⬆ Upload Excel</span>
+        </label>
+      </div>`;
+    return;
+  }
 
   // Load positions catalog from DB
   let positions = [];
@@ -1555,6 +1640,10 @@ function renderEstimatedTable(wrap, rows, positions, phaseKey) {
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
         <h3 class="card-title" style="margin:0;">Estimated Cost by Position <span class="muted-text" style="font-size:12px;">— editable · auto-calculates from DB rates</span></h3>
         <div style="display:flex;gap:8px;">
+          ${!AppState._overviewData?.is_bog ? `<label style="cursor:pointer;" title="Import positions from Excel">
+            <input type="file" accept=".xlsx,.xls" style="display:none;" onchange="estImportExcel(this,'${phaseKey}')">
+            <span class="btn-outline" style="font-size:11px;cursor:pointer;">⬆ Import Excel</span>
+          </label>` : ''}
           <button class="btn-outline" style="font-size:11px;" onclick="estAddRow()">+ Add Row</button>
           <button class="btn-outline" style="font-size:11px; color:var(--red);" onclick="estClearAll()">🗑 Clear All</button>
         </div>
@@ -2029,4 +2118,5 @@ async function deletePromo(id) {
   await fetch(`/api/promotions/${id}`, { method: 'DELETE' });
   renderPromotionsSubTab();
 }
+
 }
