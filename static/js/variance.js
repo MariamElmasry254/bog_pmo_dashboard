@@ -77,14 +77,42 @@ window.loadVariance = async function() {
       AppState.positions = [];
     }
   }
+
   const cont = document.getElementById('varianceContent');
   cont.innerHTML = '<div class="loading">Loading variance data…</div>';
+
+  // Check if this is BOG project (has variance.xlsx) or another project
+  const isBog = AppState._overviewData?.is_bog !== false;  // default true if not loaded yet
+
+  if (!isBog) {
+    // Non-BOG: same structure as BOG but no variance.xlsx — all data from DB + Odoo
+    AppState.varianceData = { tabs: {
+      development: { label:'Development', sections:[
+        {key:'budget',         label:'Budget',        data:{approved:{},final:{},changes:[]}},
+        {key:'profitability',  label:'Profitability',  data:{months:[]}},
+        {key:'effort',         label:'Current Effort', data:{}},
+        {key:'estimated',      label:'Estimated Cost', data:{positions:[],columns:[]}},
+      ]},
+      consultation: { label:'Consultation', sections:[
+        {key:'budget',         label:'Budget',        data:{approved:{},final:{},changes:[]}},
+        {key:'profitability',  label:'Profitability',  data:{months:[]}},
+        {key:'effort',         label:'Current Effort', data:{}},
+        {key:'estimated',      label:'Estimated Cost', data:{positions:[],columns:[]}},
+      ]},
+      support: { label:'Support', sections:[
+        {key:'budget',         label:'Budget',        data:{approved:{},final:{},changes:[]}},
+        {key:'estimated',      label:'Estimated Cost', data:{positions:[],columns:[]}},
+      ]},
+    }};
+    switchSubTab('development');
+    return;
+  }
+
   try {
     const res = await fetch('/api/variance');
     const d = await res.json();
     if (!d.available) {
       cont.innerHTML = '<div class="banner banner-warn"><strong>Not configured:</strong> variance.xlsx not found in /data folder. Budget & Profitability still available below.</div>';
-      // Still show budget/estimated/effort tabs without Excel data
       AppState.varianceData = { tabs: {
         development: { label:'Development', sections:[
           {key:'budget', label:'Budget', data:{approved:{},final:{},changes:[]}},
@@ -1531,6 +1559,10 @@ function renderEstimatedTable(wrap, rows, positions, phaseKey) {
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
         <h3 class="card-title" style="margin:0;">Estimated Cost by Position <span class="muted-text" style="font-size:12px;">— editable · auto-calculates from DB rates</span></h3>
         <div style="display:flex;gap:8px;">
+          ${!AppState._overviewData?.is_bog ? `<label style="cursor:pointer;" title="Import positions from Excel">
+            <input type="file" accept=".xlsx,.xls" style="display:none;" onchange="estImportExcel(this,'${phaseKey}')">
+            <span class="btn-outline" style="font-size:11px;cursor:pointer;">⬆ Import Excel</span>
+          </label>` : ''}
           <button class="btn-outline" style="font-size:11px;" onclick="estAddRow()">+ Add Row</button>
           <button class="btn-outline" style="font-size:11px; color:var(--red);" onclick="estClearAll()">🗑 Clear All</button>
         </div>
