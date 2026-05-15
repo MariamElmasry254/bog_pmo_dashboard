@@ -2424,6 +2424,7 @@ def api_overview_analysis(phase_group):
         employees_filter = [e.strip() for e in employees_param.split(',') if e.strip()]
 
     # For non-BOG: auto-detect phases from Odoo task types if empty
+    _proj_odoo_id = None
     if not phase_names and not _is_bog:
         if not odoo.uid: odoo.connect()
         try:
@@ -2434,7 +2435,8 @@ def api_overview_analysis(phase_group):
                 {'fields': ['id'], 'limit': 3}
             )
             if projects:
-                phase_names = auto_detect_phases_for_project(projects[0]['id'], phase_group)
+                _proj_odoo_id = projects[0]['id']
+                phase_names = auto_detect_phases_for_project(_proj_odoo_id, phase_group)
         except Exception: pass
 
     if not phase_names and not _is_bog:
@@ -2451,7 +2453,7 @@ def api_overview_analysis(phase_group):
             return jsonify({'tasks': [], 'connected': False, 'error': 'Odoo unreachable'})
 
     try:
-        # Get phase IDs by name
+        # Get phase IDs — try project.phase first (BOG), then task.type (non-BOG)
         phases = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'project.phase', 'search_read',
@@ -2460,11 +2462,50 @@ def api_overview_analysis(phase_group):
         )
         phase_ids = [p['id'] for p in phases]
         phase_id_to_name = {p['id']: p['name'] for p in phases}
-        if not phase_ids:
-            return jsonify({'tasks': [], 'connected': True, 'error': 'No matching phases in Odoo'})
 
-        # Step 1: Get parent tasks (those with phase_id set directly)
-        project_domain = [('phase_id', 'in', phase_ids)]
+        # Non-BOG fallback: use stage_id (project.task.type)
+        use_stage_domain = False
+        if not phase_ids and not _is_bog:
+            # Find project odoo id if not already found
+            if not _proj_odoo_id:
+                projs = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'project.project', 'search_read',
+                    [[('name', 'ilike', _proj_name)]],
+                    {'fields': ['id'], 'limit': 3}
+                )
+                _proj_odoo_id = projs[0]['id'] if projs else None
+            if _proj_odoo_id:
+                task_types = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'project.task.type', 'search_read',
+                    [[('name', 'in', phase_names), ('project_ids', 'in', [_proj_odoo_id])]],
+                    {'fields': ['id', 'name'], 'limit': 50}
+                )
+                if not task_types:
+                    task_types = odoo.models.execute_kw(
+                        ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                        'project.task.type', 'search_read',
+                        [[('project_ids', 'in', [_proj_odoo_id])]],
+                        {'fields': ['id', 'name'], 'limit': 50}
+                    )
+                    task_types = [t for t in task_types
+                                  if any(pn.lower() in t['name'].lower() for pn in phase_names)]
+                phase_ids = [t['id'] for t in task_types]
+                phase_id_to_name = {t['id']: t['name'] for t in task_types}
+                use_stage_domain = True
+
+        if not phase_ids:
+            return jsonify({'tasks': [], 'connected': True,
+                            'phases_active': [], 'phases_available': [],
+                            'employees_available': [], 'stages_used': [],
+                            'error': 'No matching phases in Odoo'})
+
+        # Step 1: Get parent tasks filtered by phase or stage
+        if use_stage_domain:
+            project_domain = [('stage_id', 'in', phase_ids)]
+        else:
+            project_domain = [('phase_id', 'in', phase_ids)]
         if _proj_name:
             project_domain.append(('project_id.name', 'ilike', _proj_name))
 
