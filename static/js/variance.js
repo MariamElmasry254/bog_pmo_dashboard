@@ -134,8 +134,6 @@ window.loadVariance = async function() {
     return;
   }
 
-  }
-
   try {
     const res = await fetch('/api/variance');
     const d = await res.json();
@@ -2086,4 +2084,6 @@ async function deletePromo(id) {
   if (!confirm('Delete this promotion record?')) return;
   await fetch(`/api/promotions/${id}`, { method: 'DELETE' });
   renderPromotionsSubTab();
+}
+
 }
