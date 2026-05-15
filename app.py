@@ -5549,14 +5549,19 @@ def load_promotions():
     if global_recs is not None:
         # Normalize field names: manage page uses 'effective_date', old code uses 'promotion_date'
         for r in global_recs:
-            # Normalize date field
-            if 'effective_date' in r and 'promotion_date' not in r:
-                r['promotion_date'] = r['effective_date']
-            # Map new_title → new_position for _base_position_on_date
+            # Normalize date: use effective_date, fallback to year-01-01
+            eff = r.get('effective_date') or ''
+            yr  = r.get('year')
+            if not eff and yr:
+                eff = f'{yr}-01-01'  # fallback: start of promotion year
+            r['promotion_date'] = eff
+            if 'effective_date' not in r or not r['effective_date']:
+                r['effective_date'] = eff
+
+            # Map title fields for compatibility
             if 'new_title' in r:
                 r['new_position'] = r['new_title']
-            # Map old_title → old_position for before-promotion calculation
-            if 'old_title' in r and r['old_title']:
+            if r.get('old_title'):
                 r['old_position'] = r['old_title']
             if 'new_title' in r and 'position' not in r:
                 r['position'] = r['new_title']
