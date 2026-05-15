@@ -750,18 +750,28 @@ async function doLink(odooId, odooName, odooCode) {
     return;
   }
   // Single link
-  if (!_linkId || !_linkType) return;
-  const res = await fetch(`/api/global/${_linkType}/${_linkId}`, {
-    method: 'PUT', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({odoo_employee_id: odooId, odoo_employee_name: odooName, odoo_employee_code: odooCode})
-  });
-  const d = await res.json();
-  if (d.ok) {
-    closeModal();
-    // Reload immediately to reflect the link (no delay needed)
-    if (_linkType === 'travel') loadTravel();
-    else loadPromos();
-  } else alert('Error: ' + (d.error||'Unknown'));
+  const linkId   = _linkId;
+  const linkType = _linkType;
+  if (!linkId || !linkType) {
+    console.warn('doLink: no _linkId or _linkType', {linkId, linkType, odooId, odooName});
+    return;
+  }
+  closeModal();  // close first, then fetch — so _linkId/_linkType are captured above
+  try {
+    const res = await fetch(`/api/global/${linkType}/${linkId}`, {
+      method: 'PUT', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({odoo_employee_id: odooId, odoo_employee_name: odooName, odoo_employee_code: odooCode})
+    });
+    const d = await res.json();
+    if (d.ok) {
+      if (linkType === 'travel') loadTravel();
+      else loadPromos();
+    } else {
+      alert('Error: ' + (d.error||'Unknown'));
+    }
+  } catch(e) {
+    alert('Network error: ' + e.message);
+  }
 }
 
 // ─── Excel Import ─────────────────────────────────────────────────────
