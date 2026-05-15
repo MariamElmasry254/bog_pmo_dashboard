@@ -4718,29 +4718,48 @@ def api_effort_all_months(phase_key):
                 if period['end'] is None or date_str <= period['end']: return True
             return False
 
+        def _strip_country(pos_str):
+            """Strip country prefix: EGY - Senior BA → Senior BA"""
+            import re as _re_strip
+            return _re_strip.sub(r'^(EGY|KSA|TUN|UAE|KWT|BHR|OMN|QAT|JOR|LBN|SAU)\s*-\s*', '', (pos_str or '').strip())
+
         def _base_position_on_date(date_str):
-            """Return position title for this employee on given date.
-            Uses promotion records to determine correct position.
-            Before promotion: use odoo_pos (current position from Odoo)
-            After promotion: use new_title from promotion record
+            """Return raw position (without country prefix) for employee on given date.
+            Logic:
+            - Start with odoo_pos stripped of country prefix
+            - Walk promotions chronologically
+            - Before first promotion: use old_position or stripped odoo_pos
+            - After promotion date: use new_title/new_position from promotion
             """
-            pos = odoo_pos or ''
+            base = _strip_country(odoo_pos or '')
+
             if not emp_promos:
-                return pos
-            # Sort by date to find correct position
-            for promo in reversed(emp_promos):
+                return base
+
+            # emp_promos sorted by promotion_date ascending
+            sorted_promos = sorted(emp_promos,
+                key=lambda x: x.get('promotion_date') or x.get('effective_date') or '')
+
+            # Before earliest promotion
+            if sorted_promos:
+                first_date = sorted_promos[0].get('promotion_date') or sorted_promos[0].get('effective_date') or ''
+                if first_date and date_str < first_date:
+                    # Use old_position from first promo (what they were before)
+                    old = sorted_promos[0].get('old_position') or ''
+                    return _strip_country(old) if old else base
+
+            # Find latest promotion that applies on date_str
+            applicable = None
+            for promo in sorted_promos:
                 promo_date = promo.get('promotion_date') or promo.get('effective_date') or ''
-                if not promo_date:
-                    continue
-                new_pos = promo.get('new_position') or promo.get('new_title') or ''
-                old_pos = promo.get('old_position') or odoo_pos or ''
-                if date_str >= promo_date:
-                    # On or after promotion date → use new position
-                    return new_pos if new_pos else pos
-                else:
-                    # Before this promotion → use old position
-                    pos = old_pos
-            return pos
+                if promo_date and date_str >= promo_date:
+                    applicable = promo
+
+            if applicable:
+                new_pos = applicable.get('new_position') or applicable.get('new_title') or ''
+                return _strip_country(new_pos) if new_pos else base
+
+            return base
 
         # KSA position aliases: Odoo returns various formats, normalize to DB keys
         _KSA_ALIASES = {
