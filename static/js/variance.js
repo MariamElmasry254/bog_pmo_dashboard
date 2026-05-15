@@ -112,25 +112,41 @@ window.loadVariance = async function() {
   }
 
   if (!isBog) {
-    // Non-BOG: set data immediately then check support async
+    // Non-BOG: fetch config FIRST, then build tabs
+    cont.innerHTML = '<div class="loading">Loading…</div>';
+    let hasSupport = false;
+    try {
+      const cfg = await fetch('/api/project-phases-available').then(r=>r.json());
+      hasSupport = !!cfg.has_support;
+    } catch(e) {}
+
     const _sections = () => ([
       {key:'budget',        label:'Budget',        data:{approved:{},final:{},changes:[]}},
       {key:'profitability', label:'Profitability',  data:{months:[]}},
       {key:'effort',        label:'Current Effort', data:{}},
       {key:'estimated',     label:'Estimated Cost', data:{positions:[],columns:[]}},
     ]);
-    AppState.varianceData = { tabs: {
-      services: { label:'Services', sections: _sections() },
-      support:  { label:'Support',  sections: _sections() },
-    }};
+
+    const tabs = { services: { label:'Services', sections: _sections() } };
+    if (hasSupport) tabs.support = { label:'Support', sections: _sections() };
+    AppState.varianceData = { tabs };
+
+    // Rebuild sub-tab buttons based on actual config
+    const subTabBar = document.querySelector('#variance .sub-tabs-bar');
+    if (subTabBar) {
+      subTabBar.innerHTML = `
+        <button class="sub-tab active" data-subtab="services">Services</button>
+        ${hasSupport ? '<button class="sub-tab" data-subtab="support">Support</button>' : ''}`;
+      subTabBar.querySelectorAll('.sub-tab').forEach(b => {
+        b.addEventListener('click', () => {
+          subTabBar.querySelectorAll('.sub-tab').forEach(x => x.classList.remove('active'));
+          b.classList.add('active');
+          switchSubTab(b.dataset.subtab);
+        });
+      });
+    }
+
     switchSubTab('services');
-    // Async: hide support tab if no support phases
-    fetch('/api/project-phases-available').then(r=>r.json()).then(d => {
-      if (!d.has_support) {
-        const btn = document.querySelector('#variance .sub-tabs-bar .sub-tab[data-subtab="support"]');
-        if (btn) btn.style.display = 'none';
-      }
-    }).catch(()=>{});
     return;
   }
 
@@ -591,16 +607,27 @@ function budgetAutoCalc(phaseKey) {
     if (color) el.style.color = color;
   };
 
-  // Cost from Estimated Cost rows
-  let mds = 0, costUSD = 0;
-  if (_estPhase === phaseKey && _estRows && _estRows.length) {
+  // Cost from Estimated Cost rows (BOG) or summary (non-BOG)
+  let mds = 0, costUSD = 0, costSAR = 0;
+  const isBogBudget = AppState._overviewData?.is_bog !== false;
+
+  if (!isBogBudget && AppState._estSummary && AppState._estSummary[phaseKey]) {
+    // Non-BOG: use summary from Excel import
+    const s = AppState._estSummary[phaseKey];
+    mds     = s.total_mds      || 0;
+    costUSD = s.total_cost_usd || 0;
+    costSAR = s.total_cost_sar || (costUSD * 3.75);
+  } else if (_estPhase === phaseKey && _estRows && _estRows.length) {
+    // BOG: use editable rows
     _estRows.forEach(r => {
       const hr = parseFloat(r.hourRate)||0, at = parseFloat(r.actualTime)||0, em = parseFloat(r.estMonths)||0;
       mds     += at * em / 8;
       costUSD += hr * at * em;
     });
+    costSAR = costUSD * 3.75;
+  } else {
+    costSAR = costUSD * 3.75;
   }
-  const costSAR = costUSD * 3.75;
 
   // Revenue from input
   const revEl = document.getElementById(`inp-rev-${phaseKey}`);
@@ -1223,12 +1250,18 @@ async function profRecomputeAll(phaseKey) {
     const issuedEl = tr.querySelector(`.pc-issued-${monthKey}`);
     if (issuedEl) issuedEl.textContent = issuedUpToMonth > 0 ? fSAR(issuedUpToMonth) : '—';
 
-    latestData = { completionPct, remainingMDs, eacMDs, cpi, profitAtComp, totalRevSAR };
+    // Only update latestData if this month has a % completion or remaining entry
+    if (completionPct || remainingMDs) {
+      latestData = { completionPct, remainingMDs, eacMDs, cpi, profitAtComp, totalRevSAR, monthKey };
+    }
     prevViAcc = viAcc;
   }  // end for..of rows
 
-  // Update KPI strip with latest row
+  // Update KPI strip with last month that has actual values
   const setKPI = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  const kpiMonthLabel = latestData.monthKey ? `as of ${latestData.monthKey}` : 'latest month';
+  const kpiFootEl = document.querySelector(`#prof-kpi-${phaseKey} .kpi-foot`);
+  if (kpiFootEl) kpiFootEl.textContent = kpiMonthLabel;
   setKPI(`prof-kpi-completion-${phaseKey}`, latestData.completionPct ? fmt.decimal(latestData.completionPct) + '%' : '—');
   setKPI(`prof-kpi-remaining-${phaseKey}`,  latestData.remainingMDs  ? fmt.decimal(latestData.remainingMDs) : '—');
   setKPI(`prof-kpi-eac-${phaseKey}`,        latestData.eacMDs        ? fmt.decimal(latestData.eacMDs) : '—');
