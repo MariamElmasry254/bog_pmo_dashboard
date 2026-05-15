@@ -5482,8 +5482,10 @@ def api_effort_all_months(phase_key):
         if not odoo.connect():
             return jsonify({'error': 'Odoo unreachable', 'employees': [], 'months': []}), 503
 
-    # Step 1: Determine the relevant tasks (under the phase)
-    phase_names = get_phase_mapping().get(phase_key, [])
+    _is_bog_eff = not session.get('project_id') or str(session.get('project_id')) == '228'
+
+    # Step 1: Determine the relevant tasks
+    phase_names = get_phase_mapping().get(phase_key, []) if _is_bog_eff else []
 
     try:
         # Find project
@@ -5497,12 +5499,12 @@ def api_effort_all_months(phase_key):
             return jsonify({'employees': [], 'months': []})
         project_id = projects[0]['id']
 
-        # Auto-detect phases for non-BOG projects (phase_names empty)
-        if not phase_names:
+        # BOG only: resolve phase names
+        if _is_bog_eff and not phase_names:
             phase_names = auto_detect_phases_for_project(project_id, phase_key)
             logger.info(f"Auto-detected phases for {_proj_name}/{phase_key}: {phase_names}")
 
-        if not phase_names:
+        if _is_bog_eff and not phase_names:
             return jsonify({'employees': [], 'months': [], 'total_employees': 0,
                             'note': f'No phases found for {phase_key} in this project'})
 
@@ -5536,9 +5538,7 @@ def api_effort_all_months(phase_key):
         )
         task_map = {t['id']: t for t in all_proj_tasks}
 
-        _is_bog_effort = not session.get('project_id') or str(session.get('project_id')) == '228'
-
-        if _is_bog_effort and phase_ids:
+        if _is_bog_eff and phase_ids:
             # BOG: filter by project.phase (phase_id on task)
             relevant_ids = set()
             for t in all_proj_tasks:
@@ -5546,8 +5546,7 @@ def api_effort_all_months(phase_key):
                 if ph and isinstance(ph, list) and ph[0] in phase_ids:
                     relevant_ids.add(t['id'])
         else:
-            # Non-BOG: tasks have no phase_id, use ALL project tasks
-            # Services/Support split is at project level (Excel config), not task level
+            # Non-BOG: use ALL project tasks (split is Excel-config-based, not Odoo-phase-based)
             relevant_ids = {t['id'] for t in all_proj_tasks}
             logger.info(f"Non-BOG effort {phase_key}: using all {len(relevant_ids)} project tasks")
 
