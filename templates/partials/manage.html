@@ -110,6 +110,9 @@ tr:hover td{background:#FAFAFA;}
     <button class="tab-btn" onclick="switchTab('promotions')">
       🏆 Promotions <span class="cnt-badge" id="promoCount">…</span>
     </button>
+    <button class="tab-btn" onclick="switchTab('phaseconfig')">
+      ⚙️ Phase Config
+    </button>
   </div>
 
   <!-- ═══════════════ TRAVEL TAB ═══════════════ -->
@@ -148,21 +151,6 @@ tr:hover td{background:#FAFAFA;}
       <div class="hint">Columns: Member / From / To — duplicates auto-skipped</div>
     </div>
     <div class="result-bar" id="travelImportResult"></div>
-
-    <!-- Project Config Upload -->
-    <div style="background:#F0F9FF;border:1px solid #BAE6FD;border-radius:10px;padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
-      <div>
-        <div style="font-size:13px;font-weight:700;color:#0C4A6E;">⚙️ Project Phase Configuration</div>
-        <div style="font-size:11px;color:#0369A1;margin-top:2px;">Upload the Estimated Cost Excel to configure which projects have Services / Support tabs</div>
-      </div>
-      <label style="cursor:pointer;margin-left:auto;">
-        <input type="file" accept=".xlsx,.xls" style="display:none;" onchange="uploadProjectConfig(this)">
-        <span style="background:#0EA5E9;color:white;padding:8px 16px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;">
-          📤 Upload Config Excel
-        </span>
-      </label>
-      <div id="configUploadResult" style="font-size:12px;display:none;"></div>
-    </div>
 
     <!-- Toolbar — Row 1: Filters -->
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
@@ -379,11 +367,12 @@ let _linkTimer    = null;
 function switchTab(tab) {
   activeTab = tab;
   document.querySelectorAll('.tab-btn').forEach((b,i) =>
-    b.classList.toggle('active', ['travel','promotions'][i] === tab));
+    b.classList.toggle('active', ['travel','promotions','phaseconfig'][i] === tab));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.getElementById('tab-'+tab).classList.add('active');
   if (tab === 'travel') loadTravel();
-  else loadPromos();
+  else if (tab === 'promotions') loadPromos();
+  else if (tab === 'phaseconfig') loadPhaseConfig();
 }
 
 function toggleForm(id) {
@@ -633,6 +622,120 @@ async function delTravel(id) {
 }
 
 // ─── Auto-Link ────────────────────────────────────────────────────────
+// ─── Phase Config Tab ─────────────────────────────────────────────────
+let _phaseConfigs = {};
+
+async function loadPhaseConfig() {
+  // Load saved configs
+  try {
+    const res = await fetch('/api/project-config/all');
+    const d = await res.json();
+    _phaseConfigs = d.configs || {};
+  } catch(e) {
+    _phaseConfigs = {};
+  }
+  renderPhaseConfig();
+}
+
+function renderPhaseConfig() {
+  const search = (document.getElementById('pcSearch')?.value || '').toLowerCase();
+  const entries = Object.entries(_phaseConfigs).filter(([k]) =>
+    !search || k.toLowerCase().includes(search)
+  ).sort(([a],[b]) => a.localeCompare(b));
+
+  document.getElementById('pcCount').textContent = `${entries.length} projects`;
+
+  if (!entries.length) {
+    document.getElementById('phaseConfigList').innerHTML = `
+      <div style="text-align:center;padding:40px;color:var(--muted);">
+        <div style="font-size:32px;margin-bottom:8px;">📋</div>
+        <div>No projects configured yet. Upload the Excel file above.</div>
+      </div>`;
+    return;
+  }
+
+  const html = entries.map(([proj, cfg]) => {
+    const hasSupport = cfg.has_support;
+    const sheets = cfg.sheets || {};
+    const badge = (has, label, color) => has
+      ? `<span style="background:${color}20;color:${color};border:1px solid ${color}40;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600;">${label}</span>`
+      : '';
+
+    const phases = [];
+    if (cfg.has_services) phases.push({key:'services', label:'Services', sheet: sheets.services||'', color:'#2563EB'});
+    if (cfg.has_support) phases.push({key:'support',  label:'Support',  sheet: sheets.support||'',  color:'#D97706'});
+
+    const phaseRows = phases.map(ph => `
+      <div style="border:1px solid #E5E7EB;border-radius:8px;padding:12px 16px;margin-bottom:8px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+          <span style="font-size:12px;font-weight:700;color:${ph.color};">${ph.label}</span>
+          ${ph.sheet ? `<span style="font-size:11px;color:var(--muted);">← ${ph.sheet}</span>` : ''}
+          <span style="margin-left:auto;font-size:11px;color:var(--muted);" id="pc-summary-${proj}-${ph.key}">Loading…</span>
+        </div>
+        <textarea placeholder="Add comment about this phase…"
+          id="pc-comment-${proj}-${ph.key}"
+          onblur="savePhaseComment('${proj}','${ph.key}',this.value)"
+          style="width:100%;border:1px solid #E5E7EB;border-radius:6px;padding:8px;font-size:12px;
+                 font-family:var(--sans);resize:vertical;min-height:48px;color:var(--text);
+                 box-sizing:border-box;outline:none;"></textarea>
+      </div>`).join('');
+
+    return `
+      <div style="background:white;border:1px solid var(--border);border-radius:10px;padding:16px 20px;margin-bottom:14px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+          <div style="font-size:14px;font-weight:700;color:var(--text);">${esc(proj)}</div>
+          <div style="display:flex;gap:6px;">
+            ${badge(cfg.has_services,'Services','#2563EB')}
+            ${badge(cfg.has_support,'Support','#D97706')}
+          </div>
+        </div>
+        ${phaseRows}
+      </div>`;
+  }).join('');
+
+  document.getElementById('phaseConfigList').innerHTML = html;
+
+  // Load summaries and comments async
+  entries.forEach(([proj, cfg]) => {
+    const phases = [];
+    if (cfg.has_services) phases.push('services');
+    if (cfg.has_support)  phases.push('support');
+    phases.forEach(ph => loadPhaseConfigRow(proj, ph));
+  });
+}
+
+async function loadPhaseConfigRow(proj, phase) {
+  // Load comment
+  try {
+    const res = await fetch(`/api/project-config/comment?project=${encodeURIComponent(proj)}&phase=${phase}`);
+    const d = await res.json();
+    const ta = document.getElementById(`pc-comment-${proj}-${phase}`);
+    if (ta && d.comment) ta.value = d.comment;
+  } catch(e) {}
+
+  // Load estimated summary from DB
+  try {
+    const res = await fetch(`/api/estimated-summary?phase=${phase}&project_name=${encodeURIComponent(proj)}`);
+    const d = await res.json();
+    const el = document.getElementById(`pc-summary-${proj}-${phase}`);
+    if (el && d.summary && d.summary.total_cost_sar) {
+      const fmt = n => new Intl.NumberFormat('en-US',{maximumFractionDigits:0}).format(n||0);
+      el.textContent = `${fmt(d.summary.total_mds)} MDs · SAR ${fmt(d.summary.total_cost_sar)}`;
+      el.style.color = '#059669';
+    } else if (el) {
+      el.textContent = 'No data';
+    }
+  } catch(e) {}
+}
+
+async function savePhaseComment(proj, phase, val) {
+  await fetch('/api/project-config/comment', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({project: proj, phase, comment: val})
+  });
+}
+
 async function uploadProjectConfig(input) {
   const file = input.files[0];
   if (!file) return;
