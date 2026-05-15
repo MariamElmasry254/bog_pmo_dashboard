@@ -18,3 +18,23 @@ document.querySelectorAll('.exec-tab').forEach(t => {
 
 // Initial load
 loadOverview();
+
+// ── Hide BOG-specific tabs for non-BOG projects ──
+(function() {
+  const BOG_ONLY_TABS = ['services', 'missing', 'risks', 'roadmap'];
+
+  function applyTabVisibility() {
+    const isBog = AppState._overviewData?.is_bog !== false;
+    BOG_ONLY_TABS.forEach(tab => {
+      const btn = document.querySelector(`.exec-tab[data-tab="${tab}"]`);
+      if (btn) btn.style.display = isBog ? '' : 'none';
+    });
+  }
+
+  // Run after overview loads (overview sets _overviewData)
+  const origLoad = window.loadOverview;
+  window.loadOverview = async function() {
+    await origLoad.apply(this, arguments);
+    applyTabVisibility();
+  };
+})();
