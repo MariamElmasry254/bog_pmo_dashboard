@@ -295,23 +295,24 @@ function renderBudget(data, phaseKey) {
   let html = `
     <div class="kpi-strip kpi-strip-small">
       <div class="kpi-card kpi-blue compact">
-        <div class="kpi-label">TOTAL MANDAYS</div>
+        <div class="kpi-label">PRESALES MDs</div>
         <div class="kpi-value" id="kpi-mds-${phaseKey}">${fmt.num(a.total_mandays || 0)}</div>
         <div class="kpi-foot">from Estimated Cost</div>
       </div>
       <div class="kpi-card kpi-navy compact">
-        <div class="kpi-label">APPROVED COST (SAR)</div>
-        <div class="kpi-value" id="kpi-cost-${phaseKey}">${fmt.money(a.cost_sar || 0)}</div>
+        <div class="kpi-label">REVENUE (FINAL)</div>
+        <div class="kpi-value" id="kpi-rev-${phaseKey}">—</div>
+        <div class="kpi-foot">after changes</div>
+      </div>
+      <div class="kpi-card kpi-navy compact">
+        <div class="kpi-label">TOTAL COST (FINAL)</div>
+        <div class="kpi-value" id="kpi-cost-${phaseKey}">—</div>
+        <div class="kpi-foot">after changes</div>
       </div>
       <div class="kpi-card kpi-green compact">
-        <div class="kpi-label">APPROVED PROFIT</div>
-        <div class="kpi-value" id="kpi-profit-pct-${phaseKey}">—</div>
-        <div class="kpi-foot" id="kpi-profit-sar-${phaseKey}">—</div>
-      </div>
-      <div class="kpi-card kpi-amber compact">
-        <div class="kpi-label">FINAL PROFIT</div>
+        <div class="kpi-label">PROFIT % (FINAL)</div>
         <div class="kpi-value" id="kpi-final-pct-${phaseKey}">—</div>
-        <div class="kpi-foot" id="kpi-final-sar-${phaseKey}">—</div>
+        <div class="kpi-foot" id="kpi-final-sar-${phaseKey}" style="font-size:13px;font-weight:700;color:inherit;">—</div>
       </div>
     </div>
 
@@ -708,12 +709,11 @@ function budgetAutoCalc(phaseKey) {
       }).catch(()=>{});
     }
   }
-  setEl(`kpi-mds-${phaseKey}`,        mds > 0 ? fmt.num(Math.round(mds)) : '—');
-  setEl(`kpi-cost-${phaseKey}`,       costSAR > 0 ? fmt.money(Math.round(costSAR)) : '—');
-  setEl(`kpi-profit-pct-${phaseKey}`, approvedRevSAR > 0 ? fmt.decimal(appProfitPct)+'%' : '—', profColor(appProfitPct));
-  setEl(`kpi-profit-sar-${phaseKey}`, approvedRevSAR > 0 ? fmt.money(Math.round(appProfit)) + ' SAR' : '—');
-  setEl(`kpi-final-pct-${phaseKey}`,  finRevSAR > 0 ? fmt.decimal(finProfitPct)+'%' : '—', profColor(finProfitPct));
-  setEl(`kpi-final-sar-${phaseKey}`,  finRevSAR > 0 ? fmt.money(Math.round(finProfit)) + ' SAR' : '—');
+  setEl(`kpi-mds-${phaseKey}`,       mds > 0 ? fmt.num(Math.round(mds)) : '—');
+  setEl(`kpi-rev-${phaseKey}`,       finRevSAR > 0 ? fmt.money(Math.round(finRevSAR)) : '—');
+  setEl(`kpi-cost-${phaseKey}`,      finCostSAR > 0 ? fmt.money(Math.round(finCostSAR)) : (costSAR > 0 ? fmt.money(Math.round(costSAR)) : '—'));
+  setEl(`kpi-final-pct-${phaseKey}`, finRevSAR > 0 ? fmt.decimal(finProfitPct)+'%' : '—', profColor(finProfitPct));
+  setEl(`kpi-final-sar-${phaseKey}`, finRevSAR > 0 ? fmt.money(Math.round(finProfit)) + ' SAR' : '—', profColor(finProfitPct));
 }
 
 // Wire up auto-save for budget inputs
@@ -994,6 +994,24 @@ async function profRecomputeAll(phaseKey) {
   const budgChanges = _budgetChanges[phaseKey] || [];
   totalRevSAR += budgChanges.reduce((s,c) => s + (parseFloat(c.delta_rev)||0), 0);
 
+  // Per-month helpers: apply only changes effective by that month's date
+  const _getMonthlyRev = (mk) => {
+    let rev = AppState._savedRevenue?.[phaseKey] || 0;
+    budgChanges.forEach(c => {
+      const cd = (c.change_date||'').slice(0,7);
+      if (!cd || cd <= mk) rev += parseFloat(c.delta_rev)||0;
+    });
+    return rev;
+  };
+  const _getMonthlyEstCost = (mk) => {
+    let cost = totalEstCostSAR;
+    budgChanges.forEach(c => {
+      const cd = (c.change_date||'').slice(0,7);
+      if (!cd || cd <= mk) cost += parseFloat(c.delta_cost)||0;
+    });
+    return cost;
+  };
+
   // ── 2. Estimated rows: cache → DB ──
   const estRows = (_estPhase === phaseKey && _estRows?.length) ? _estRows : null;
   if (estRows) {
@@ -1173,9 +1191,11 @@ async function profRecomputeAll(phaseKey) {
       if (el) { el.innerHTML = val; if (color) el.style.color = color; }
     };
 
-    // Update presales columns (same every row)
-    tr.querySelectorAll(`.prof-rev-${phaseKey}`).forEach(el => el.textContent = totalRevSAR > 0 ? fSAR(totalRevSAR) : '—');
-    tr.querySelectorAll(`.prof-estcost-${phaseKey}`).forEach(el => el.textContent = totalEstCostSAR > 0 ? fSAR(totalEstCostSAR) : '—');
+    // Presales: revenue/cost reflect changes effective by this month
+    const monthRevSAR     = _getMonthlyRev(monthKey);
+    const monthEstCostSAR = _getMonthlyEstCost(monthKey);
+    tr.querySelectorAll(`.prof-rev-${phaseKey}`).forEach(el => el.textContent = monthRevSAR > 0 ? fSAR(monthRevSAR) : '—');
+    tr.querySelectorAll(`.prof-estcost-${phaseKey}`).forEach(el => el.textContent = monthEstCostSAR > 0 ? fSAR(monthEstCostSAR) : '—');
     tr.querySelectorAll(`.prof-estmds-${phaseKey}`).forEach(el => el.textContent = totalEstMDs > 0 ? fNum(totalEstMDs) : '—');
     // Current effort columns
     tr.querySelectorAll(`.prof-thismonth-${phaseKey}`).forEach(el => el.textContent = thisMonthMDs > 0 ? fNum(thisMonthMDs) : '—');
