@@ -160,8 +160,7 @@ tr:hover td{background:#FAFAFA;}
       <input type="text" class="filter-sel" id="travelPosFilter" placeholder="🔍 Position…" style="min-width:120px;" oninput="loadTravel()" title="Filter by position">
       <input type="date" class="filter-sel" id="travelDateFrom" onchange="loadTravel()" title="Travel from" style="min-width:130px;color:var(--muted);">
       <input type="date" class="filter-sel" id="travelDateTo" onchange="loadTravel()" title="Travel to" style="min-width:130px;color:var(--muted);">
-      <button class="btn btn-ghost" onclick="autoLink('travel')">⚡ Auto-Link All</button>
-      <button class="btn btn-ghost" onclick="fetchCodes()" title="Get E/R/T codes from Odoo timesheets">🔢 Fetch Codes</button>
+      <button class="btn btn-ghost" onclick="fetchCodes()" title="Get codes from Odoo">🔢 Fetch Codes</button>
       <button class="btn btn-ghost" onclick="toggleForm('travelForm')">+ Add Manually</button>
     </div>
     <div class="result-bar" id="autoLinkTravelResult"></div>
@@ -169,6 +168,7 @@ tr:hover td{background:#FAFAFA;}
     <!-- Bulk Bar -->
     <div class="bulk-bar" id="travelBulkBar">
       <span id="travelBulkCount" style="font-size:13px;font-weight:600;color:#1E40AF;"></span>
+      <button class="btn btn-primary btn-sm" onclick="bulkLinkSelected()">🔗 Link All to Same Person</button>
       <button class="btn btn-danger btn-sm" onclick="bulkDeleteTravel()">🗑 Delete</button>
       <button class="btn btn-ghost btn-sm" style="margin-left:auto;" onclick="clearSelection('travel')">✕ Clear</button>
     </div>
@@ -250,7 +250,7 @@ tr:hover td{background:#FAFAFA;}
         <option value="2025">2025</option>
         <option value="2026">2026</option>
       </select>
-      <button class="btn btn-ghost" onclick="autoLink('promotions')">⚡ Auto-Link All</button>
+
       <button class="btn btn-ghost" onclick="toggleForm('promoForm')">+ Add Manually</button>
     </div>
     <div class="result-bar" id="autoLinkPromoResult"></div>
@@ -475,6 +475,22 @@ function clearSelection(type) {
     updateBulkBar();
   }
 }
+
+async function bulkLinkSelected() {
+  if (_travelSel.size === 0) return;
+  // Open link modal — when user picks an employee, apply to ALL selected
+  _bulkLinkMode = true;
+  _linkType = 'travel';
+  document.getElementById('linkModalSub').textContent = 
+    'Linking ' + _travelSel.size + ' selected records to same employee';
+  document.getElementById('linkSearch').value = '';
+  document.getElementById('manualCode').value = '';
+  document.getElementById('linkResults').style.display = 'none';
+  document.getElementById('linkModal').classList.add('open');
+  setTimeout(() => document.getElementById('linkSearch').focus(), 100);
+}
+
+let _bulkLinkMode = false;
 
 async function bulkDeleteTravel() {
   if (!confirm(`Delete ${_travelSel.size} records?`)) return;
@@ -701,6 +717,25 @@ function pickLinkEmp(el) {
 }
 
 async function doLink(odooId, odooName, odooCode) {
+  if (_bulkLinkMode && _travelSel.size > 0) {
+    // Bulk link: apply to all selected travel records
+    closeModal();
+    _bulkLinkMode = false;
+    let done = 0;
+    for (const id of [..._travelSel]) {
+      const res = await fetch('/api/global/travel/' + id, {
+        method: 'PUT', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({odoo_employee_id: odooId, odoo_employee_name: odooName, odoo_employee_code: odooCode})
+      });
+      const d = await res.json();
+      if (d.ok) done++;
+    }
+    showResult('autoLinkTravelResult', 'ok', '✅ Linked ' + done + ' records to ' + (odooName||odooId));
+    clearSelection('travel');
+    loadTravel();
+    return;
+  }
+  // Single link
   if (!_linkId || !_linkType) return;
   const res = await fetch(`/api/global/${_linkType}/${_linkId}`, {
     method: 'PUT', headers: {'Content-Type':'application/json'},
