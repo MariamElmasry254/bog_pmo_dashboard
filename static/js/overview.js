@@ -362,7 +362,6 @@ async function loadOverviewKPIs() {
         const el = document.getElementById(id);
         if (!el) return;
         if (label === null) {
-          // Hide the whole parent row, not just the label
           const row = el.closest('[style*="justify-content:space-between"]') || el.parentElement;
           if (row) row.style.display = 'none';
           else el.style.display = 'none';
@@ -373,6 +372,37 @@ async function loadOverviewKPIs() {
       // Hide Development progress card entirely
       const devProgressCard = document.getElementById('labelDevProgress')?.closest('[style*="border-radius:10px"]');
       if (devProgressCard) devProgressCard.style.display = 'none';
+
+      // Show Support rows in Cost + EAC cards (hidden by default)
+      fetch('/api/project-phases-available').then(r=>r.json()).then(cfg => {
+        if (cfg.has_support) {
+          ['rowSupCost','rowSupEAC'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = 'flex';
+          });
+          // Add Support progress card after Services
+          const progressRow = document.getElementById('progressRow');
+          if (progressRow && !document.getElementById('supProgressCard')) {
+            const card = document.createElement('div');
+            card.id = 'supProgressCard';
+            card.style.cssText = 'background:var(--bg-card);border:1px solid var(--border);border-top:3px solid var(--amber);border-radius:10px;padding:16px 20px;';
+            card.innerHTML = `
+              <div style="font-size:10px;font-weight:700;color:var(--amber);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Support — Progress</div>
+              <div style="display:flex;align-items:baseline;gap:4px;margin-bottom:8px;">
+                <span style="font-size:30px;font-weight:700;line-height:1;" id="kpiSupProgress">—</span>
+                <span style="font-size:14px;color:var(--muted);">%</span>
+              </div>
+              <div style="height:6px;background:#F3F4F6;border-radius:3px;margin-bottom:8px;">
+                <div id="kpiSupProgressBar" style="height:100%;background:var(--amber);border-radius:3px;width:0%;transition:width .6s;"></div>
+              </div>
+              <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);">
+                <span>Remaining MDs</span>
+                <span style="font-size:13px;font-weight:700;color:var(--text);" id="kpiSupRemaining">—</span>
+              </div>`;
+            progressRow.appendChild(card);
+          }
+        }
+      }).catch(()=>{});
     }
 
     const set = (id, v) => { const el=document.getElementById(id); if(el&&v!==null&&v!==undefined) el.textContent=v; };
@@ -730,7 +760,8 @@ async function loadTaskAnalysis(phaseGroup) {
     if (!AppState.activePhases) AppState.activePhases = d.phases_active || [];
     if (!AppState.activeEmployees) AppState.activeEmployees = [];
 
-    renderPhaseFilters(phaseGroup, d.phases_available || []);
+    const isBogTA = AppState._overviewData?.is_bog !== false;
+    renderPhaseFilters(phaseGroup, isBogTA ? (d.phases_available || []) : []);
     renderEmployeeFilter(d.employees_available || []);
     populateStageFilter(d.stages_used || []);
     renderTaskList(phaseGroup);  // This calls renderSummary internally with filtered tasks
