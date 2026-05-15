@@ -418,25 +418,19 @@ async function loadTravel() {
 
 function codeTag(r, type) {
   type = type || 'travel';
-  // 1. Valid E/R/T code
+  // 1. Valid E/R/T code — show as blue badge
   const raw_code = (r.odoo_employee_code || '').trim().toUpperCase();
   const code = /^[ERT]\d+$/.test(raw_code) ? raw_code : null;
   if (code) {
-    return '<span class="code-badge">' + code + '</span>';
+    return '<span class="code-badge" onclick="event.preventDefault();openLinkById('+r.id+',\''+type+'\')" style="cursor:pointer;" title="'+esc(r.odoo_employee_name||'')+'">'+code+'</span>';
   }
-  // 2. Has Odoo ID — show Odoo name (since barcode often empty in Odoo)
+  // 2. Has Odoo ID but no code — show name in green (click to update)
   if (r.odoo_employee_id) {
-    const display = r.odoo_employee_name || ('ID:' + r.odoo_employee_id);
-    return '<span style="font-size:10px;background:#D1FAE5;color:#065F46;' +
-           'padding:2px 7px;border-radius:4px;margin-left:3px;font-weight:600;cursor:pointer;" ' +
-           'onclick="event.preventDefault();openLinkById(' + r.id + ',\''+type+'\')" ' +
-           'title="Linked to Odoo: ' + (r.odoo_employee_name||'') + '">' +
-           display + '</span>';
+    const name = r.odoo_employee_name || ('ID:'+r.odoo_employee_id);
+    return '<span style="font-size:10px;background:#D1FAE5;color:#065F46;padding:2px 7px;border-radius:4px;margin-left:3px;font-weight:600;cursor:pointer;" onclick="event.preventDefault();openLinkById('+r.id+',\''+type+'\')" title="Click to update code">'+esc(name)+'</span>';
   }
-  // 3. Not linked at all
-  return '<a href="javascript:void(0)" ' +
-         'onclick="event.preventDefault();openLinkById(' + r.id + ',\''+type+'\')" ' +
-         'style="font-size:10px;color:#9CA3AF;margin-left:3px;text-decoration:underline;">unlinked</a>';
+  // 3. Not linked
+  return '<a href="javascript:void(0)" onclick="event.preventDefault();openLinkById('+r.id+',\''+type+'\')" style="font-size:10px;color:#9CA3AF;margin-left:3px;">unlinked</a>';
 }
 
 function esc(s) {
