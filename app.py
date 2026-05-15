@@ -2408,8 +2408,8 @@ def api_overview_analysis(phase_group):
       - employees: comma-separated employee names to filter by
     """
     _proj_name = active_project_name()
-    if phase_group not in ('development', 'consultation'):
-        return jsonify({'error': 'phase_group must be development or consultation'}), 400
+    _proj_id = session.get('project_id')
+    _is_bog  = not _proj_id or str(_proj_id) == '228'
 
     # Parse query params
     phases_param = request.args.get('phases')
@@ -2422,6 +2422,25 @@ def api_overview_analysis(phase_group):
     employees_filter = []
     if employees_param:
         employees_filter = [e.strip() for e in employees_param.split(',') if e.strip()]
+
+    # For non-BOG: auto-detect phases from Odoo task types if empty
+    if not phase_names and not _is_bog:
+        if not odoo.uid: odoo.connect()
+        try:
+            projects = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.project', 'search_read',
+                [[('name', 'ilike', _proj_name)]],
+                {'fields': ['id'], 'limit': 3}
+            )
+            if projects:
+                phase_names = auto_detect_phases_for_project(projects[0]['id'], phase_group)
+        except Exception: pass
+
+    if not phase_names and not _is_bog:
+        return jsonify({'tasks': [], 'connected': True, 'phases_active': [],
+                        'phases_available': [], 'employees_available': [], 'stages_used': [],
+                        'note': f'No phases found for {phase_group}'})
 
     if not phase_names:
         return jsonify({'tasks': [], 'error': f'No phases for {phase_group}'})
@@ -5243,14 +5262,13 @@ def api_effort_all_months(phase_key):
             return jsonify({'employees': [], 'months': [], 'total_employees': 0,
                             'note': f'No phases found for {phase_key} in this project'})
 
-        # Find phases — try exact match first, then ilike fallback for name variations
+        # Find phases: try project.phase first (BOG), then project.task.type (non-BOG stages)
         phases = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'project.phase', 'search_read',
             [[('name', 'in', phase_names)]],
             {'fields': ['id', 'name']}
         )
-        # If we didn't find all phases, try ilike for each missing one
         found_names_lower = {p['name'].strip().lower() for p in phases}
         for pname in phase_names:
             if pname.strip().lower() not in found_names_lower:
@@ -5265,13 +5283,48 @@ def api_effort_all_months(phase_key):
                     found_names_lower.add(extra[0]['name'].strip().lower())
         phase_ids = [p['id'] for p in phases]
 
+        # If no project.phase found → use task.type (stage_id) for non-BOG
+        use_stage_filter = False
+        stage_task_ids = set()
+        if not phase_ids:
+            task_types = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.task.type', 'search_read',
+                [[('name', 'in', phase_names), ('project_ids', 'in', [project_id])]],
+                {'fields': ['id', 'name'], 'limit': 50}
+            )
+            if not task_types:
+                # try ilike
+                task_types = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'project.task.type', 'search_read',
+                    [[('project_ids', 'in', [project_id])]],
+                    {'fields': ['id', 'name'], 'limit': 50}
+                )
+                task_types = [t for t in task_types
+                              if any(pn.lower() in t['name'].lower() for pn in phase_names)]
+            if task_types:
+                type_ids = [t['id'] for t in task_types]
+                stage_tasks = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'project.task', 'search_read',
+                    [[('stage_id', 'in', type_ids), ('project_id', '=', project_id)]],
+                    {'fields': ['id'], 'limit': 10000}
+                )
+                stage_task_ids = {t['id'] for t in stage_tasks}
+                use_stage_filter = True
+                logger.info(f"Using stage_id filter for {_proj_name}/{phase_key}: {len(stage_task_ids)} tasks")
+
         # Get ALL tasks that have phase_id in our phases (any level, not just parents)
-        phase_tasks_direct = odoo.models.execute_kw(
-            ODOO_DB, odoo.uid, ODOO_PASSWORD,
-            'project.task', 'search_read',
-            [[('phase_id', 'in', phase_ids), ('project_id', '=', project_id)]],
-            {'fields': ['id', 'child_ids'], 'limit': 5000}
-        )
+        if phase_ids:
+            phase_tasks_direct = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.task', 'search_read',
+                [[('phase_id', 'in', phase_ids), ('project_id', '=', project_id)]],
+                {'fields': ['id', 'child_ids'], 'limit': 5000}
+            )
+        else:
+            phase_tasks_direct = []
         parent_ids = {t['id'] for t in phase_tasks_direct}
 
         # All project tasks → walk parents to find descendants of phase tasks
@@ -5282,13 +5335,16 @@ def api_effort_all_months(phase_key):
             {'fields': ['id', 'parent_id', 'phase_id'], 'limit': 10000}
         )
         task_map = {t['id']: t for t in all_proj_tasks}
-        relevant_ids = set(parent_ids)
 
-        # Also directly include any task whose phase_id is in our phases
-        for t in all_proj_tasks:
-            ph = t.get('phase_id')
-            if ph and isinstance(ph, list) and ph[0] in phase_ids:
-                relevant_ids.add(t['id'])
+        if use_stage_filter:
+            relevant_ids = stage_task_ids
+        else:
+            relevant_ids = set(parent_ids)
+            # Also directly include any task whose phase_id is in our phases
+            for t in all_proj_tasks:
+                ph = t.get('phase_id')
+                if ph and isinstance(ph, list) and ph[0] in phase_ids:
+                    relevant_ids.add(t['id'])
 
         # Walk parent chains to include sub-tasks of phase tasks
         for t in all_proj_tasks:
