@@ -2617,6 +2617,26 @@ def api_overview_tags_analysis():
             if pt.get('phase_id'):
                 parent_phase_map[pt['id']] = pt['phase_id'][1] if isinstance(pt['phase_id'], list) else ''
 
+        # Check if there are tasks with NO phase — add 'No Phase' to available list
+        _unphased_domain = list(project_domain) + [('phase_id', '=', False)]
+        _unphased_count = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_count',
+            [_unphased_domain]
+        )
+        _has_unphased = _unphased_count > 0
+
+        # If 'No Phase' requested, add unphased tasks to parent_tasks
+        if _include_no_phase and _has_unphased:
+            _unphased_tasks = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.task', 'search_read',
+                [_unphased_domain],
+                {'fields': ['id', 'name', 'phase_id', 'project_id'], 'limit': 2000}
+            )
+            parent_tasks = parent_tasks + [t for t in _unphased_tasks if t['id'] not in parent_task_ids]
+            parent_task_ids = {t['id'] for t in parent_tasks}
+
         # Get ALL project tasks (so we can walk parent chain)
         project_ids = set()
         for pt in parent_tasks:
@@ -2777,7 +2797,7 @@ def api_overview_tags_analysis():
             'tags': result,
             'connected': True,
             'phases_active': phase_names,
-            'phases_available': [v for v in phase_id_to_name.values() if v],
+            'phases_available': [v for v in phase_id_to_name.values() if v] + (['No Phase'] if _has_unphased else []),
             'phase_group': phase_group,
             'summary': {
                 'total_tags': len(result),
@@ -3277,10 +3297,9 @@ def api_overview_analysis(phase_group):
         total_actual = sum(t['actual_hours'] for t in ordered)
         overall_progress = round(min(150, total_actual / total_planned * 100), 1) if total_planned > 0 else 0
 
-        # Check if any tasks have no phase → add 'No Phase' option
-        has_no_phase_tasks = any(t.get('phase') == 'No Phase' for t in ordered)
+        # Add 'No Phase' to available if unphased tasks exist
         phases_avail = [p for p in phase_names if p]
-        if has_no_phase_tasks and 'No Phase' not in phases_avail:
+        if _has_unphased and 'No Phase' not in phases_avail:
             phases_avail.append('No Phase')
 
         return jsonify({
