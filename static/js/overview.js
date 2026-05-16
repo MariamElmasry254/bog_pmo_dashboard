@@ -294,6 +294,34 @@ async function loadOverviewKPIs() {
       if (btn) btn.style.display = _isBog ? '' : 'none';
     });
 
+    // Register callback for variance profitability to update overview KPIs
+    window._overviewUpdateProfKPIs = function(phaseKey) {
+      const d = AppState._latestProfData?.[phaseKey];
+      if (!d) return;
+      const fmtN = n => n ? new Intl.NumberFormat('en-US',{maximumFractionDigits:1}).format(n) : '—';
+      const setOv = (id, val, color) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.textContent = val;
+        if (color) el.style.color = color;
+      };
+      // Map phase → overview element prefix
+      const isSupport = phaseKey === 'support';
+      const pre = isSupport ? 'Dev' : 'Con'; // Dev=Support progress card, Con=Services progress card
+      const pct = d.completionPct || 0;
+      setOv(`kpi${pre}Progress`,  pct > 0 ? fmtN(pct) : '—');
+      setOv(`kpi${pre}Remaining`, d.remainingMDs ? fmtN(d.remainingMDs) : '—');
+      setOv(`kpi${pre}EAC`,       d.eacMDs       ? fmtN(d.eacMDs)       : '—');
+      // Update progress bar
+      const bar = document.getElementById(`kpi${pre}ProgressBar`);
+      if (bar) bar.style.width = Math.min(pct, 100) + '%';
+      // Show month label
+      if (d.monthKey) {
+        const foot = document.querySelector(`#kpi${pre}Progress`)?.closest('.kpi-card')?.querySelector('.kpi-foot');
+        if (foot) foot.textContent = `as of ${d.monthKey}`;
+      }
+    };
+
     // For non-BOG: switch default phase to 'services' and rewire sub-tabs
     if (!_isBog) {
       AppState.currentOverviewPhase = 'services';
