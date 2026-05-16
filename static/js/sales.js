@@ -234,31 +234,45 @@ function renderSOLines(lines) {
 
     const invDetail = lineInvs.length > 0 ? `
       <tr id="${lineId}" style="display:none;">
-        <td colspan="8" style="padding:4px 8px 10px 32px;background:#FFFBEB;">
-          <table style="font-size:10px;width:100%;">
-            <thead><tr style="color:var(--text-muted);">
-              <th style="text-align:left;padding:3px;">Invoice</th>
-              <th style="text-align:right;padding:3px;">Qty</th>
-              <th style="text-align:right;padding:3px;">Amount (SAR)</th>
+        <td colspan="8" style="padding:4px 8px 12px 32px;background:#FFFBEB;border-bottom:1px solid #FDE68A;">
+          <table style="font-size:11px;width:100%;">
+            <thead><tr style="color:var(--text-muted);font-size:10px;text-transform:uppercase;letter-spacing:.3px;">
+              <th style="text-align:left;padding:4px 6px;">Invoice #</th>
+              <th style="text-align:left;padding:4px 6px;">Issue Date</th>
+              <th style="text-align:left;padding:4px 6px;">Purpose</th>
+              <th style="text-align:right;padding:4px 6px;">Qty</th>
+              <th style="text-align:right;padding:4px 6px;">Amount excl. VAT</th>
+              <th style="text-align:right;padding:4px 6px;">VAT (15%)</th>
+              <th style="text-align:right;padding:4px 6px;">Total incl. VAT</th>
             </tr></thead>
             <tbody>
-              ${lineInvs.map(i => `<tr>
-                <td style="padding:3px;font-weight:600;">${i.move_name}</td>
-                <td style="text-align:right;padding:3px;">${fNum(i.qty)}</td>
-                <td style="text-align:right;padding:3px;color:var(--green);">${fSAR(i.amount)}</td>
-              </tr>`).join('')}
+              ${lineInvs.map(i => {
+                const amtExcl = i.amount || 0;
+                const vat     = Math.round(amtExcl * 0.15);
+                const total   = amtExcl + vat;
+                return `<tr style="border-top:1px solid #FEF3C7;">
+                  <td style="padding:4px 6px;font-weight:700;color:var(--navy);">${i.move_name}</td>
+                  <td style="padding:4px 6px;font-family:var(--mono);font-size:10px;">${i.inv_date || '—'}</td>
+                  <td style="padding:4px 6px;color:var(--text-muted);font-size:10px;max-width:160px;">${i.name || '—'}</td>
+                  <td style="text-align:right;padding:4px 6px;">${fNum(i.qty)}</td>
+                  <td style="text-align:right;padding:4px 6px;font-weight:600;color:var(--green);">${fSAR(amtExcl)}</td>
+                  <td style="text-align:right;padding:4px 6px;color:var(--text-muted);">${fSAR(vat)}</td>
+                  <td style="text-align:right;padding:4px 6px;font-weight:700;">${fSAR(total)}</td>
+                </tr>`;
+              }).join('')}
             </tbody>
           </table>
         </td>
       </tr>` : '';
 
     const linePhase = phaseLabel(phaseOf(Array.isArray(l.product_id) ? l.product_id[1] : (l.name||'')));
+    const purpose = (l.name && l.name !== prod) ? l.name : '—';
     return `<tr style="cursor:default;" data-line-phase="${linePhase}" data-detail-id="${lineId}">
-      <td style="max-width:200px;white-space:normal;">
+      <td style="max-width:160px;white-space:normal;">
         <div style="font-weight:600;font-size:12px;">${prod} ${invBtn}</div>
         <div style="margin-top:3px;">${varSelector}</div>
-        ${l.name && l.name !== prod ? `<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">${l.name}</div>` : ''}
       </td>
+      <td style="max-width:200px;white-space:normal;font-size:11px;color:var(--text-muted);">${purpose}</td>
       <td class="num">${fSAR(l.price_unit)} ${disc}</td>
       <td class="num">${fNum(ordered)}</td>
       <td class="num" style="color:${delColor};">
@@ -277,7 +291,8 @@ function renderSOLines(lines) {
 
   return `<table class="data-table" style="font-size:11px;margin-top:8px;width:100%;">
     <thead><tr>
-      <th>Product / Description</th>
+      <th>Product</th>
+      <th>Purpose / Description</th>
       <th class="num">Unit Price</th>
       <th class="num">Qty</th>
       <th class="num">Delivered (SAR)</th>
@@ -288,7 +303,7 @@ function renderSOLines(lines) {
     <tbody>${rows}</tbody>
     <tfoot>
       <tr style="background:var(--navy);color:white;font-weight:700;">
-        <td colspan="3" style="padding:8px 12px;">TOTAL</td>
+        <td colspan="4" style="padding:8px 12px;">TOTAL</td>
         <td class="num">${fSAR(totalDeliveredAmt)}</td>
         <td class="num">${fSAR(totalInvoicedAmt)}</td>
         <td class="num" style="color:#FCD34D;">${fSAR(totalRemainingAmt)}</td>
