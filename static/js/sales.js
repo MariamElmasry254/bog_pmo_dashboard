@@ -26,7 +26,7 @@ window.loadSalesOrders = async function() {
   if (!cont) { console.error('No sales panel found'); return; }
   cont.innerHTML = '<div class="loading" style="padding:40px;text-align:center;">Loading Sales Orders from Odoo…</div>';
 
-  // Always reload SO line → variance tab mapping from DB (don't cache — ensures refresh picks up latest)
+  // Always reload SO line → variance tab mapping fresh from DB
   window.AppState._soLineVarMap = {};
   try {
     const mapRes = await fetch('/api/plan-overrides');
@@ -34,7 +34,7 @@ window.loadSalesOrders = async function() {
       const mapData = await mapRes.json();
       const soMap = mapData.plan_overrides?.so_line_map || {};
       for (const [lineId, fields] of Object.entries(soMap)) {
-        // fields = { var_tab: 'support' } from load_plan_overrides structure
+        // load_plan_overrides returns: {lineId: {var_tab: 'support'}}
         if (fields && typeof fields === 'object' && fields.var_tab) {
           window.AppState._soLineVarMap[lineId] = fields.var_tab;
         } else if (typeof fields === 'string' && fields) {
