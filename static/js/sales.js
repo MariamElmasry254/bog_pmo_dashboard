@@ -11,7 +11,12 @@ function phaseOf(name) {
 }
 
 function phaseLabel(key) {
-  return {development:'Development', consultation:'Consultation', support:'Support', license:'License', services:'Services'}[key] || key;
+  return {development:'Development', consultation:'Consultation', support:'Support', license:'License (excl.)', services:'Services'}[key] || key;
+}
+
+function isVarPhase(key) {
+  // License and 3rd party are excluded from variance profitability
+  return key !== 'license';
 }
 
 window.loadSalesOrders = async function() {
@@ -203,11 +208,16 @@ function renderSOLines(lines) {
     const varTabs = isBog
       ? ['development','consultation','support']
       : ['services','support'];
-    const savedVarTab = (window.AppState?._soLineVarMap || {})[l.id] || phaseOf(Array.isArray(l.product_id) ? l.product_id[1] : (l.name||''));
-    const varSelector = `<select data-line-id="${l.id}" onchange="setSoLineVarTab(${l.id},this.value)"
-      style="font-size:10px;padding:2px 4px;border:1px solid var(--border);border-radius:3px;margin-left:6px;background:var(--bg-subtle);">
-      ${varTabs.map(t => `<option value="${t}" ${savedVarTab===t?'selected':''}>${phaseLabel(t)}</option>`).join('')}
-    </select>`;
+    const linePhaseKey = phaseOf(Array.isArray(l.product_id) ? l.product_id[1] : (l.name||''));
+    const savedVarTab = (window.AppState?._soLineVarMap || {})[l.id] || linePhaseKey;
+
+    // License/3rd party: show badge only, no variance tab
+    const varSelector = !isVarPhase(linePhaseKey)
+      ? `<span style="font-size:10px;padding:2px 7px;background:#F3F4F6;border:1px solid #D1D5DB;color:#6B7280;border-radius:3px;margin-left:6px;">Excl. from Variance</span>`
+      : `<select data-line-id="${l.id}" onchange="setSoLineVarTab(${l.id},this.value)"
+          style="font-size:10px;padding:2px 4px;border:1px solid var(--border);border-radius:3px;margin-left:6px;background:var(--bg-subtle);">
+          ${varTabs.map(t => `<option value="${t}" ${savedVarTab===t?'selected':''}>${phaseLabel(t)}</option>`).join('')}
+        </select>`;
 
     const invDetail = lineInvs.length > 0 ? `
       <tr id="${lineId}" style="display:none;">
