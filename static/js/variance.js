@@ -1313,6 +1313,21 @@ async function profRecomputeAll(phaseKey) {
   setKPI(`prof-kpi-eac-${phaseKey}`,        latestData.eacMDs        ? fmt.decimal(latestData.eacMDs) : '—');
   setKPI(`prof-kpi-cpi-${phaseKey}`,        latestData.cpi           ? fmt.decimal(latestData.cpi) : '—');
   setKPI(`prof-kpi-profit-${phaseKey}`,     latestData.profitAtComp  ? fmt.money(Math.round(latestData.profitAtComp)) + ' SAR' : '—');
+
+  // Save to AppState so Overview can display latest profitability KPIs
+  if (latestData.monthKey) {
+    if (!AppState._latestProfData) AppState._latestProfData = {};
+    AppState._latestProfData[phaseKey] = {
+      completionPct: latestData.completionPct,
+      remainingMDs:  latestData.remainingMDs,
+      eacMDs:        latestData.eacMDs,
+      cpi:           latestData.cpi,
+      profitAtComp:  latestData.profitAtComp,
+      monthKey:      latestData.monthKey,
+    };
+    // Notify Overview to update its KPIs
+    if (window._overviewUpdateProfKPIs) window._overviewUpdateProfKPIs(phaseKey);
+  }
 }
 
 async function saveOverride(inp) {
