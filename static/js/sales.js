@@ -404,51 +404,113 @@ function renderDirectInvoices(invoices, note, summary) {
   const fSAR = v => new Intl.NumberFormat('en-US', {maximumFractionDigits:0}).format(v||0);
   const payColor = p => p==='paid'?'var(--green)':p==='partial'?'var(--amber)':'var(--red)';
   const payLabel = p => p==='paid'?'✅ Paid':p==='partial'?'⚡ Partial':'❌ Unpaid';
+  const isBog = window.AppState?._overviewData?.is_bog !== false;
+  const phaseOpts = isBog
+    ? ['development','consultation','support','license']
+    : ['services','support','license'];
 
+  // Group by phase
+  const groups = {};
+  invoices.forEach((inv,i) => {
+    const ph = inv.phase || 'services';
+    if (!groups[ph]) groups[ph] = [];
+    groups[ph].push({...inv, _idx: i});
+  });
+
+  const total = invoices.filter(i=>i.state==='posted').reduce((s,i)=>s+i.amount_untaxed,0);
   let html = `
     <div class="banner banner-info" style="margin-bottom:16px;">
-      <b>No Sales Orders linked to this project.</b> Showing direct invoices from analytic account.
-      ${note ? `<br><small>${note}</small>` : ''}
+      <b>No Sales Orders linked to this project.</b> Showing direct invoices grouped by phase.
+      ${note ? `<br><small style="color:var(--text-muted);">${note}</small>` : ''}
     </div>
     <div class="kpi-strip kpi-strip-small" style="margin-bottom:20px;">
       <div class="kpi-card kpi-blue compact">
-        <div class="kpi-label">TOTAL INVOICES</div>
-        <div class="kpi-value">${invoices.length}</div>
+        <div class="kpi-label">TOTAL INVOICES</div><div class="kpi-value">${invoices.length}</div>
       </div>
       <div class="kpi-card kpi-green compact">
         <div class="kpi-label">TOTAL INVOICED (excl. VAT)</div>
-        <div class="kpi-value">${fSAR(summary?.total_invoiced)}</div>
-        <div class="kpi-foot">SAR</div>
+        <div class="kpi-value">${fSAR(total)}</div><div class="kpi-foot">SAR · posted only</div>
       </div>
-    </div>
-    <div class="card">
-      <h3 class="card-title" style="margin-bottom:16px;">Direct Invoices</h3>
+    </div>`;
+
+  const phaseColors = {services:'var(--blue)',development:'var(--blue)',consultation:'var(--navy)',support:'var(--amber)',license:'#6B7280'};
+  const phaseLabels = {services:'Services',development:'Development',consultation:'Consultation',support:'Support',license:'License / 3rd Party'};
+
+  const renderInvRows = (invs) => invs.map((inv) => {
+    const purposeTxt = (inv.purpose||'').replace(/<[^>]+>/g,'').substring(0,120);
+    const stateLabel = inv.state==='posted'?'Posted':inv.state==='draft'?'Draft':inv.state;
+    const phaseSelect = `<select onchange="reclassifyDirectInv(${inv._idx},this.value)"
+      style="font-size:10px;padding:1px 4px;border:1px solid var(--border);border-radius:3px;background:var(--bg-subtle);">
+      ${phaseOpts.map(p=>`<option value="${p}" ${inv.phase===p?'selected':''}>${phaseLabels[p]||p}</option>`).join('')}
+    </select>`;
+    return `<tr>
+      <td><b>${inv.name}</b><br>${phaseSelect}</td>
+      <td style="font-family:var(--mono);font-size:10px;">${inv.date||'—'}</td>
+      <td style="font-family:var(--mono);font-size:10px;">${inv.due_date||'—'}</td>
+      <td style="font-size:10px;color:var(--text-muted);max-width:180px;white-space:normal;">${purposeTxt||'—'}</td>
+      <td class="num">${fSAR(inv.amount_untaxed)}</td>
+      <td class="num" style="color:var(--text-muted);">${fSAR(inv.amount_tax)}</td>
+      <td class="num"><b>${fSAR(inv.amount_total)}</b></td>
+      <td><span style="font-size:10px;color:${inv.state==='posted'?'var(--green)':'var(--text-muted)'};">${stateLabel}</span></td>
+      <td><span style="font-size:10px;font-weight:600;color:${payColor(inv.payment_state)};">${payLabel(inv.payment_state)}</span></td>
+    </tr>`;
+  }).join('');
+
+  // Render each phase group
+  Object.entries(groups).forEach(([ph, invs]) => {
+    const col = phaseColors[ph] || 'var(--blue)';
+    const lbl = phaseLabels[ph] || ph;
+    const grpTotal = invs.filter(i=>i.state==='posted').reduce((s,i)=>s+i.amount_untaxed,0);
+    html += `<div class="card" style="margin-bottom:16px;border-top:3px solid ${col};">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <h3 class="card-title" style="margin:0;color:${col};">${lbl}</h3>
+        <span style="font-weight:700;">${fSAR(grpTotal)} SAR</span>
+      </div>
       <div class="table-scroll">
-        <table class="data-table" style="font-size:12px;">
+        <table class="data-table" style="font-size:11px;">
           <thead><tr>
-            <th>Invoice #</th><th>Date</th><th>Due Date</th><th>Purpose</th>
-            <th class="num">Amount excl. VAT</th><th class="num">VAT</th>
-            <th class="num">Total incl. VAT</th><th>Status</th><th>Payment</th>
+            <th>Invoice # / Phase</th><th>Date</th><th>Due Date</th><th>Purpose</th>
+            <th class="num">excl. VAT</th><th class="num">VAT</th>
+            <th class="num">Total</th><th>Status</th><th>Payment</th>
           </tr></thead>
-          <tbody>
-            ${invoices.map(inv => {
-              const purposeTxt = (inv.purpose||'').replace(/<[^>]+>/g,'').substring(0,120);
-              const stateLabel = inv.state==='posted'?'Posted':inv.state==='draft'?'Draft':inv.state;
-              return `<tr>
-                <td><b>${inv.name}</b></td>
-                <td style="font-family:var(--mono);">${inv.date||'—'}</td>
-                <td style="font-family:var(--mono);">${inv.due_date||'—'}</td>
-                <td style="font-size:10px;color:var(--text-muted);max-width:180px;white-space:normal;">${purposeTxt||'—'}</td>
-                <td class="num">${fSAR(inv.amount_untaxed)}</td>
-                <td class="num" style="color:var(--text-muted);">${fSAR(inv.amount_tax)}</td>
-                <td class="num"><b>${fSAR(inv.amount_total)}</b></td>
-                <td><span style="font-size:10px;color:${inv.state==='posted'?'var(--green)':'var(--text-muted)'};">${stateLabel}</span></td>
-                <td><span style="font-size:10px;font-weight:600;color:${payColor(inv.payment_state)};">${payLabel(inv.payment_state)}</span></td>
-              </tr>`;
-            }).join('')}
-          </tbody>
+          <tbody>${renderInvRows(invs)}</tbody>
         </table>
       </div>
     </div>`;
+  });
+
+  // Store invoices globally for reclassify
+  window._directInvoices = invoices;
   return html;
 }
+
+window.reclassifyDirectInv = function(idx, newPhase) {
+  if (!window._directInvoices) return;
+  window._directInvoices[idx].phase = newPhase;
+  // Save to AppState for profitability
+  if (!window.AppState._salesInvoicesByPhase) window.AppState._salesInvoicesByPhase = {};
+  // Rebuild from direct invoices
+  window.AppState._salesInvoicesByPhase = {};
+  window._directInvoices.forEach(inv => {
+    const ph = inv.phase || 'services';
+    const mk = inv.date?.substring(0,7);
+    if (!mk || inv.state !== 'posted') return;
+    if (!window.AppState._salesInvoicesByPhase[ph]) window.AppState._salesInvoicesByPhase[ph] = {};
+    const cur = window.AppState._salesInvoicesByPhase[ph][mk] || {month:0,cumulative:0};
+    cur.month += inv.amount_untaxed;
+    window.AppState._salesInvoicesByPhase[ph][mk] = cur;
+  });
+  // Rebuild cumulatives
+  Object.keys(window.AppState._salesInvoicesByPhase).forEach(ph => {
+    let running = 0;
+    Object.keys(window.AppState._salesInvoicesByPhase[ph]).sort().forEach(mk => {
+      running += window.AppState._salesInvoicesByPhase[ph][mk].month;
+      window.AppState._salesInvoicesByPhase[ph][mk].cumulative = running;
+    });
+  });
+  // Clear invoice cache
+  if (window.AppState._invoiceCumulative) window.AppState._invoiceCumulative = {};
+  // Re-render
+  const cont = document.getElementById('salesContent') || document.getElementById('sales');
+  if (cont) cont.innerHTML = renderDirectInvoices(window._directInvoices, '', {});
+};
