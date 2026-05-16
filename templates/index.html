@@ -48,6 +48,7 @@
       <button class="exec-tab" data-tab="variance"><span class="tab-num">02</span> Variance</button>
       <button class="exec-tab" data-tab="services"><span class="tab-num">03</span> Services &amp; Scope</button>
       <button class="exec-tab" data-tab="timesheets"><span class="tab-num">04</span> Timesheets</button>
+      <button class="exec-tab" data-tab="sales"><span class="tab-num">05</span> Sales &amp; Invoices</button>
       <button class="exec-tab" data-tab="missing"><span class="tab-num">05</span> Missing Hours</button>
       <button class="exec-tab" data-tab="risks"><span class="tab-num">06</span> ⚠️ Risks &amp; Issues</button>
       <button class="exec-tab" data-tab="roadmap"><span class="tab-num">07</span> Roadmap</button>
@@ -60,6 +61,9 @@
   {% include 'partials/variance.html' %}
   {% include 'partials/services.html' %}
   {% include 'partials/timesheets.html' %}
+  <div id="tab-sales" class="exec-tab-content" style="display:none;">
+    {% include 'partials/sales.html' %}
+  </div>
   {% include 'partials/missing.html' %}
   {% include 'partials/risks.html' %}
   {% include 'partials/roadmap.html' %}
@@ -77,6 +81,7 @@
 <script src="{{ url_for('static', filename='js/variance2.js') }}"></script>
 <script src="{{ url_for('static', filename='js/services.js') }}"></script>
 <script src="{{ url_for('static', filename='js/timesheets.js') }}"></script>
+<script src="{{ url_for('static', filename='js/sales.js') }}"></script>
 <script src="{{ url_for('static', filename='js/missing.js') }}"></script>
 <script src="{{ url_for('static', filename='js/risks.js') }}"></script>
 <script src="{{ url_for('static', filename='js/roadmap.js') }}"></script>
