@@ -7831,14 +7831,22 @@ def api_sales_orders():
                 for il in inv_lines:
                     if il.get('display_type') in ('line_section', 'line_note'):
                         continue
+                    move_id = il['move_id'][0] if isinstance(il['move_id'], list) else il['move_id']
+                    # Get invoice date from invoices_raw
+                    inv_date = ''
+                    for inv in invoices_raw:
+                        if inv['id'] == move_id:
+                            inv_date = inv.get('invoice_date') or ''
+                            break
                     for slid in (il.get('sale_line_ids') or []):
                         inv_line_map.setdefault(slid, []).append({
                             'inv_line_id':   il['id'],
-                            'move_id':       il['move_id'][0] if isinstance(il['move_id'], list) else il['move_id'],
+                            'move_id':       move_id,
                             'move_name':     il['move_id'][1] if isinstance(il['move_id'], list) else '',
                             'name':          il.get('name') or '',
                             'qty':           il.get('quantity') or 0,
                             'amount':        il.get('price_subtotal') or 0,
+                            'inv_date':      inv_date,
                         })
             except Exception as e:
                 logger.warning(f"Invoice lines fetch failed: {e}")
