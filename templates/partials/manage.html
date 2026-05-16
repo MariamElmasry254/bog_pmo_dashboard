@@ -113,6 +113,9 @@ tr:hover td{background:#FAFAFA;}
     <button class="tab-btn" onclick="switchTab('phaseconfig')">
       ⚙️ Phase Config
     </button>
+    <button class="tab-btn" onclick="switchTab('salesorders')">
+      📋 Sales Orders
+    </button>
   </div>
 
   <!-- ═══════════════ TRAVEL TAB ═══════════════ -->
@@ -367,12 +370,13 @@ let _linkTimer    = null;
 function switchTab(tab) {
   activeTab = tab;
   document.querySelectorAll('.tab-btn').forEach((b,i) =>
-    b.classList.toggle('active', ['travel','promotions','phaseconfig'][i] === tab));
+    b.classList.toggle('active', ['travel','promotions','phaseconfig','salesorders'][i] === tab));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.getElementById('tab-'+tab).classList.add('active');
   if (tab === 'travel') loadTravel();
   else if (tab === 'promotions') loadPromos();
   else if (tab === 'phaseconfig') loadPhaseConfig();
+  else if (tab === 'salesorders') initSalesOrdersTab();
 }
 
 function toggleForm(id) {
@@ -1490,5 +1494,941 @@ loadTravel();
 
 </div>
 
+
+<!-- ═══════════════ SALES ORDERS TAB ═══════════════ -->
+<div id="tab-salesorders" class="tab-panel">
+  <!-- Project selector -->
+  <div style="background:#F0F9FF;border:1px solid #BAE6FD;border-radius:10px;padding:14px 20px;margin-bottom:20px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+    <div style="font-size:14px;font-weight:700;color:#0C4A6E;">📋 Sales Orders & Invoices</div>
+    <select id="soProjectSel" onchange="loadSOForProject()"
+      style="padding:7px 12px;border:1px solid #BAE6FD;border-radius:8px;font-size:13px;font-weight:600;min-width:240px;background:white;outline:none;">
+      <option value="">— Select Project —</option>
+    </select>
+    <span id="soLoadMsg" style="font-size:12px;color:#0369A1;"></span>
+  </div>
+  <!-- Content rendered here -->
+  <div id="soContent">
+    <div style="text-align:center;padding:60px;color:var(--muted);">
+      <div style="font-size:32px;margin-bottom:8px;">📋</div>
+      <div style="font-size:14px;">Select a project above to load its Sales Orders</div>
+    </div>
+  </div>
+</div>
+
+<script>
+
+const _SUPP_KWS = ['support','operation','maintenance','hypercare','production','production activities','دعم','الدعم','تشغيل'];
+
+function phaseOf(name) {
+  const n = (name||'').toLowerCase();
+  if (_SUPP_KWS.some(k => n.includes(k))) return 'support';
+  if (n.includes('license') || n.includes('3rd party') || n.includes('third party') || n.includes('software')) return 'license';
+  if (n.includes('consultation') || n.includes('consult')) return 'consultation';
+  return 'development';
+}
+
+function phaseLabel(key) {
+  return {development:'Development', consultation:'Consultation', support:'Support', license:'License (excl.)', services:'Services'}[key] || key;
+}
+
+function isVarPhase(key) {
+  // License and 3rd party are excluded from variance profitability
+  return key !== 'license';
+}
+
+function renderSOLines(lines) {
+  if (!lines || !lines.length) return '<p style="color:var(--text-muted);font-size:12px;padding:8px 0;">No order lines</p>';
+  const fSAR = v => new Intl.NumberFormat('en-US', {maximumFractionDigits:0}).format(v || 0);
+  const fNum = v => new Intl.NumberFormat('en-US', {maximumFractionDigits:1}).format(v || 0);
+
+  let totalAmt = 0, totalDeliveredAmt = 0, totalInvoicedAmt = 0, totalRemainingAmt = 0;
+
+  let rows = lines.map((l, idx) => {
+    const amt          = l.price_subtotal    || 0;
+    const deliveredAmt = l.delivered_amt     || 0;
+    const invoicedAmt  = l.invoiced_amt      || 0;
+    const remainingAmt = l.remaining_amt     || 0;
+    const ordered      = l.product_uom_qty   || 0;
+    const delPct       = amt > 0 ? deliveredAmt / amt * 100 : 0;
+    const delColor     = delPct >= 100 ? 'var(--green)' : delPct > 0 ? 'var(--amber)' : 'var(--text-muted)';
+    const invColor     = invoicedAmt >= amt ? 'var(--green)' : invoicedAmt > 0 ? 'var(--amber)' : 'var(--text-muted)';
+    const lineInvs     = l.line_invoices || [];
+    const lineId       = `line-inv-${l.id || idx}`;
+
+    totalAmt          += amt;
+    totalDeliveredAmt += deliveredAmt;
+    totalInvoicedAmt  += invoicedAmt;
+    totalRemainingAmt += remainingAmt;
+
+    const prod = l.product_id ? (Array.isArray(l.product_id) ? l.product_id[1] : l.product_id) : '—';
+    const disc = l.discount ? `<span style="font-size:10px;color:var(--red);">-${l.discount}%</span>` : '';
+
+    const invBtn = lineInvs.length > 0
+      ? `<button onclick="toggleSODetail('${lineId}')"
+           style="font-size:10px;padding:2px 7px;background:#FEF3C7;border:1px solid #FCD34D;color:#92400E;border-radius:3px;cursor:pointer;margin-left:6px;">
+           🧾 ${lineInvs.length}
+         </button>` : '';
+
+    // Variance tab mapping selector
+    const isBog = window.AppState?._overviewData?.is_bog !== false;
+    const varTabs = isBog
+      ? ['development','consultation','support']
+      : ['services','support'];
+    const linePhaseKey = phaseOf(Array.isArray(l.product_id) ? l.product_id[1] : (l.name||''));
+    const savedVarTab = (window.AppState?._soLineVarMap || {})[String(l.id)] || linePhaseKey;
+
+    // License/3rd party: show badge only, no variance tab
+    const varSelector = !isVarPhase(linePhaseKey)
+      ? `<span style="font-size:10px;padding:2px 7px;background:#F3F4F6;border:1px solid #D1D5DB;color:#6B7280;border-radius:3px;margin-left:6px;">Excl. from Variance</span>`
+      : `<select data-line-id="${l.id}" onchange="setSoLineVarTab(${l.id},this.value)"
+          style="font-size:10px;padding:2px 4px;border:1px solid var(--border);border-radius:3px;margin-left:6px;background:var(--bg-subtle);">
+          ${varTabs.map(t => `<option value="${t}" ${savedVarTab===t?'selected':''}>${phaseLabel(t)}</option>`).join('')}
+        </select>`;
+
+    const invDetail = lineInvs.length > 0 ? `
+      <tr id="${lineId}" style="display:none;">
+        <td colspan="8" style="padding:4px 8px 12px 32px;background:#FFFBEB;border-bottom:1px solid #FDE68A;">
+          <table style="font-size:11px;width:100%;">
+            <thead><tr style="color:var(--text-muted);font-size:10px;text-transform:uppercase;letter-spacing:.3px;">
+              <th style="text-align:left;padding:4px 6px;">Invoice #</th>
+              <th style="text-align:left;padding:4px 6px;">Issue Date</th>
+              <th style="text-align:left;padding:4px 6px;">Purpose</th>
+              <th style="text-align:right;padding:4px 6px;">Qty</th>
+              <th style="text-align:right;padding:4px 6px;">Amount excl. VAT</th>
+              <th style="text-align:right;padding:4px 6px;">VAT (15%)</th>
+              <th style="text-align:right;padding:4px 6px;">Total incl. VAT</th>
+            </tr></thead>
+            <tbody>
+              ${lineInvs.map(i => {
+                const amtExcl = i.amount || 0;
+                const vat     = Math.round(amtExcl * 0.15);
+                const total   = amtExcl + vat;
+                return `<tr style="border-top:1px solid #FEF3C7;">
+                  <td style="padding:4px 6px;font-weight:700;color:var(--navy);">${i.move_name}</td>
+                  <td style="padding:4px 6px;font-family:var(--mono);font-size:10px;">${i.inv_date || '—'}</td>
+                  <td style="padding:4px 6px;color:var(--text-muted);font-size:10px;max-width:200px;white-space:normal;">${i.purpose || i.name || '—'}</td>
+                  <td style="text-align:right;padding:4px 6px;">${fNum(i.qty)}</td>
+                  <td style="text-align:right;padding:4px 6px;font-weight:600;color:var(--green);">${fSAR(amtExcl)}</td>
+                  <td style="text-align:right;padding:4px 6px;color:var(--text-muted);">${fSAR(vat)}</td>
+                  <td style="text-align:right;padding:4px 6px;font-weight:700;">${fSAR(total)}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </td>
+      </tr>` : '';
+
+    const linePhase = phaseLabel(phaseOf(Array.isArray(l.product_id) ? l.product_id[1] : (l.name||'')));
+    const purpose = (l.name && l.name !== prod) ? l.name : '—';
+    return `<tr style="cursor:default;" data-line-phase="${linePhase}" data-detail-id="${lineId}">
+      <td style="max-width:160px;white-space:normal;">
+        <div style="font-weight:600;font-size:12px;">${prod} ${invBtn}</div>
+        <div style="margin-top:3px;">${varSelector}</div>
+      </td>
+      <td style="max-width:200px;white-space:normal;font-size:11px;color:var(--text-muted);">${purpose}</td>
+      <td class="num">${fSAR(l.price_unit)} ${disc}</td>
+      <td class="num">${fNum(ordered)}</td>
+      <td class="num" style="color:${delColor};">
+        ${fSAR(deliveredAmt)}
+        <div style="width:36px;height:3px;background:#F3F4F6;border-radius:2px;display:inline-block;vertical-align:middle;margin-left:4px;">
+          <div style="width:${Math.min(100,delPct)}%;height:100%;background:${delColor};border-radius:2px;"></div>
+        </div>
+      </td>
+      <td class="num" style="color:${invColor};">${fSAR(invoicedAmt)}</td>
+      <td class="num" style="color:${remainingAmt > 0 ? 'var(--amber)' : 'var(--green)'};">
+        <b>${fSAR(remainingAmt)}</b>
+      </td>
+      <td class="num"><b>${fSAR(amt)}</b></td>
+    </tr>${invDetail}`;
+  }).join('');
+
+  return `<table class="data-table" style="font-size:11px;margin-top:8px;width:100%;">
+    <thead><tr>
+      <th>Product</th>
+      <th>Purpose / Description</th>
+      <th class="num">Unit Price</th>
+      <th class="num">Qty</th>
+      <th class="num">Delivered (SAR)</th>
+      <th class="num">Invoiced (SAR)</th>
+      <th class="num">Remaining (SAR)</th>
+      <th class="num">Total (SAR)</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+    <tfoot>
+      <tr style="background:var(--navy);color:white;font-weight:700;">
+        <td colspan="4" style="padding:8px 12px;">TOTAL</td>
+        <td class="num">${fSAR(totalDeliveredAmt)}</td>
+        <td class="num">${fSAR(totalInvoicedAmt)}</td>
+        <td class="num" style="color:#FCD34D;">${fSAR(totalRemainingAmt)}</td>
+        <td class="num" style="color:#93C5FD;">${fSAR(totalAmt)}</td>
+      </tr>
+    </tfoot>
+  </table>`;
+}
+
+
+function renderSOInvoices(invoices, soName) {
+  if (!invoices || !invoices.length) {
+    return `<p style="color:var(--text-muted);font-size:12px;padding:8px 0;">No invoices for ${soName}</p>`;
+  }
+  const fSAR = v => new Intl.NumberFormat('en-US', {maximumFractionDigits:0}).format(v || 0);
+  const payColor = p => p === 'paid' ? 'var(--green)' : p === 'partial' ? 'var(--amber)' : p === 'not_paid' ? 'var(--red)' : 'var(--text-muted)';
+  const payLabel = p => p === 'paid' ? '✅ Paid' : p === 'partial' ? '⚡ Partial' : p === 'not_paid' ? '❌ Unpaid' : p || '—';
+
+  let html = `<table class="data-table" style="font-size:11px;margin-top:8px;width:100%;">
+    <thead><tr>
+      <th>Invoice #</th><th>Date</th><th>Due Date</th><th>Purpose</th>
+      <th class="num">Amount (excl. VAT)</th><th class="num">VAT</th><th class="num">Total</th>
+      <th>Status</th><th>Payment</th>
+    </tr></thead><tbody>`;
+
+  invoices.forEach(inv => {
+    const stateLabel = inv.state === 'posted' ? 'Posted' : inv.state === 'draft' ? 'Draft' : inv.state;
+    html += `<tr>
+      <td><b>${inv.name}</b></td>
+      <td style="font-family:var(--mono);">${inv.date || '—'}</td>
+      <td style="font-family:var(--mono);">${inv.due_date || '—'}</td>
+      <td style="font-size:10px;color:var(--text-muted);max-width:180px;white-space:normal;">${(inv.purpose||'').replace(/<[^>]+>/g,'').substring(0,120) || '—'}</td>
+      <td class="num">${fSAR(inv.amount_untaxed)}</td>
+      <td class="num" style="color:var(--text-muted);">${fSAR(inv.amount_tax)}</td>
+      <td class="num"><b>${fSAR(inv.amount_total)}</b></td>
+      <td><span style="font-size:10px;color:${inv.state==='posted'?'var(--green)':'var(--text-muted)'};">${stateLabel}</span></td>
+      <td><span style="font-size:10px;font-weight:600;color:${payColor(inv.payment_state)};">${payLabel(inv.payment_state)}</span></td>
+    </tr>`;
+  });
+
+  html += '</tbody></table>';
+  return html;
+}
+
+
+function toggleSODetail(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+
+
+window.setSalesPhase = function(phase, btn) {
+  window._salesPhaseFilter = phase;
+  document.querySelectorAll('.so-phase-btn').forEach(b => {
+    b.style.background = 'var(--bg-subtle)';
+    b.style.color = 'var(--text)';
+    b.style.borderColor = 'var(--border)';
+  });
+  btn.style.background = 'var(--navy)';
+  btn.style.color = 'white';
+  btn.style.borderColor = 'var(--navy)';
+
+  // Show/hide order line rows by phase
+  document.querySelectorAll('tbody tr[data-line-phase]').forEach(tr => {
+    const linePhase = tr.dataset.linePhase;
+    tr.style.display = (!phase || linePhase === phase) ? '' : 'none';
+    // Also hide/show associated detail rows
+    const detailId = tr.dataset.detailId;
+    if (detailId) {
+      const det = document.getElementById(detailId);
+      if (det) det.style.display = 'none'; // collapse on filter change
+    }
+  });
+};
+
+
+
+window.setSoLineVarTab = function(lineId, varTab) {
+  if (!window.AppState._soLineVarMap) window.AppState._soLineVarMap = {};
+  window.AppState._soLineVarMap[String(lineId)] = varTab;
+  // Save to DB
+  fetch('/api/plan-overrides', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({phase: 'so_line_map', month_key: String(lineId), field: 'var_tab', value: varTab})
+  }).catch(()=>{});
+  // Reset invoice cache so profitability reloads with new mapping
+  if (window.AppState._invoiceCumulative) delete window.AppState._invoiceCumulative[varTab];
+  if (window.AppState._salesInvoicesByPhase) window.AppState._salesInvoicesByPhase = null;
+};
+
+
+
+function renderDirectInvoices(invoices, note, summary) {
+  const fSAR = v => new Intl.NumberFormat('en-US', {maximumFractionDigits:0}).format(v||0);
+  const payColor = p => p==='paid'?'var(--green)':p==='partial'?'var(--amber)':'var(--red)';
+  const payLabel = p => p==='paid'?'✅ Paid':p==='partial'?'⚡ Partial':'❌ Unpaid';
+  const isBog = window.AppState?._overviewData?.is_bog !== false;
+  const phaseOpts = isBog
+    ? ['development','consultation','support','license']
+    : ['services','support','license'];
+
+  // Group by phase
+  const groups = {};
+  invoices.forEach((inv,i) => {
+    const ph = inv.phase || 'services';
+    if (!groups[ph]) groups[ph] = [];
+    groups[ph].push({...inv, _idx: i});
+  });
+
+  const total = invoices.filter(i=>i.state==='posted').reduce((s,i)=>s+i.amount_untaxed,0);
+  let html = `
+    <div class="banner banner-info" style="margin-bottom:16px;">
+      <b>No Sales Orders linked to this project.</b> Showing direct invoices grouped by phase.
+      ${note ? `<br><small style="color:var(--text-muted);">${note}</small>` : ''}
+    </div>
+    <div class="kpi-strip kpi-strip-small" style="margin-bottom:20px;">
+      <div class="kpi-card kpi-blue compact">
+        <div class="kpi-label">TOTAL INVOICES</div><div class="kpi-value">${invoices.length}</div>
+      </div>
+      <div class="kpi-card kpi-green compact">
+        <div class="kpi-label">TOTAL INVOICED (excl. VAT)</div>
+        <div class="kpi-value">${fSAR(total)}</div><div class="kpi-foot">SAR · posted only</div>
+      </div>
+    </div>`;
+
+  const phaseColors = {services:'var(--blue)',development:'var(--blue)',consultation:'var(--navy)',support:'var(--amber)',license:'#6B7280'};
+  const phaseLabels = {services:'Services',development:'Development',consultation:'Consultation',support:'Support',license:'License / 3rd Party'};
+
+  const renderInvRows = (invs) => invs.map((inv) => {
+    const purposeTxt = (inv.purpose||'').replace(/<[^>]+>/g,'').substring(0,120);
+    const stateLabel = inv.state==='posted'?'Posted':inv.state==='draft'?'Draft':inv.state;
+    const phaseSelect = `<select onchange="reclassifyDirectInv(${inv._idx},this.value)"
+      style="font-size:10px;padding:1px 4px;border:1px solid var(--border);border-radius:3px;background:var(--bg-subtle);">
+      ${phaseOpts.map(p=>`<option value="${p}" ${inv.phase===p?'selected':''}>${phaseLabels[p]||p}</option>`).join('')}
+    </select>`;
+    return `<tr>
+      <td><b>${inv.name}</b><br>${phaseSelect}</td>
+      <td style="font-family:var(--mono);font-size:10px;">${inv.date||'—'}</td>
+      <td style="font-family:var(--mono);font-size:10px;">${inv.due_date||'—'}</td>
+      <td style="font-size:10px;color:var(--text-muted);max-width:180px;white-space:normal;">${purposeTxt||'—'}</td>
+      <td class="num">${fSAR(inv.amount_untaxed)}</td>
+      <td class="num" style="color:var(--text-muted);">${fSAR(inv.amount_tax)}</td>
+      <td class="num"><b>${fSAR(inv.amount_total)}</b></td>
+      <td><span style="font-size:10px;color:${inv.state==='posted'?'var(--green)':'var(--text-muted)'};">${stateLabel}</span></td>
+      <td><span style="font-size:10px;font-weight:600;color:${payColor(inv.payment_state)};">${payLabel(inv.payment_state)}</span></td>
+    </tr>`;
+  }).join('');
+
+  // Render each phase group
+  Object.entries(groups).forEach(([ph, invs]) => {
+    const col = phaseColors[ph] || 'var(--blue)';
+    const lbl = phaseLabels[ph] || ph;
+    const grpTotal = invs.filter(i=>i.state==='posted').reduce((s,i)=>s+i.amount_untaxed,0);
+    html += `<div class="card" style="margin-bottom:16px;border-top:3px solid ${col};">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <h3 class="card-title" style="margin:0;color:${col};">${lbl}</h3>
+        <span style="font-weight:700;">${fSAR(grpTotal)} SAR</span>
+      </div>
+      <div class="table-scroll">
+        <table class="data-table" style="font-size:11px;">
+          <thead><tr>
+            <th>Invoice # / Phase</th><th>Date</th><th>Due Date</th><th>Purpose</th>
+            <th class="num">excl. VAT</th><th class="num">VAT</th>
+            <th class="num">Total</th><th>Status</th><th>Payment</th>
+          </tr></thead>
+          <tbody>${renderInvRows(invs)}</tbody>
+        </table>
+      </div>
+    </div>`;
+  });
+
+  // Store invoices globally for reclassify
+  window._directInvoices = invoices;
+  return html;
+}
+
+window.reclassifyDirectInv = function(idx, newPhase) {
+  if (!window._directInvoices) return;
+  const inv = window._directInvoices[idx];
+  inv.phase = newPhase;
+
+  // Save to DB: use invoice name as key
+  fetch('/api/plan-overrides', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      phase: 'direct_inv_phase',
+      month_key: inv.name.replace(/\//g,'_'),
+      field: 'phase',
+      value: newPhase
+    })
+  }).catch(()=>{});
+
+  // Rebuild AppState._salesInvoicesByPhase
+  window.AppState._salesInvoicesByPhase = {};
+  window._directInvoices.forEach(i => {
+    const ph = i.phase || 'services';
+    const mk = (i.date||'').substring(0,7);
+    if (!mk || i.state !== 'posted') return;
+    if (!window.AppState._salesInvoicesByPhase[ph]) window.AppState._salesInvoicesByPhase[ph] = {};
+    window.AppState._salesInvoicesByPhase[ph][mk] = window.AppState._salesInvoicesByPhase[ph][mk] || {month:0,cumulative:0};
+    window.AppState._salesInvoicesByPhase[ph][mk].month += i.amount_untaxed;
+  });
+  // Build cumulatives
+  Object.keys(window.AppState._salesInvoicesByPhase).forEach(ph => {
+    let running = 0;
+    Object.keys(window.AppState._salesInvoicesByPhase[ph]).sort().forEach(mk => {
+      running += window.AppState._salesInvoicesByPhase[ph][mk].month;
+      window.AppState._salesInvoicesByPhase[ph][mk].cumulative = running;
+    });
+  });
+  // Clear invoice cumulative cache
+  if (window.AppState._invoiceCumulative) window.AppState._invoiceCumulative = {};
+  // Re-render
+  const cont = document.getElementById('salesContent') || document.getElementById('sales');
+  if (cont) cont.innerHTML = renderDirectInvoices(window._directInvoices, '', {});
+};
+
+
+function _renderSOPage(orders, summary) {
+  const fSAR = v => new Intl.NumberFormat('en-US',{maximumFractionDigits:0}).format(v||0);
+  const fPct = v => `${(v||0).toFixed(1)}%`;
+  const isBog   = window.AppState?._overviewData?.is_bog !== false;
+  const phaseOpts  = isBog ? ['development','consultation','support','license'] : ['services','support','license'];
+  const phaseLabels= {services:'Services',development:'Development',consultation:'Consultation',support:'Support',license:'License / 3rd Party'};
+  const phKpiColor = {development:'#1E3A5F',consultation:'#1E3A5F',services:'#1E3A5F',support:'#D97706',license:'#6B7280'};
+  const phBgColor  = {services:'#EFF6FF',development:'#EFF6FF',consultation:'#EFF6FF',support:'#FEF3C7',license:'#F3F4F6'};
+  const phTxtColor = {services:'#1D4ED8',development:'#1D4ED8',consultation:'#1D4ED8',support:'#92400E',license:'#374151'};
+  const phBdColor  = {services:'#BFDBFE',development:'#BFDBFE',consultation:'#BFDBFE',support:'#FCD34D',license:'#D1D5DB'};
+  const phSectionBorder={services:'#3B82F6',development:'#3B82F6',consultation:'#1E3A5F',support:'#F59E0B',license:'#9CA3AF'};
+
+  const VS = window._soViewState;
+
+  // Collect all posted invoices from all orders, each tagged with phase from SO line mapping
+  const allInvoices = [];
+  orders.forEach(o => {
+    (o.invoices||[]).forEach(inv => {
+      if (inv.state !== 'posted') return;
+      // Determine phase: from SO line var tab mapping, or auto-detect from SO lines
+      let phase = 'services';
+      const soLines = o.lines || [];
+      // Find the line whose invoice matches
+      let matched = false;
+      for (const l of soLines) {
+        const lineInvs = l.line_invoices || [];
+        if (lineInvs.some(li => li.move_name === inv.name || li.move_id === inv.id)) {
+          const linePhaseKey = phaseOf(Array.isArray(l.product_id)?l.product_id[1]:(l.name||''));
+          const savedTab = (window.AppState?._soLineVarMap||{})[String(l.id)];
+          phase = savedTab || linePhaseKey;
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) {
+        // Fallback: auto-detect from SO name/lines
+        const allLinePhases = soLines.map(l => phaseOf(Array.isArray(l.product_id)?l.product_id[1]:(l.name||'')));
+        if (allLinePhases.includes('support')) phase = 'support';
+        else if (allLinePhases.includes('license')) phase = 'license';
+        else phase = isBog ? 'development' : 'services';
+      }
+      allInvoices.push({...inv, _soName: o.name, _phase: phase});
+    });
+  });
+
+  const s = summary;
+
+  // ── KPI strip (always shown) ──────────────────────────────────────────────
+  const byPh = {};
+  allInvoices.forEach(i=>{ byPh[i._phase]=(byPh[i._phase]||0)+i.amount_untaxed; });
+  const kpiPhases = isBog
+    ? [['development','Development'],['consultation','Consultation'],['support','Support'],['license','License']]
+    : [['services','Services'],['support','Support'],['license','License']];
+
+  let html = `
+    <div class="kpi-strip kpi-strip-small" style="margin-bottom:16px;flex-wrap:wrap;">
+      <div class="kpi-card kpi-navy compact">
+        <div class="kpi-label">TOTAL ORDERS</div>
+        <div class="kpi-value">${s.total_orders}</div>
+      </div>
+      <div class="kpi-card kpi-blue compact">
+        <div class="kpi-label">TOTAL VALUE (excl. VAT)</div>
+        <div class="kpi-value">${fSAR(s.total_untaxed)}</div>
+        <div class="kpi-foot">SAR</div>
+      </div>
+      <div class="kpi-card kpi-green compact">
+        <div class="kpi-label">TOTAL INVOICED</div>
+        <div class="kpi-value">${fSAR(s.total_invoiced)}</div>
+        <div class="kpi-foot">${fPct(s.overall_invoiced_pct)} of total</div>
+      </div>
+      <div class="kpi-card kpi-amber compact">
+        <div class="kpi-label">REMAINING</div>
+        <div class="kpi-value">${fSAR(s.total_remaining)}</div>
+        <div class="kpi-foot">SAR</div>
+      </div>
+      ${kpiPhases.map(([pk,plbl])=>`
+        <div class="kpi-card compact" style="border-top:3px solid ${phKpiColor[pk]};background:white;">
+          <div class="kpi-label" style="color:${phKpiColor[pk]};">${plbl.toUpperCase()} ISSUED</div>
+          <div class="kpi-value" style="color:${phKpiColor[pk]};font-size:16px;">${fSAR(byPh[pk]||0)}</div>
+          <div class="kpi-foot">excl. VAT · SAR</div>
+        </div>`).join('')}
+    </div>`;
+
+  // ── View toggle ───────────────────────────────────────────────────────────
+  const isOrders = VS.view !== 'invoices_phase';
+  html += `
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:16px;flex-wrap:wrap;">
+      <div style="display:flex;gap:0;border:1px solid var(--border);border-radius:6px;overflow:hidden;">
+        <button onclick="_soSetView('orders')"
+          style="font-size:12px;padding:5px 16px;cursor:pointer;font-weight:600;border:none;
+                 background:${isOrders?'var(--navy)':'var(--bg-subtle)'};color:${isOrders?'white':'var(--text)'};">
+          📋 Sales Orders
+        </button>
+        <button onclick="_soSetView('invoices_phase')"
+          style="font-size:12px;padding:5px 16px;cursor:pointer;font-weight:600;
+                 border-left:1px solid var(--border);border-top:none;border-right:none;border-bottom:none;
+                 background:${!isOrders?'var(--navy)':'var(--bg-subtle)'};color:${!isOrders?'white':'var(--text)'};">
+          ⊞ Invoices by Phase
+        </button>
+      </div>
+      ${!isOrders ? `
+        <div style="display:flex;gap:5px;align-items:center;">
+          <span style="font-size:11px;font-weight:700;color:var(--text-muted);">PHASE:</span>
+          ${['All',...phaseOpts].map(p=>{
+            const val=p==='All'?null:p;
+            const active=VS.phaseFilter===val;
+            const lbl=p==='All'?'All':(phaseLabels[p]||p);
+            const col=val?phKpiColor[val]:'var(--navy)';
+            return `<button onclick="_soSetPhase(${val?`'${val}'`:'null'})"
+              style="font-size:11px;padding:3px 12px;border-radius:4px;cursor:pointer;font-weight:${active?700:500};
+                     border:1px solid ${active?col:'var(--border)'};
+                     background:${active?col:'var(--bg-subtle)'};color:${active?'white':'var(--text)'};">${lbl}</button>`;
+          }).join('')}
+        </div>` : ''}
+    </div>`;
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // VIEW 1: Sales Orders table (existing layout, kept intact)
+  // ══════════════════════════════════════════════════════════════════════════
+  if (isOrders) {
+    const allPhases = [...new Set(orders.flatMap(o=>
+      (o.lines||[]).map(l=>phaseLabel(phaseOf(Array.isArray(l.product_id)?l.product_id[1]:(l.name||''))))
+    ))].sort();
+
+    if (allPhases.length > 1) {
+      html += `<div style="display:flex;gap:8px;margin-bottom:16px;align-items:center;">
+        <span style="font-size:11px;color:var(--text-muted);font-weight:600;">FILTER BY PHASE:</span>
+        <button onclick="setSalesPhase(null,this)" class="so-phase-btn"
+          style="font-size:11px;padding:4px 12px;border-radius:4px;border:1px solid var(--navy);background:var(--navy);color:white;cursor:pointer;">All</button>
+        ${allPhases.map(p=>`<button onclick="setSalesPhase('${p}',this)" class="so-phase-btn"
+          style="font-size:11px;padding:4px 12px;border-radius:4px;border:1px solid var(--border);background:var(--bg-subtle);cursor:pointer;">${p}</button>`).join('')}
+      </div>`;
+    }
+
+    html += `<div class="card" style="margin-bottom:20px;">
+      <h3 class="card-title" style="margin-bottom:16px;">Sales Orders</h3>
+      <div class="table-scroll">
+        <table class="data-table" style="font-size:12px;">
+          <thead><tr>
+            <th>SO Number</th><th>Customer</th><th>Date</th><th>Status</th>
+            <th class="num">Amount (excl. VAT)</th><th class="num">VAT</th>
+            <th class="num">Total (incl. VAT)</th><th class="num">Delivered %</th>
+            <th class="num">Invoiced</th><th class="num">Remaining</th><th></th>
+          </tr></thead><tbody>`;
+
+    orders.forEach(o => {
+      const statusColor = o.state==='sale'?'var(--green)':o.state==='done'?'var(--blue)':'var(--text-muted)';
+      const statusLabel = o.state==='sale'?'Confirmed':o.state==='done'?'Done':o.state==='draft'?'Quotation':o.state;
+      const invColor    = o.invoiced_pct>=100?'var(--green)':o.invoiced_pct>0?'var(--amber)':'var(--text-muted)';
+      const invStatus   = o.invoice_status==='invoiced'?'✅ Fully Invoiced':o.invoice_status==='to invoice'?'⏳ To Invoice':o.invoice_status==='nothing'?'—':o.invoice_status;
+      html += `<tr>
+        <td><b>${o.name}</b></td>
+        <td style="color:var(--text-muted);font-size:11px;">${o.partner||'—'}</td>
+        <td style="font-family:var(--mono);font-size:11px;">${o.date||'—'}</td>
+        <td><span style="font-size:11px;font-weight:600;color:${statusColor};">${statusLabel}</span></td>
+        <td class="num"><b>${fSAR(o.amount_untaxed)}</b></td>
+        <td class="num" style="color:var(--text-muted);">${fSAR(o.amount_tax)}</td>
+        <td class="num">${fSAR(o.amount_total)}</td>
+        <td class="num">
+          <div style="display:flex;align-items:center;gap:6px;justify-content:flex-end;">
+            <div style="width:50px;height:5px;background:#F3F4F6;border-radius:3px;">
+              <div style="width:${Math.min(100,o.delivered_pct)}%;height:100%;background:var(--blue);border-radius:3px;"></div>
+            </div>
+            <span>${fPct(o.delivered_pct)}</span>
+          </div>
+        </td>
+        <td class="num" style="color:${invColor};">
+          ${fSAR(o.invoiced_amt)}<br>
+          <span style="font-size:10px;">${invStatus}</span>
+        </td>
+        <td class="num" style="color:${o.remaining>0?'var(--amber)':'var(--green)'};">
+          <b>${fSAR(o.remaining)}</b>
+        </td>
+        <td style="white-space:nowrap;display:flex;gap:6px;">
+          <button onclick="toggleSODetail('so-lines-${o.id}')"
+            style="font-size:11px;padding:3px 10px;background:#EFF6FF;border:1px solid #BFDBFE;color:#1D4ED8;border-radius:4px;cursor:pointer;font-weight:600;">
+            📋 ${o.lines.length} line${o.lines.length!==1?'s':''}
+          </button>
+          <button onclick="toggleSODetail('so-inv-${o.id}')"
+            style="font-size:11px;padding:3px 10px;background:var(--bg-subtle);border:1px solid var(--border);border-radius:4px;cursor:pointer;">
+            🧾 ${o.invoices.length} invoice${o.invoices.length!==1?'s':''}
+          </button>
+        </td>
+      </tr>
+      <tr id="so-lines-${o.id}" style="display:none;">
+        <td colspan="11" style="padding:0 8px 12px 32px;background:#F0F9FF;border-bottom:1px solid #BFDBFE;">
+          ${renderSOLines(o.lines)}
+        </td>
+      </tr>
+      <tr id="so-inv-${o.id}" style="display:none;">
+        <td colspan="11" style="padding:0 8px 12px 32px;background:var(--bg-subtle);border-bottom:1px solid var(--border);">
+          ${renderSOInvoices(o.invoices, o.name)}
+        </td>
+      </tr>`;
+    });
+    html += `</tbody></table></div></div>`;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // VIEW 2: Invoices grouped by phase — with pills to reclassify
+  // ══════════════════════════════════════════════════════════════════════════
+  else {
+    const payColor = p=>p==='paid'?'var(--green)':p==='partial'?'var(--amber)':'var(--red)';
+    const payLabel = p=>p==='paid'?'✅ Paid':p==='partial'?'⚡ Partial':'❌ Unpaid';
+
+    const renderPills = (inv) => phaseOpts.map(p=>{
+      const active=inv._phase===p;
+      return `<button onclick="_soInvPill('${inv.name}','${p}',this)"
+        style="font-size:11px;padding:2px 10px;border-radius:20px;cursor:pointer;font-weight:${active?700:500};
+               border:1px solid ${active?phBdColor[p]:'var(--border)'};
+               background:${active?phBgColor[p]:'var(--bg-subtle)'};
+               color:${active?phTxtColor[p]:'var(--text-muted)'};">
+        ${(phaseLabels[p]||p).replace(' / 3rd Party','')}
+      </button>`;
+    }).join('');
+
+    const visPhases = VS.phaseFilter ? [VS.phaseFilter] : phaseOpts;
+
+    visPhases.forEach(ph => {
+      const phInvs = allInvoices.filter(i=>i._phase===ph);
+      if (!phInvs.length && VS.phaseFilter) return;
+      const phTotal = phInvs.reduce((s,i)=>s+i.amount_untaxed,0);
+
+      if (!phInvs.length) {
+        html += `<div style="border:1px solid var(--border);border-radius:8px;margin-bottom:12px;overflow:hidden;opacity:.45;">
+          <div style="padding:10px 16px;background:${phBgColor[ph]};display:flex;justify-content:space-between;">
+            <span style="font-size:13px;font-weight:700;color:${phTxtColor[ph]};">${phaseLabels[ph]}</span>
+            <span style="font-size:12px;color:${phTxtColor[ph]};">0 invoices</span>
+          </div>
+          <div style="padding:12px 16px;font-size:12px;color:var(--text-muted);">No invoices assigned to this phase</div>
+        </div>`;
+        return;
+      }
+
+      const rows = phInvs.map(inv=>{
+        const purposeTxt=(inv.purpose||'').replace(/<[^>]+>/g,'').substring(0,180);
+        return `<tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:10px 14px;vertical-align:middle;min-width:150px;">
+            <div style="font-weight:700;font-size:13px;margin-bottom:2px;">${inv.name}</div>
+            <div style="font-size:10px;color:var(--text-muted);margin-bottom:5px;">↗ ${inv._soName}</div>
+            <div style="display:flex;gap:4px;flex-wrap:wrap;">${renderPills(inv)}</div>
+          </td>
+          <td style="font-family:var(--mono);font-size:12px;padding:10px 12px;white-space:nowrap;vertical-align:middle;">${inv.date||'—'}</td>
+          <td style="font-family:var(--mono);font-size:12px;padding:10px 12px;white-space:nowrap;vertical-align:middle;">${inv.due_date||'—'}</td>
+          <td style="font-size:11px;color:var(--text-muted);padding:10px 12px;max-width:240px;white-space:normal;vertical-align:middle;">${purposeTxt||'—'}</td>
+          <td style="text-align:right;font-size:13px;font-weight:600;padding:10px 12px;white-space:nowrap;vertical-align:middle;">${fSAR(inv.amount_untaxed)}</td>
+          <td style="text-align:right;font-size:12px;color:var(--text-muted);padding:10px 12px;white-space:nowrap;">${fSAR(inv.amount_tax)}</td>
+          <td style="text-align:right;font-size:13px;font-weight:700;padding:10px 12px;white-space:nowrap;">${fSAR(inv.amount_total)}</td>
+          <td style="padding:10px 12px;white-space:nowrap;">
+            <span style="font-size:12px;font-weight:600;color:${payColor(inv.payment_state)};">${payLabel(inv.payment_state)}</span>
+          </td>
+        </tr>`;
+      }).join('');
+
+      html += `
+        <div style="border:1px solid ${phBdColor[ph]};border-left:4px solid ${phSectionBorder[ph]};
+                    border-radius:8px;margin-bottom:14px;overflow:hidden;">
+          <div style="padding:10px 16px;background:${phBgColor[ph]};border-bottom:1px solid ${phBdColor[ph]};
+                      display:flex;justify-content:space-between;align-items:center;">
+            <span style="font-size:14px;font-weight:700;color:${phTxtColor[ph]};">${phaseLabels[ph]}</span>
+            <span style="font-size:13px;font-weight:700;color:${phTxtColor[ph]};">${phInvs.length} inv · ${fSAR(phTotal)} SAR</span>
+          </div>
+          <div style="overflow-x:auto;">
+            <table style="width:100%;border-collapse:collapse;">
+              <thead><tr style="background:rgba(0,0,0,.03);">
+                <th style="text-align:left;padding:7px 14px;font-size:10px;letter-spacing:.5px;color:var(--text-muted);">INVOICE # / CHANGE PHASE</th>
+                <th style="text-align:left;padding:7px 12px;font-size:10px;letter-spacing:.5px;color:var(--text-muted);white-space:nowrap;">DATE</th>
+                <th style="text-align:left;padding:7px 12px;font-size:10px;letter-spacing:.5px;color:var(--text-muted);white-space:nowrap;">DUE DATE</th>
+                <th style="text-align:left;padding:7px 12px;font-size:10px;letter-spacing:.5px;color:var(--text-muted);">PURPOSE</th>
+                <th style="text-align:right;padding:7px 12px;font-size:10px;letter-spacing:.5px;color:var(--text-muted);white-space:nowrap;">EXCL. VAT</th>
+                <th style="text-align:right;padding:7px 12px;font-size:10px;letter-spacing:.5px;color:var(--text-muted);white-space:nowrap;">VAT</th>
+                <th style="text-align:right;padding:7px 12px;font-size:10px;letter-spacing:.5px;color:var(--text-muted);white-space:nowrap;">TOTAL</th>
+                <th style="text-align:left;padding:7px 12px;font-size:10px;letter-spacing:.5px;color:var(--text-muted);white-space:nowrap;">PAYMENT</th>
+              </tr></thead>
+              <tbody>${rows}</tbody>
+              <tfoot><tr style="background:rgba(0,0,0,.03);border-top:1px solid ${phBdColor[ph]};">
+                <td colspan="4" style="padding:8px 14px;font-weight:700;font-size:12px;color:${phTxtColor[ph]};">SUBTOTAL</td>
+                <td style="text-align:right;padding:8px 12px;font-weight:700;font-size:13px;color:${phTxtColor[ph]};">${fSAR(phTotal)}</td>
+                <td style="text-align:right;padding:8px 12px;font-weight:600;font-size:12px;color:var(--text-muted);">${fSAR(phInvs.reduce((s,i)=>s+i.amount_tax,0))}</td>
+                <td style="text-align:right;padding:8px 12px;font-weight:700;font-size:13px;color:${phTxtColor[ph]};">${fSAR(phInvs.reduce((s,i)=>s+i.amount_total,0))}</td>
+                <td></td>
+              </tr></tfoot>
+            </table>
+          </div>
+        </div>`;
+    });
+  }
+
+  return html;
+}
+
+// ── SO view handlers ──────────────────────────────────────────────────────
+window._soSetView = function(v) {
+  window._soViewState.view = v;
+  _soRerender();
+};
+window._soSetPhase = function(ph) {
+  window._soViewState.phaseFilter = ph;
+  _soRerender();
+};
+function _soRerender() {
+  const cont = document.getElementById('salesContent') || document.getElementById('sales');
+  if (cont && window._soOrders) cont.innerHTML = _renderSOPage(window._soOrders, window._soSummary || {});
+}
+
+// ── Invoice pill reclassify (SO invoices → change var tab of linked line) ─
+window._soInvPill = async function(invName, newPhase, btn) {
+  if (!window._soOrders) return;
+  // Find the SO line linked to this invoice and update its var tab
+  let savedLineId = null;
+  outer: for (const o of window._soOrders) {
+    for (const l of (o.lines||[])) {
+      const lineInvs = l.line_invoices || [];
+      if (lineInvs.some(li => li.move_name === invName)) {
+        savedLineId = String(l.id);
+        if (!window.AppState._soLineVarMap) window.AppState._soLineVarMap = {};
+        window.AppState._soLineVarMap[savedLineId] = newPhase;
+        try {
+          await fetch('/api/plan-overrides', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({phase:'so_line_map', month_key:savedLineId, field:'var_tab', value:newPhase})
+          });
+        } catch(e) { console.warn('Save failed:',e); }
+        break outer;
+      }
+    }
+  }
+  // If no line found, save by invoice name directly
+  if (!savedLineId) {
+    try {
+      await fetch('/api/plan-overrides', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({phase:'so_inv_phase', month_key:invName.replace(/\//g,'_'), field:'phase', value:newPhase})
+      });
+    } catch(e) {}
+    // Store in a local map too
+    if (!window._soInvPhaseMap) window._soInvPhaseMap = {};
+    window._soInvPhaseMap[invName] = newPhase;
+  }
+  // Clear variance cache
+  if (window.AppState) { window.AppState._salesInvoicesByPhase = null; window.AppState._invoiceCumulative = {}; }
+  _soRerender();
+};
+
+
+
+function _renderDirectInvPage(invoices, note, summary) {
+  const fSAR = v => new Intl.NumberFormat('en-US', {maximumFractionDigits:0}).format(v||0);
+  const payColor = p => p==='paid'?'var(--green)':p==='partial'?'var(--amber)':'var(--red)';
+  const payLabel = p => p==='paid'?'✅ Paid':p==='partial'?'⚡ Partial':'❌ Unpaid';
+  const isBog = window.AppState?._overviewData?.is_bog !== false;
+  const phaseOpts = isBog
+    ? ['development','consultation','support','license']
+    : ['services','support','license'];
+
+  // Group by phase
+  const groups = {};
+  invoices.forEach((inv,i) => {
+    const ph = inv.phase || 'services';
+    if (!groups[ph]) groups[ph] = [];
+    groups[ph].push({...inv, _idx: i});
+  });
+
+  const total = invoices.filter(i=>i.state==='posted').reduce((s,i)=>s+i.amount_untaxed,0);
+  let html = `
+    <div class="banner banner-info" style="margin-bottom:16px;">
+      <b>No Sales Orders linked to this project.</b> Showing direct invoices grouped by phase.
+      ${note ? `<br><small style="color:var(--text-muted);">${note}</small>` : ''}
+    </div>
+    <div class="kpi-strip kpi-strip-small" style="margin-bottom:20px;">
+      <div class="kpi-card kpi-blue compact">
+        <div class="kpi-label">TOTAL INVOICES</div><div class="kpi-value">${invoices.length}</div>
+      </div>
+      <div class="kpi-card kpi-green compact">
+        <div class="kpi-label">TOTAL INVOICED (excl. VAT)</div>
+        <div class="kpi-value">${fSAR(total)}</div><div class="kpi-foot">SAR · posted only</div>
+      </div>
+    </div>`;
+
+  const phaseColors = {services:'var(--blue)',development:'var(--blue)',consultation:'var(--navy)',support:'var(--amber)',license:'#6B7280'};
+  const phaseLabels = {services:'Services',development:'Development',consultation:'Consultation',support:'Support',license:'License / 3rd Party'};
+
+  const renderInvRows = (invs) => invs.map((inv) => {
+    const purposeTxt = (inv.purpose||'').replace(/<[^>]+>/g,'').substring(0,120);
+    const stateLabel = inv.state==='posted'?'Posted':inv.state==='draft'?'Draft':inv.state;
+    const phaseSelect = `<select onchange="reclassifyDirectInv(${inv._idx},this.value)"
+      style="font-size:10px;padding:1px 4px;border:1px solid var(--border);border-radius:3px;background:var(--bg-subtle);">
+      ${phaseOpts.map(p=>`<option value="${p}" ${inv.phase===p?'selected':''}>${phaseLabels[p]||p}</option>`).join('')}
+    </select>`;
+    return `<tr>
+      <td><b>${inv.name}</b><br>${phaseSelect}</td>
+      <td style="font-family:var(--mono);font-size:10px;">${inv.date||'—'}</td>
+      <td style="font-family:var(--mono);font-size:10px;">${inv.due_date||'—'}</td>
+      <td style="font-size:10px;color:var(--text-muted);max-width:180px;white-space:normal;">${purposeTxt||'—'}</td>
+      <td class="num">${fSAR(inv.amount_untaxed)}</td>
+      <td class="num" style="color:var(--text-muted);">${fSAR(inv.amount_tax)}</td>
+      <td class="num"><b>${fSAR(inv.amount_total)}</b></td>
+      <td><span style="font-size:10px;color:${inv.state==='posted'?'var(--green)':'var(--text-muted)'};">${stateLabel}</span></td>
+      <td><span style="font-size:10px;font-weight:600;color:${payColor(inv.payment_state)};">${payLabel(inv.payment_state)}</span></td>
+    </tr>`;
+  }).join('');
+
+  // Render each phase group
+  Object.entries(groups).forEach(([ph, invs]) => {
+    const col = phaseColors[ph] || 'var(--blue)';
+    const lbl = phaseLabels[ph] || ph;
+    const grpTotal = invs.filter(i=>i.state==='posted').reduce((s,i)=>s+i.amount_untaxed,0);
+    html += `<div class="card" style="margin-bottom:16px;border-top:3px solid ${col};">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <h3 class="card-title" style="margin:0;color:${col};">${lbl}</h3>
+        <span style="font-weight:700;">${fSAR(grpTotal)} SAR</span>
+      </div>
+      <div class="table-scroll">
+        <table class="data-table" style="font-size:11px;">
+          <thead><tr>
+            <th>Invoice # / Phase</th><th>Date</th><th>Due Date</th><th>Purpose</th>
+            <th class="num">excl. VAT</th><th class="num">VAT</th>
+            <th class="num">Total</th><th>Status</th><th>Payment</th>
+          </tr></thead>
+          <tbody>${renderInvRows(invs)}</tbody>
+        </table>
+      </div>
+    </div>`;
+  });
+
+  // Store invoices globally for reclassify
+  window._directInvoices = invoices;
+  return html;
+}
+
+window.reclassifyDirectInv = function(idx, newPhase) {
+  if (!window._directInvoices) return;
+  const inv = window._directInvoices[idx];
+  inv.phase = newPhase;
+
+  // Save to DB: use invoice name as key
+  fetch('/api/plan-overrides', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      phase: 'direct_inv_phase',
+      month_key: inv.name.replace(/\//g,'_'),
+      field: 'phase',
+      value: newPhase
+    })
+  }).catch(()=>{});
+
+  // Rebuild AppState._salesInvoicesByPhase
+  window.AppState._salesInvoicesByPhase = {};
+  window._directInvoices.forEach(i => {
+    const ph = i.phase || 'services';
+    const mk = (i.date||'').substring(0,7);
+    if (!mk || i.state !== 'posted') return;
+    if (!window.AppState._salesInvoicesByPhase[ph]) window.AppState._salesInvoicesByPhase[ph] = {};
+    window.AppState._salesInvoicesByPhase[ph][mk] = window.AppState._salesInvoicesByPhase[ph][mk] || {month:0,cumulative:0};
+    window.AppState._salesInvoicesByPhase[ph][mk].month += i.amount_untaxed;
+  });
+  // Build cumulatives
+  Object.keys(window.AppState._salesInvoicesByPhase).forEach(ph => {
+    let running = 0;
+    Object.keys(window.AppState._salesInvoicesByPhase[ph]).sort().forEach(mk => {
+      running += window.AppState._salesInvoicesByPhase[ph][mk].month;
+      window.AppState._salesInvoicesByPhase[ph][mk].cumulative = running;
+    });
+  });
+  // Clear invoice cumulative cache
+  if (window.AppState._invoiceCumulative) window.AppState._invoiceCumulative = {};
+  // Re-render
+  const cont = document.getElementById('salesContent') || document.getElementById('sales');
+  if (cont) cont.innerHTML = _renderDirectInvPage(window._directInvoices, '', {});
+};
+
+
+// ─── Sales Orders Tab ─────────────────────────────────────────────────
+let _soProjects = [];
+
+async function initSalesOrdersTab() {
+  // Load project list from phase config
+  if (!_soProjects.length) {
+    try {
+      const res = await fetch('/api/project-config/all');
+      const d   = await res.json();
+      const configs = d.configs || {};
+      _soProjects = Object.keys(configs).sort();
+      const sel = document.getElementById('soProjectSel');
+      sel.innerHTML = '<option value="">— Select Project —</option>' +
+        _soProjects.map(p => `<option value="${p}">${p}</option>`).join('');
+    } catch(e) {}
+  }
+}
+
+async function loadSOForProject() {
+  const proj = document.getElementById('soProjectSel').value;
+  const cont = document.getElementById('soContent');
+  const msg  = document.getElementById('soLoadMsg');
+  if (!proj) {
+    cont.innerHTML = '<div style="text-align:center;padding:60px;color:var(--muted);font-size:14px;">Select a project above</div>';
+    return;
+  }
+  msg.textContent = '⏳ Loading…';
+  cont.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted);">Loading Sales Orders from Odoo…</div>';
+
+  try {
+    const res = await fetch('/api/sales-orders?project_name=' + encodeURIComponent(proj));
+    const d   = await res.json();
+    msg.textContent = '';
+
+    if (!d.ok) {
+      cont.innerHTML = `<div style="background:#FEE2E2;color:#991B1B;border:1px solid #FCA5A5;border-radius:8px;padding:14px 18px;">⚠️ ${d.error || 'Error loading data'}</div>`;
+      return;
+    }
+
+    // Store for re-render
+    window._soOrders  = d.orders  || [];
+    window._soSummary = d.summary || {};
+    window._soSummary.total_orders = window._soOrders.length;
+    window._soViewState = {view: 'orders', phaseFilter: null};
+
+    if (!window._soOrders.length && d.direct_invoices && d.direct_invoices.length) {
+      // Direct invoices mode
+      window._soSummary = d.summary || {};
+      window._directInvoices = d.direct_invoices;
+      window._soSummary = d.summary || {};
+      window._salesFilter = {year:null, month:null, sort:'asc', view:'table'};
+      cont.innerHTML = _renderDirectInvPage(d.direct_invoices, d.note, d.summary);
+      return;
+    }
+
+    if (!window._soOrders.length) {
+      cont.innerHTML = '<div style="text-align:center;padding:60px;color:var(--muted);font-size:14px;">No Sales Orders found for this project</div>';
+      return;
+    }
+
+    cont.innerHTML = _renderSOPage(window._soOrders, window._soSummary);
+  } catch(e) {
+    msg.textContent = '';
+    cont.innerHTML = `<div style="background:#FEE2E2;color:#991B1B;border:1px solid #FCA5A5;border-radius:8px;padding:14px 18px;">⚠️ ${e.message}</div>`;
+  }
+}
+
+// Re-render helpers scoped to manage page
+function _soRerender() {
+  const cont = document.getElementById('soContent');
+  if (cont && window._soOrders) cont.innerHTML = _renderSOPage(window._soOrders, window._soSummary || {});
+}
+function _salesRerender() {
+  const cont = document.getElementById('soContent');
+  if (cont && window._directInvoices) cont.innerHTML = _renderDirectInvPage(window._directInvoices, '', {});
+}
+
+</script>
 </body>
 </html>
