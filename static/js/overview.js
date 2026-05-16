@@ -641,10 +641,15 @@ async function _loadTeamKPI_unused(phase) {
 }
 
 async function _loadTeamCount() {
-  // Quick count from effort API dev + con combined, deduplicated
   try {
-    const phases = ['development','consultation'];
+    const isBog = AppState._overviewData?.is_bog !== false;
+    const phases = isBog ? ['development','consultation'] : ['services'];
     const names = new Set();
+    const isArabic = s => /[\u0600-\u06FF]/.test(s||'');
+    const filterEmp = e => {
+      const n=(e.name||'').trim();
+      return n && !isArabic(n) && !/\bamr\b/i.test(n) && !e.is_onsite_row && !e.onsite;
+    };
     for (const phase of phases) {
       let emps = AppState._effortEmployees?.[phase];
       if (!emps) {
@@ -652,7 +657,7 @@ async function _loadTeamCount() {
         const d = await res.json();
         if (!AppState._effortEmployees) AppState._effortEmployees = {};
         AppState._effortEmployees[phase] = d.employees || [];
-        emps = AppState._effortEmployees[phase];
+        emps = d.employees || [];
         if (!AppState._effortMonths)     AppState._effortMonths     = {};
         if (!AppState._effortMonthCosts) AppState._effortMonthCosts = {};
         if (!AppState._effortMonthMDs)   AppState._effortMonthMDs   = {};
@@ -660,14 +665,16 @@ async function _loadTeamCount() {
         AppState._effortMonthCosts[phase] = d.month_cost_usd || {};
         AppState._effortMonthMDs[phase]   = d.month_mds      || {};
       }
-      const isArabic = s => /[\u0600-\u06FF]/.test(s||'');
-      emps.filter(e => {
-        const n=(e.name||'').trim();
-        return n && !isArabic(n) && !/\bamr\b/i.test(n) && !e.is_onsite_row && !e.onsite;
-      }).forEach(e => names.add(e.name));
+      emps.filter(filterEmp).forEach(e => names.add(e.name));
+    }
+    // For non-BOG: also include employees_available from task analysis if loaded
+    if (!isBog && AppState.ovAnalysisData?.employees_available) {
+      AppState.ovAnalysisData.employees_available.forEach(n => names.add(n));
     }
     const countEl = document.getElementById('kpiTeamCount');
     if (countEl) countEl.textContent = names.size || '—';
+    // Cache names for modal
+    AppState._teamNamesServices = Array.from(names);
   } catch(e) { console.warn('Team count error:', e); }
 }
 
@@ -780,6 +787,7 @@ async function _loadModalTeamTab(phase) {
   const cont = document.getElementById('modalTeamContent');
   if (!cont) return;
   cont.innerHTML = '<div class="loading">Loading…</div>';
+  const isBogModal2 = AppState._overviewData?.is_bog !== false;
   try {
     let employees = AppState._effortEmployees?.[phase];
     if (!employees) {
@@ -802,6 +810,15 @@ async function _loadModalTeamTab(phase) {
       if (e.is_onsite_row || e.onsite) return false;
       return true;
     });
+    // For non-BOG services: limit to employees who have timesheets on project phases
+    // (effort API returns all project employees regardless of phase)
+    if (!isBogModal2 && phase === 'services') {
+      const knownEmps = AppState.ovAnalysisData?.employees_available || AppState._teamNamesServices || [];
+      if (knownEmps.length > 0) {
+        employees = employees.filter(e => knownEmps.includes(e.name));
+      }
+    }
+
     const isBogModal = AppState._overviewData?.is_bog !== false;
     // Non-BOG support with no data → show message
     if (!isBogModal && phase === 'support' && !team.length) {
