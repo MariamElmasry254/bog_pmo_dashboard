@@ -1036,12 +1036,17 @@ async function profRecomputeAll(phaseKey) {
     return v;
   };
   const _getMonthlyEstMDs = (mk) => {
-    // Base = Presales MDs from Budget (estimated rows) BEFORE any changes
+    // Base = approved MDs (Presales from Budget) BEFORE any changes
+    // If no delta_mds changes exist, just return presalesMDs for all months
     const presalesMDs = AppState._budgetPresalesMDs?.[phaseKey] || totalEstMDs || 0;
+    if (totalDeltaMDsAll === 0) return presalesMDs; // no MDs changes — same every month
     const approvedBase = presalesMDs - totalDeltaMDsAll;
     let v = approvedBase;
-    budgChanges.forEach(c => { const cd=(c.change_date||'').slice(0,7); if(!cd||cd<=mk) v+=parseFloat(c.delta_mds)||0; });
-    return v > 0 ? v : presalesMDs; // fallback: if no changes, show presales MDs
+    budgChanges.forEach(c => {
+      const cd = (c.change_date||'').slice(0,7);
+      if (!cd || cd <= mk) v += parseFloat(c.delta_mds)||0;
+    });
+    return v;
   };
 
   // ── 2. Estimated MDs + Cost ──
