@@ -841,6 +841,16 @@ async function loadTaskAnalysis(phaseGroup) {
       return;
     }
 
+    // Handle no phases found
+    if (d.no_phases) {
+      cont.innerHTML = `<div class="card" style="padding:24px;text-align:center;color:var(--text-muted);">
+        <div style="font-size:28px;margin-bottom:8px;">📭</div>
+        <div style="font-size:13px;font-weight:600;color:var(--text);">No ${phaseGroup} phases found</div>
+        <div style="font-size:11px;margin-top:6px;max-width:400px;margin-inline:auto;">${d.note || 'No tasks assigned to phases matching ' + phaseGroup + ' keywords'}</div>
+      </div>`;
+      return;
+    }
+
     AppState.ovAnalysisData = d;
     if (!AppState.activePhases) AppState.activePhases = d.phases_active || [];
     if (!AppState.activeEmployees) AppState.activeEmployees = [];
