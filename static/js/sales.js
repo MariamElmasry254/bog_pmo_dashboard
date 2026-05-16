@@ -140,64 +140,92 @@ function renderSOLines(lines) {
   const fSAR = v => new Intl.NumberFormat('en-US', {maximumFractionDigits:0}).format(v || 0);
   const fNum = v => new Intl.NumberFormat('en-US', {maximumFractionDigits:1}).format(v || 0);
 
-  let totalOrdered = 0, totalDelivered = 0, totalInvoiced = 0, totalAmt = 0;
+  let totalAmt = 0, totalDeliveredAmt = 0, totalInvoicedAmt = 0, totalRemainingAmt = 0;
 
-  let rows = lines.map(l => {
-    const ordered   = l.product_uom_qty || 0;
-    const delivered = l.qty_delivered   || 0;
-    const invoiced  = l.qty_invoiced    || 0;
-    const remaining = ordered - delivered;
-    const amt       = l.price_subtotal  || 0;
-    const delPct    = ordered > 0 ? delivered / ordered * 100 : 0;
-    const invPct    = ordered > 0 ? invoiced  / ordered * 100 : 0;
-    const delColor  = delPct >= 100 ? 'var(--green)' : delPct > 0 ? 'var(--amber)' : 'var(--text-muted)';
+  let rows = lines.map((l, idx) => {
+    const amt          = l.price_subtotal    || 0;
+    const deliveredAmt = l.delivered_amt     || 0;
+    const invoicedAmt  = l.invoiced_amt      || 0;
+    const remainingAmt = l.remaining_amt     || 0;
+    const ordered      = l.product_uom_qty   || 0;
+    const delPct       = amt > 0 ? deliveredAmt / amt * 100 : 0;
+    const delColor     = delPct >= 100 ? 'var(--green)' : delPct > 0 ? 'var(--amber)' : 'var(--text-muted)';
+    const invColor     = invoicedAmt >= amt ? 'var(--green)' : invoicedAmt > 0 ? 'var(--amber)' : 'var(--text-muted)';
+    const lineInvs     = l.line_invoices || [];
+    const lineId       = `line-inv-${l.id || idx}`;
 
-    totalOrdered   += ordered;
-    totalDelivered += delivered;
-    totalInvoiced  += invoiced;
-    totalAmt       += amt;
+    totalAmt          += amt;
+    totalDeliveredAmt += deliveredAmt;
+    totalInvoicedAmt  += invoicedAmt;
+    totalRemainingAmt += remainingAmt;
 
-    const prod = l.product_id ? (typeof l.product_id === 'object' ? l.product_id[1] : l.product_id) : '—';
+    const prod = l.product_id ? (Array.isArray(l.product_id) ? l.product_id[1] : l.product_id) : '—';
     const disc = l.discount ? `<span style="font-size:10px;color:var(--red);">-${l.discount}%</span>` : '';
 
-    return `<tr>
+    const invBtn = lineInvs.length > 0
+      ? `<button onclick="toggleSODetail('${lineId}')"
+           style="font-size:10px;padding:2px 7px;background:#FEF3C7;border:1px solid #FCD34D;color:#92400E;border-radius:3px;cursor:pointer;margin-left:6px;">
+           🧾 ${lineInvs.length}
+         </button>` : '';
+
+    const invDetail = lineInvs.length > 0 ? `
+      <tr id="${lineId}" style="display:none;">
+        <td colspan="8" style="padding:4px 8px 10px 32px;background:#FFFBEB;">
+          <table style="font-size:10px;width:100%;">
+            <thead><tr style="color:var(--text-muted);">
+              <th style="text-align:left;padding:3px;">Invoice</th>
+              <th style="text-align:right;padding:3px;">Qty</th>
+              <th style="text-align:right;padding:3px;">Amount (SAR)</th>
+            </tr></thead>
+            <tbody>
+              ${lineInvs.map(i => `<tr>
+                <td style="padding:3px;font-weight:600;">${i.move_name}</td>
+                <td style="text-align:right;padding:3px;">${fNum(i.qty)}</td>
+                <td style="text-align:right;padding:3px;color:var(--green);">${fSAR(i.amount)}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </td>
+      </tr>` : '';
+
+    return `<tr style="cursor:default;">
       <td style="max-width:200px;white-space:normal;">
-        <div style="font-weight:600;font-size:12px;">${prod}</div>
+        <div style="font-weight:600;font-size:12px;">${prod} ${invBtn}</div>
         ${l.name && l.name !== prod ? `<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">${l.name}</div>` : ''}
       </td>
       <td class="num">${fSAR(l.price_unit)} ${disc}</td>
-      <td class="num"><b>${fNum(ordered)}</b></td>
+      <td class="num">${fNum(ordered)}</td>
       <td class="num" style="color:${delColor};">
-        ${fNum(delivered)}
-        <div style="width:40px;height:3px;background:#F3F4F6;border-radius:2px;display:inline-block;vertical-align:middle;margin-left:4px;">
+        ${fSAR(deliveredAmt)}
+        <div style="width:36px;height:3px;background:#F3F4F6;border-radius:2px;display:inline-block;vertical-align:middle;margin-left:4px;">
           <div style="width:${Math.min(100,delPct)}%;height:100%;background:${delColor};border-radius:2px;"></div>
         </div>
       </td>
-      <td class="num" style="color:${invPct>=100?'var(--green)':invPct>0?'var(--amber)':'var(--text-muted)'};">${fNum(invoiced)}</td>
-      <td class="num" style="color:${remaining>0?'var(--amber)':'var(--green)'};">${fNum(remaining)}</td>
+      <td class="num" style="color:${invColor};">${fSAR(invoicedAmt)}</td>
+      <td class="num" style="color:${remainingAmt > 0 ? 'var(--amber)' : 'var(--green)'};">
+        <b>${fSAR(remainingAmt)}</b>
+      </td>
       <td class="num"><b>${fSAR(amt)}</b></td>
-    </tr>`;
+    </tr>${invDetail}`;
   }).join('');
 
-  const remTotal = totalOrdered - totalDelivered;
   return `<table class="data-table" style="font-size:11px;margin-top:8px;width:100%;">
     <thead><tr>
       <th>Product / Description</th>
       <th class="num">Unit Price</th>
-      <th class="num">Qty Ordered</th>
-      <th class="num">Delivered</th>
-      <th class="num">Invoiced</th>
-      <th class="num">Remaining</th>
-      <th class="num">Subtotal (SAR)</th>
+      <th class="num">Qty</th>
+      <th class="num">Delivered (SAR)</th>
+      <th class="num">Invoiced (SAR)</th>
+      <th class="num">Remaining (SAR)</th>
+      <th class="num">Total (SAR)</th>
     </tr></thead>
     <tbody>${rows}</tbody>
     <tfoot>
       <tr style="background:var(--navy);color:white;font-weight:700;">
-        <td colspan="2" style="padding:8px 12px;">TOTAL</td>
-        <td class="num">${fNum(totalOrdered)}</td>
-        <td class="num">${fNum(totalDelivered)}</td>
-        <td class="num">${fNum(totalInvoiced)}</td>
-        <td class="num" style="color:#FCD34D;">${fNum(remTotal)}</td>
+        <td colspan="3" style="padding:8px 12px;">TOTAL</td>
+        <td class="num">${fSAR(totalDeliveredAmt)}</td>
+        <td class="num">${fSAR(totalInvoicedAmt)}</td>
+        <td class="num" style="color:#FCD34D;">${fSAR(totalRemainingAmt)}</td>
         <td class="num" style="color:#93C5FD;">${fSAR(totalAmt)}</td>
       </tr>
     </tfoot>
