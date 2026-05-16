@@ -7942,15 +7942,12 @@ def api_sales_orders():
             'overall_invoiced_pct': round(total_invoiced / total_untaxed * 100, 1) if total_untaxed else 0,
         }
 
-        # Build invoices_by_phase: for each order line product → group invoices by month
-        # Phase detection: match product name against SUPPORT_KWS
+        # Build invoices_by_phase: use FULL invoice amount (excl. VAT)
+        # because some invoice lines may not be linked to analytic account
         invoices_by_phase = {}  # { phase_key: { 'YYYY-MM': amount_excl_vat } }
 
-        # Build invoice date lookup
-        inv_date_map = {}  # move_id → invoice_date
-        for inv in invoices_raw:
-            inv_date_map[inv['id']] = (inv.get('invoice_date') or '')[:7]  # YYYY-MM
-
+        # Step 1: Map each invoice → phase from SO line products
+        inv_phase_map = {}  # move_id → phase_key
         for order in orders:
             for line in order.get('lines', []):
                 prod_name = ''
@@ -7958,26 +7955,35 @@ def api_sales_orders():
                     prod_name = line['product_id'][1] if len(line['product_id']) > 1 else ''
                 elif line.get('name'):
                     prod_name = line['name']
-
-                # Determine phase from product name
                 prod_lower = prod_name.lower()
                 if any(kw in prod_lower for kw in SUPPORT_KWS):
-                    phase_key = 'support'
-                elif 'license' in prod_lower:
-                    phase_key = 'license'
+                    lp = 'support'
+                elif 'license' in prod_lower or '3rd party' in prod_lower or 'third party' in prod_lower:
+                    lp = 'license'
                 else:
-                    phase_key = 'development'  # dev/consulting lines
-
-                if phase_key not in invoices_by_phase:
-                    invoices_by_phase[phase_key] = {}
-
+                    lp = 'development'
                 for li in line.get('line_invoices', []):
-                    move_id = li.get('move_id')
-                    month = inv_date_map.get(move_id, '')
-                    if month:
-                        invoices_by_phase[phase_key][month] = (
-                            invoices_by_phase[phase_key].get(month, 0) + (li.get('amount') or 0)
-                        )
+                    mid = li.get('move_id')
+                    if mid and mid not in inv_phase_map:
+                        inv_phase_map[mid] = lp
+
+        # Step 2: Accumulate FULL invoice amount_untaxed per phase per month
+        processed_invs = set()
+        for inv in invoices_raw:
+            if inv['id'] in processed_invs:
+                continue
+            processed_invs.add(inv['id'])
+            if inv.get('state') != 'posted':
+                continue
+            month = (inv.get('invoice_date') or '')[:7]
+            if not month:
+                continue
+            lp = inv_phase_map.get(inv['id'], 'development')
+            if lp not in invoices_by_phase:
+                invoices_by_phase[lp] = {}
+            invoices_by_phase[lp][month] = (
+                invoices_by_phase[lp].get(month, 0) + (inv.get('amount_untaxed') or 0)
+            )
 
         # Build cumulative per phase
         invoices_by_phase_cumulative = {}
