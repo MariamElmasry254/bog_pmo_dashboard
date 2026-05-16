@@ -7810,7 +7810,7 @@ def api_sales_orders():
                 {'fields': ['id', 'name', 'invoice_date', 'invoice_date_due',
                             'amount_untaxed', 'amount_tax', 'amount_total',
                             'state', 'invoice_origin', 'payment_state',
-                            'invoice_line_ids'],
+                            'invoice_line_ids', 'narration'],
                  'limit': 500, 'order': 'invoice_date asc'}
             )
         except Exception as e:
@@ -7847,6 +7847,7 @@ def api_sales_orders():
                             'qty':           il.get('quantity') or 0,
                             'amount':        il.get('price_subtotal') or 0,
                             'inv_date':      inv_date,
+                            'purpose':       next((inv.get('narration','') for inv in invoices_raw if inv['id']==move_id), ''),
                         })
             except Exception as e:
                 logger.warning(f"Invoice lines fetch failed: {e}")
@@ -7866,6 +7867,7 @@ def api_sales_orders():
                         'amount_total':  inv.get('amount_total') or 0,
                         'state':         inv.get('state') or '',
                         'payment_state': inv.get('payment_state') or '',
+                        'purpose':       inv.get('narration') or '',
                     })
 
         # Build orders list
