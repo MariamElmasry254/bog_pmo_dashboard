@@ -5,7 +5,7 @@ const _SUPP_KWS = ['support','operation','maintenance','hypercare','production',
 function phaseOf(name) {
   const n = (name||'').toLowerCase();
   if (_SUPP_KWS.some(k => n.includes(k))) return 'support';
-  if (n.includes('license')) return 'license';
+  if (n.includes('license') || n.includes('3rd party') || n.includes('third party') || n.includes('software')) return 'license';
   if (n.includes('consultation') || n.includes('consult')) return 'consultation';
   return 'development';
 }
