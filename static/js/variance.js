@@ -1152,25 +1152,88 @@ async function profRecomputeAll(phaseKey) {
   // ── 4. Issued Invoices: load monthly_cumulative per phase (once, cached) ──
   if (!AppState._invoiceCumulative) AppState._invoiceCumulative = {};
   if (!AppState._invoiceCumulative[phaseKey]) {
-    // Load invoices from sales API grouped by variance tab
     try {
-      if (!AppState._salesInvoicesByPhase) {
-        const salesRes = await fetch('/api/sales-orders');
-        if (salesRes.ok) {
-          const salesData = await salesRes.json();
-          console.log('[Variance] sales-orders response ok:', !!salesData.ok,
-            'has invoices_by_phase:', !!salesData.invoices_by_phase,
-            'keys:', Object.keys(salesData.invoices_by_phase || {}));
-          if (salesData.invoices_by_phase) {
-            AppState._salesInvoicesByPhase = salesData.invoices_by_phase;
+      // Always fetch fresh from API
+      const salesRes = await fetch('/api/sales-orders');
+      if (salesRes.ok) {
+        const salesData = await salesRes.json();
+
+        // ── Strategy 1: backend already built invoices_by_phase ──────────────
+        if (salesData.invoices_by_phase && Object.keys(salesData.invoices_by_phase).length) {
+          AppState._salesInvoicesByPhase = salesData.invoices_by_phase;
+        }
+
+        // ── Strategy 2: build invoices_by_phase from orders + invoices ───────
+        // Works even when backend didn't return it (older app.py on server)
+        else if (salesData.orders && salesData.orders.length) {
+          const _SUPP_KWS = ['support','operation','maintenance','hypercare',
+                             'production','دعم','الدعم','تشغيل'];
+          const byPhase = {};
+
+          salesData.orders.forEach(o => {
+            // Determine phase for each invoice via SO line products
+            const linePhaseMap = {}; // inv_name → phase
+            (o.lines || []).forEach(l => {
+              const prod = (Array.isArray(l.product_id) ? l.product_id[1] : l.name || '').toLowerCase();
+              let ph = 'development';
+              if (_SUPP_KWS.some(k => prod.includes(k))) ph = 'support';
+              else if (prod.includes('license') || prod.includes('3rd party')) ph = 'license';
+              // Check user override
+              const savedTab = (AppState._soLineVarMap || {})[String(l.id)];
+              if (savedTab) ph = savedTab;
+              // Map to invoices linked to this line
+              (l.line_invoices || []).forEach(li => {
+                if (li.move_name) linePhaseMap[li.move_name] = ph;
+              });
+            });
+
+            (o.invoices || []).forEach(inv => {
+              if (inv.state !== 'posted') return;
+              const mk = (inv.date || '').substring(0, 7);
+              if (!mk) return;
+              // Get phase: from line mapping, else from invoice_origin → SO lines
+              let ph = linePhaseMap[inv.name] || 'development';
+              if (!linePhaseMap[inv.name]) {
+                // Fallback: majority phase from SO lines
+                const phases = (o.lines || []).map(l => {
+                  const prod = (Array.isArray(l.product_id)?l.product_id[1]:l.name||'').toLowerCase();
+                  if (_SUPP_KWS.some(k=>prod.includes(k))) return 'support';
+                  if (prod.includes('license')||prod.includes('3rd party')) return 'license';
+                  return (AppState._soLineVarMap||{})[String(l.id)] || 'development';
+                });
+                if (phases.includes('support')) ph = 'support';
+                else if (phases.every(p=>p==='license')) ph = 'license';
+                else ph = 'development';
+              }
+              if (!byPhase[ph]) byPhase[ph] = {};
+              byPhase[ph][mk] = (byPhase[ph][mk] || 0) + (inv.amount_untaxed || 0);
+            });
+          });
+
+          if (Object.keys(byPhase).length) {
+            // Convert to cumulative format
+            const cum = {};
+            Object.keys(byPhase).forEach(ph => {
+              let running = 0;
+              cum[ph] = {};
+              Object.keys(byPhase[ph]).sort().forEach(mk => {
+                running += byPhase[ph][mk];
+                cum[ph][mk] = { month: byPhase[ph][mk], cumulative: running };
+              });
+            });
+            AppState._salesInvoicesByPhase = cum;
+            console.log('[Variance] Built invoices_by_phase from orders frontend:', Object.keys(cum));
           }
         }
+
+        // ── Strategy 3: direct invoices (no SOs) ─────────────────────────────
+        else if (salesData.direct_invoices && salesData.direct_invoices.length) {
+          AppState._salesInvoicesByPhase = salesData.invoices_by_phase || {};
+        }
       }
-      console.log('[Variance] _salesInvoicesByPhase:', JSON.stringify(AppState._salesInvoicesByPhase)?.substring(0,200));
-      if (AppState._salesInvoicesByPhase) {
-        // Map variance tab → sales phase keys
-        // BOG: development & consultation → 'development', support → 'support', license excluded
-        // Non-BOG: services → 'services'/'development'/'consultation', support → 'support'
+
+      // ── Now build cumulative for this phaseKey ────────────────────────────
+      if (AppState._salesInvoicesByPhase && Object.keys(AppState._salesInvoicesByPhase).length) {
         const phaseMapping = {
           development:  ['development'],
           consultation: ['consultation'],
@@ -1178,17 +1241,15 @@ async function profRecomputeAll(phaseKey) {
           support:      ['support'],
         };
         const matchPhases = phaseMapping[phaseKey] || [phaseKey];
-
         const monthly = {};
         for (const [srcPhase, phaseData] of Object.entries(AppState._salesInvoicesByPhase)) {
-          // Skip license — not part of variance profitability
           if (srcPhase === 'license') continue;
           if (!matchPhases.includes(srcPhase)) continue;
           for (const [mk, v] of Object.entries(phaseData)) {
-            monthly[mk] = (monthly[mk] || 0) + (v.month || 0);
+            const monthAmt = typeof v === 'object' ? (v.month || 0) : (v || 0);
+            monthly[mk] = (monthly[mk] || 0) + monthAmt;
           }
         }
-        // Build cumulative
         let running = 0;
         const cum = {};
         for (const mk of Object.keys(monthly).sort()) {
@@ -1197,9 +1258,10 @@ async function profRecomputeAll(phaseKey) {
         }
         if (Object.keys(cum).length) {
           AppState._invoiceCumulative[phaseKey] = cum;
+          console.log('[Variance] invoiceCumulative built for', phaseKey, ':', Object.keys(cum).length, 'months');
         }
       }
-    } catch(e) { console.warn('Sales invoice load error:', e); }
+    } catch(e) { console.warn('[Variance] Sales invoice load error:', e); }
 
     if (!AppState._invoiceCumulative[phaseKey]) AppState._invoiceCumulative[phaseKey] = {};
   }
