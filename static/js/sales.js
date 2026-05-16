@@ -42,6 +42,7 @@ window.loadSalesOrders = async function() {
   try {
     const res = await fetch('/api/sales-orders');
     const d   = await res.json();
+    if (d.orders?.[0]?.invoices?.[0]) console.log('[Purpose Debug]', JSON.stringify(d.orders[0].invoices[0]));
 
     if (!d.ok) {
       cont.innerHTML = `<div class="banner banner-warn"><strong>Error:</strong> ${d.error}</div>`;
