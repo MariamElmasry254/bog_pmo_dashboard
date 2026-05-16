@@ -2389,6 +2389,8 @@ def api_overview_tags_analysis():
             return jsonify({'tags': [], 'connected': False, 'error': 'Odoo unreachable'})
 
     # Phase filter
+    _proj_id_tags = session.get('project_id')
+    _is_bog_tags  = not _proj_id_tags or str(_proj_id_tags) == '228'
     phase_group = request.args.get('phase_group', 'development')
     phases_param = request.args.get('phases')
     if phases_param:
@@ -2397,6 +2399,32 @@ def api_overview_tags_analysis():
         phase_names = get_phase_mapping().get(phase_group, [])
 
     try:
+        # For non-BOG: auto-detect phases from project.phase by keywords
+        _proj_odoo_id_tags = None
+        if not phase_names and not _is_bog_tags:
+            projs = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.project', 'search_read',
+                [[('name', 'ilike', _proj_name)]],
+                {'fields': ['id'], 'limit': 3}
+            )
+            if projs:
+                _proj_odoo_id_tags = projs[0]['id']
+                all_proj_phases = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'project.phase', 'search_read',
+                    [[('project_id', '=', _proj_odoo_id_tags)]],
+                    {'fields': ['id', 'name'], 'limit': 100}
+                )
+                if phase_group == 'support':
+                    phase_names = [p['name'] for p in all_proj_phases
+                                   if any(kw in p['name'].lower() for kw in SUPPORT_KWS)]
+                else:
+                    phase_names = [p['name'] for p in all_proj_phases
+                                   if not any(kw in p['name'].lower() for kw in SUPPORT_KWS)]
+                if not phase_names and all_proj_phases:
+                    phase_names = [p['name'] for p in all_proj_phases]  # fallback: all
+
         # Resolve phase IDs
         phase_id_to_name = {}
         if phase_names:
@@ -3088,8 +3116,8 @@ def api_overview_analysis(phase_group):
         return jsonify({
             'tasks': ordered,
             'connected': True,
-            'phases_available': [],  # Non-BOG: no phase filter shown
-            'phases_active': [],
+            'phases_available': phase_names,  # Non-BOG: show actual project phases
+            'phases_active': phase_names,
             'employees_available': sorted(all_employees_set),
             'employees_filter': employees_filter,
             'stages_used': [{'id': sid, 'name': name} for sid, name in stages_used.items()],
