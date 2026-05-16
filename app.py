@@ -2562,10 +2562,14 @@ def api_overview_tags_analysis():
                 if phase_group == 'support':
                     phase_names = [p['name'] for p in all_proj_phases
                                    if any(kw in p['name'].lower() for kw in SUPPORT_KWS)]
+                    if not phase_names:
+                        return jsonify({'tags': [], 'connected': True, 'no_phases': True,
+                                        'phases_available': [], 'summary': {},
+                                        'note': f'No support/operation phases found in this project'})
                 else:
                     phase_names = [p['name'] for p in all_proj_phases
                                    if not any(kw in p['name'].lower() for kw in SUPPORT_KWS)]
-                if not phase_names and all_proj_phases:
+                if not phase_names and all_proj_phases and phase_group != 'support':
                     phase_names = [p['name'] for p in all_proj_phases]  # fallback: all
 
         # Resolve phase IDs
@@ -2584,10 +2588,22 @@ def api_overview_tags_analysis():
         if _proj_name:
             project_domain.append(('project_id.name', 'ilike', _proj_name))
 
+        # Check if 'No Phase' was requested in phases filter
+        _include_no_phase = 'No Phase' in (phases_param or '')
+
         # Get parent tasks under requested phases
         parent_domain = list(project_domain)
         if phase_id_to_name:
-            parent_domain.append(('phase_id', 'in', list(phase_id_to_name.keys())))
+            if _include_no_phase:
+                # Include tasks WITH phase AND tasks with NO phase
+                parent_domain.append('|')
+                parent_domain.append(('phase_id', 'in', list(phase_id_to_name.keys())))
+                parent_domain.append(('phase_id', '=', False))
+            else:
+                parent_domain.append(('phase_id', 'in', list(phase_id_to_name.keys())))
+        elif _include_no_phase:
+            # Only no-phase tasks requested
+            parent_domain.append(('phase_id', '=', False))
 
         parent_tasks = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
