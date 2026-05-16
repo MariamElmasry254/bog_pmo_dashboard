@@ -229,10 +229,11 @@ function renderTagPhaseFilters(phaseGroup, available) {
   html += '</button>';
   html += '<div class="phase-menu" id="tagPhaseMenu" style="display:none;">';
   html += '<div class="phase-menu-actions"><a id="tagPhaseAll">Select all</a><a id="tagPhaseNone">Clear</a></div>';
-  available.forEach(p => {
+  available.filter(p => p && p !== 'undefined' && p !== 'null').forEach(p => {
     const checked = (AppState.activeTagPhases || []).includes(p);
+    const label = p === 'No Phase' ? '📭 No Phase' : p;
     html += `<label class="phase-option ${checked ? 'selected' : ''}" data-phase="${encodeURIComponent(p)}">
-      <input type="checkbox" ${checked ? 'checked' : ''}><span dir="auto">${p}</span>
+      <input type="checkbox" ${checked ? 'checked' : ''}><span dir="auto">${label}</span>
     </label>`;
   });
   html += '</div></div>';
@@ -894,11 +895,12 @@ function renderPhaseFilters(phaseGroup, available) {
   html += '<a id="ovPhaseAll">Select all</a>';
   html += '<a id="ovPhaseNone">Clear</a>';
   html += '</div>';
-  available.forEach(p => {
+  available.filter(p => p && p !== 'undefined' && p !== 'null').forEach(p => {
     const checked = (AppState.activePhases || []).includes(p);
+    const label = p === 'No Phase' ? '📭 No Phase' : p;
     html += `<label class="phase-option ${checked ? 'selected' : ''}" data-phase="${encodeURIComponent(p)}">
       <input type="checkbox" ${checked ? 'checked' : ''}>
-      <span dir="auto">${p}</span>
+      <span dir="auto">${label}</span>
     </label>`;
   });
   html += '</div></div>';
