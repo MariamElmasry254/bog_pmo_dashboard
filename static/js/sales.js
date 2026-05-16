@@ -104,15 +104,24 @@ window.loadSalesOrders = async function() {
         <td class="num" style="color:${o.remaining > 0 ? 'var(--amber)' : 'var(--green)'};">
           <b>${fSAR(o.remaining)}</b>
         </td>
-        <td>
-          <button onclick="toggleSOInvoices('so-inv-${o.id}')"
+        <td style="white-space:nowrap;display:flex;gap:6px;">
+          <button onclick="toggleSODetail('so-lines-${o.id}')"
+            style="font-size:11px;padding:3px 10px;background:#EFF6FF;border:1px solid #BFDBFE;color:#1D4ED8;border-radius:4px;cursor:pointer;font-weight:600;">
+            📋 ${o.lines.length} line${o.lines.length !== 1 ? 's' : ''}
+          </button>
+          <button onclick="toggleSODetail('so-inv-${o.id}')"
             style="font-size:11px;padding:3px 10px;background:var(--bg-subtle);border:1px solid var(--border);border-radius:4px;cursor:pointer;">
-            ${o.invoices.length} invoice${o.invoices.length !== 1 ? 's' : ''} ▾
+            🧾 ${o.invoices.length} invoice${o.invoices.length !== 1 ? 's' : ''}
           </button>
         </td>
       </tr>
+      <tr id="so-lines-${o.id}" style="display:none;">
+        <td colspan="11" style="padding:0 8px 12px 32px;background:#F0F9FF;border-bottom:1px solid #BFDBFE;">
+          ${renderSOLines(o.lines)}
+        </td>
+      </tr>
       <tr id="so-inv-${o.id}" style="display:none;">
-        <td colspan="11" style="padding:0 8px 12px 24px;background:var(--bg-subtle);">
+        <td colspan="11" style="padding:0 8px 12px 32px;background:var(--bg-subtle);border-bottom:1px solid var(--border);">
           ${renderSOInvoices(o.invoices, o.name)}
         </td>
       </tr>`;
@@ -125,6 +134,75 @@ window.loadSalesOrders = async function() {
     cont.innerHTML = `<div class="banner banner-warn"><strong>Error:</strong> ${e.message}</div>`;
   }
 };
+
+function renderSOLines(lines) {
+  if (!lines || !lines.length) return '<p style="color:var(--text-muted);font-size:12px;padding:8px 0;">No order lines</p>';
+  const fSAR = v => new Intl.NumberFormat('en-US', {maximumFractionDigits:0}).format(v || 0);
+  const fNum = v => new Intl.NumberFormat('en-US', {maximumFractionDigits:1}).format(v || 0);
+
+  let totalOrdered = 0, totalDelivered = 0, totalInvoiced = 0, totalAmt = 0;
+
+  let rows = lines.map(l => {
+    const ordered   = l.product_uom_qty || 0;
+    const delivered = l.qty_delivered   || 0;
+    const invoiced  = l.qty_invoiced    || 0;
+    const remaining = ordered - delivered;
+    const amt       = l.price_subtotal  || 0;
+    const delPct    = ordered > 0 ? delivered / ordered * 100 : 0;
+    const invPct    = ordered > 0 ? invoiced  / ordered * 100 : 0;
+    const delColor  = delPct >= 100 ? 'var(--green)' : delPct > 0 ? 'var(--amber)' : 'var(--text-muted)';
+
+    totalOrdered   += ordered;
+    totalDelivered += delivered;
+    totalInvoiced  += invoiced;
+    totalAmt       += amt;
+
+    const prod = l.product_id ? (typeof l.product_id === 'object' ? l.product_id[1] : l.product_id) : '—';
+    const disc = l.discount ? `<span style="font-size:10px;color:var(--red);">-${l.discount}%</span>` : '';
+
+    return `<tr>
+      <td style="max-width:200px;white-space:normal;">
+        <div style="font-weight:600;font-size:12px;">${prod}</div>
+        ${l.name && l.name !== prod ? `<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">${l.name}</div>` : ''}
+      </td>
+      <td class="num">${fSAR(l.price_unit)} ${disc}</td>
+      <td class="num"><b>${fNum(ordered)}</b></td>
+      <td class="num" style="color:${delColor};">
+        ${fNum(delivered)}
+        <div style="width:40px;height:3px;background:#F3F4F6;border-radius:2px;display:inline-block;vertical-align:middle;margin-left:4px;">
+          <div style="width:${Math.min(100,delPct)}%;height:100%;background:${delColor};border-radius:2px;"></div>
+        </div>
+      </td>
+      <td class="num" style="color:${invPct>=100?'var(--green)':invPct>0?'var(--amber)':'var(--text-muted)'};">${fNum(invoiced)}</td>
+      <td class="num" style="color:${remaining>0?'var(--amber)':'var(--green)'};">${fNum(remaining)}</td>
+      <td class="num"><b>${fSAR(amt)}</b></td>
+    </tr>`;
+  }).join('');
+
+  const remTotal = totalOrdered - totalDelivered;
+  return `<table class="data-table" style="font-size:11px;margin-top:8px;width:100%;">
+    <thead><tr>
+      <th>Product / Description</th>
+      <th class="num">Unit Price</th>
+      <th class="num">Qty Ordered</th>
+      <th class="num">Delivered</th>
+      <th class="num">Invoiced</th>
+      <th class="num">Remaining</th>
+      <th class="num">Subtotal (SAR)</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+    <tfoot>
+      <tr style="background:var(--navy);color:white;font-weight:700;">
+        <td colspan="2" style="padding:8px 12px;">TOTAL</td>
+        <td class="num">${fNum(totalOrdered)}</td>
+        <td class="num">${fNum(totalDelivered)}</td>
+        <td class="num">${fNum(totalInvoiced)}</td>
+        <td class="num" style="color:#FCD34D;">${fNum(remTotal)}</td>
+        <td class="num" style="color:#93C5FD;">${fSAR(totalAmt)}</td>
+      </tr>
+    </tfoot>
+  </table>`;
+}
 
 function renderSOInvoices(invoices, soName) {
   if (!invoices || !invoices.length) {
@@ -159,7 +237,7 @@ function renderSOInvoices(invoices, soName) {
   return html;
 }
 
-function toggleSOInvoices(id) {
+function toggleSODetail(id) {
   const el = document.getElementById(id);
   if (!el) return;
   el.style.display = el.style.display === 'none' ? '' : 'none';
