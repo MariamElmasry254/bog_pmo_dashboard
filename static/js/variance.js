@@ -1186,6 +1186,14 @@ async function profRecomputeAll(phaseKey) {
     // Expected Overrun = (Actual/EstMDs) / (%Comp/100) - 1
     const expectedOverrun = (completionPct > 0 && totalEstMDs > 0 && actualMDs > 0)
       ? (actualMDs / totalEstMDs) / (completionPct / 100) - 1 : null;
+    if (monthKey === months[0]?.key) {
+      console.log(`[Prof Debug] phase=${phaseKey} month=${monthKey}`, {
+        completionPct, actualMDs, totalEstMDs, totalEstCostSAR,
+        currentCostSAR, remainingMDs, expectedOverrun,
+        approvedMDsBase: AppState._budgetApprovedMDs?.[phaseKey],
+        approvedCostBase: AppState._budgetFinalCost?.[phaseKey],
+      });
+    }
 
     // Avg cost per MD for this month = Current Cost SAR / Actual MDs to Date (running)
     // This is the "current effort average" - changes each month as more data comes in
