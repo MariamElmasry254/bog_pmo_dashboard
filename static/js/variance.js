@@ -1158,20 +1158,22 @@ async function profRecomputeAll(phaseKey) {
         const salesRes = await fetch('/api/sales-orders');
         if (salesRes.ok) {
           const salesData = await salesRes.json();
+          console.log('[Variance] sales-orders response ok:', !!salesData.ok,
+            'has invoices_by_phase:', !!salesData.invoices_by_phase,
+            'keys:', Object.keys(salesData.invoices_by_phase || {}));
           if (salesData.invoices_by_phase) {
             AppState._salesInvoicesByPhase = salesData.invoices_by_phase;
           }
         }
       }
+      console.log('[Variance] _salesInvoicesByPhase:', JSON.stringify(AppState._salesInvoicesByPhase)?.substring(0,200));
       if (AppState._salesInvoicesByPhase) {
         // Map variance tab → sales phase keys
         // BOG: development & consultation → 'development', support → 'support', license excluded
-        // Non-BOG: services → 'development', support → 'support'
+        // Non-BOG: services → 'services'/'development'/'consultation', support → 'support'
         const phaseMapping = {
           development:  ['development'],
           consultation: ['consultation'],
-          // non-BOG: services tab maps to both 'services' and 'development'/'consultation'
-          // (user may assign invoices as 'services' directly, or via SO line as 'development')
           services:     ['services', 'development', 'consultation'],
           support:      ['support'],
         };
