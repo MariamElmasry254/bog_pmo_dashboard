@@ -4,6 +4,7 @@ window.loadSalesOrders = async function() {
   // Use the sales panel directly — salesContent is inside it
   const panel = document.getElementById('sales');
   const cont  = document.getElementById('salesContent') || panel;
+  console.log('[Sales] panel=', panel, 'cont=', cont, 'salesContent=', document.getElementById('salesContent'));
   if (!cont) { console.error('No sales panel found'); return; }
   cont.innerHTML = '<div class="loading" style="padding:40px;text-align:center;">Loading Sales Orders from Odoo…</div>';
 
@@ -120,6 +121,7 @@ window.loadSalesOrders = async function() {
 
     html += `</tbody></table></div></div>`;
     cont.innerHTML = html;
+    console.log('[Sales] rendered html length=', html.length, 'cont.children=', cont.children.length);
 
   } catch(e) {
     cont.innerHTML = `<div class="banner banner-warn"><strong>Error:</strong> ${e.message}</div>`;
