@@ -351,17 +351,18 @@ async function loadOverviewKPIs() {
           });
         });
       }
-      // Tags sub-tabs
-      const tagSubTabs = document.querySelector('#tagsAnalysis .sub-tabs-bar');
-      if (tagSubTabs) {
-        tagSubTabs.innerHTML = `
-          <button class="sub-tab active" data-tagphase="services">Services</button>
-          <button class="sub-tab" data-tagphase="support">Support</button>`;
-        tagSubTabs.querySelectorAll('.sub-tab').forEach(b => {
+      // Tags sub-tabs — Services / Support for non-BOG
+      const tagSubTabsEl = document.getElementById('tagSubTabs');
+      if (tagSubTabsEl) {
+        tagSubTabsEl.innerHTML = `
+          <button class="sub-tab active" data-tagphase="services" id="tagTabSvc">Services</button>
+          <button class="sub-tab" data-tagphase="support" id="tagTabSup">Support</button>`;
+        tagSubTabsEl.querySelectorAll('.sub-tab').forEach(b => {
           b.addEventListener('click', () => {
             const ph = b.dataset.tagphase;
             AppState.currentTagPhase = ph;
-            tagSubTabs.querySelectorAll('.sub-tab').forEach(x =>
+            AppState.activeTagPhases = null;
+            tagSubTabsEl.querySelectorAll('.sub-tab').forEach(x =>
               x.classList.toggle('active', x.dataset.tagphase === ph));
             loadTagsAnalysis(ph);
           });
@@ -458,8 +459,8 @@ async function loadOverviewKPIs() {
     _loadPhaseRevenues();
 
     if (!_isBog) {
-      // Non-BOG: Progress/Remaining come from Variance profitability (_latestProfData)
-      // They get updated when user opens Variance tab via _overviewUpdateProfKPIs callback
+      // Non-BOG: load Progress/Remaining from DB (plan_overrides), update when Variance opens
+      _loadPhaseProgress();
       // Load Current Cost from effort API
       _loadPhaseCostKPIs();
     } else {
@@ -510,6 +511,34 @@ window.switchTeamTab = function(phase) {
   if (conBtn) conBtn.style.cssText = conBtn.style.cssText.replace(/background[^;]+;color[^;]+;/, '') + (phase==='consultation'?navy:idle);
   _loadTeamKPI(phase);
 };
+
+async function _loadPhaseProgress() {
+  try {
+    const res = await fetch('/api/overview/phase-progress');
+    if (!res.ok) return;
+    const d = await res.json();
+    const fmtN = n => n ? new Intl.NumberFormat('en-US',{maximumFractionDigits:1}).format(n) : '—';
+    const setEl = (id, val) => { const el=document.getElementById(id); if(el) el.textContent=val; };
+
+    // Map phase → element prefix: services→Con, support→Sup
+    const phaseMap = { services: 'Con', support: 'Sup', development: 'Dev', consultation: 'Con' };
+    for (const [phase, data] of Object.entries(d.phases || {})) {
+      if (!data.month_key) continue;
+      const pre = phaseMap[phase] || 'Con';
+      const pct = data.completion || 0;
+      setEl(`kpi${pre}Progress`,  pct > 0 ? fmtN(pct) : '—');
+      setEl(`kpi${pre}Remaining`, data.remaining > 0 ? fmtN(data.remaining) + ' MD' : '—');
+      const bar = document.getElementById(`kpi${pre}ProgressBar`);
+      if (bar) bar.style.width = Math.min(pct, 100) + '%';
+      // Show "as of YYYY-MM" footer
+      const card = document.getElementById(`kpi${pre}Progress`)?.closest('[style*="border-radius"]');
+      if (card) {
+        const foot = card.querySelector('.kpi-foot') || card.querySelector('[style*="font-size:11px"]');
+        if (foot) foot.textContent = `as of ${data.month_key}`;
+      }
+    }
+  } catch(e) { console.warn('Phase progress error:', e); }
+}
 
 async function _loadPhaseRevenues() {
   try {
