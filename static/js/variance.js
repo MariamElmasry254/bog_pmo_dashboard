@@ -1048,40 +1048,41 @@ async function profRecomputeAll(phaseKey) {
     return v;
   };
 
-  // ── 2. Estimated rows: cache → DB ──
-  const estRows = (_estPhase === phaseKey && _estRows?.length) ? _estRows : null;
-  if (estRows) {
-    let costUSD = 0;
-    estRows.forEach(r => {
-      const hr=parseFloat(r.hourRate)||0, at=parseFloat(r.actualTime)||0, em=parseFloat(r.estMonths)||0;
-      costUSD += hr*at*em; totalEstMDs += at*em/8;
-    });
-    totalEstCostSAR = costUSD * 3.75;
-  } else {
-    try {
-      const r = await fetch(`/api/estimated-rows?phase=${phaseKey}`);
-      if (r.ok) {
-        const d = await r.json();
-        let costUSD = 0;
-        (d.rows||[]).forEach(r => {
-          const hr=parseFloat(r.hourRate)||0, at=parseFloat(r.actualTime)||0, em=parseFloat(r.estMonths)||0;
-          costUSD += hr*at*em; totalEstMDs += at*em/8;
-        });
-        totalEstCostSAR = costUSD * 3.75;
-        if (!_estRows?.length) { _estRows = d.rows||[]; _estPhase = phaseKey; }
-      }
-    } catch(e) {}
+  // ── 2. Estimated rows: ALWAYS fetch fresh to ensure totalEstMDs/Cost are set ──
+  {
+    let rows = (_estPhase === phaseKey && _estRows?.length) ? _estRows : null;
+    if (!rows) {
+      try {
+        const r = await fetch(`/api/estimated-rows?phase=${phaseKey}`);
+        if (r.ok) {
+          const d = await r.json();
+          rows = d.rows || [];
+          if (rows.length) { _estRows = rows; _estPhase = phaseKey; }
+        }
+      } catch(e) {}
+    }
+    // Also try non-BOG summary
+    if ((!rows || !rows.length) && AppState._estSummary?.[phaseKey]) {
+      const s = AppState._estSummary[phaseKey];
+      totalEstMDs     = s.total_mds      || 0;
+      totalEstCostSAR = s.total_cost_sar || 0;
+    } else if (rows && rows.length) {
+      let costUSD = 0;
+      rows.forEach(r => {
+        const hr=parseFloat(r.hourRate)||0, at=parseFloat(r.actualTime)||0, em=parseFloat(r.estMonths)||0;
+        costUSD += hr*at*em; totalEstMDs += at*em/8;
+      });
+      totalEstCostSAR = costUSD * 3.75;
+    }
   }
 
-  // Ensure approvedMDsBase fallback uses totalEstMDs if AppState not loaded yet
-  if (!AppState._budgetApprovedMDs?.[phaseKey] && totalEstMDs > 0) {
-    if (!AppState._budgetApprovedMDs) AppState._budgetApprovedMDs = {};
-    AppState._budgetApprovedMDs[phaseKey] = totalEstMDs;
-  }
-  if (!AppState._budgetFinalCost?.[phaseKey] && totalEstCostSAR > 0) {
-    if (!AppState._budgetFinalCost) AppState._budgetFinalCost = {};
-    AppState._budgetFinalCost[phaseKey] = totalEstCostSAR;
-  }
+  // Fallback to AppState budget values if still 0
+  if (totalEstMDs === 0)     totalEstMDs     = AppState._budgetApprovedMDs?.[phaseKey] || 0;
+  if (totalEstCostSAR === 0) totalEstCostSAR = AppState._budgetFinalCost?.[phaseKey]   || 0;
+
+  // Save back to AppState
+  if (totalEstMDs > 0)     { if(!AppState._budgetApprovedMDs) AppState._budgetApprovedMDs={}; AppState._budgetApprovedMDs[phaseKey]=totalEstMDs; }
+  if (totalEstCostSAR > 0) { if(!AppState._budgetFinalCost)   AppState._budgetFinalCost={};   AppState._budgetFinalCost[phaseKey]=totalEstCostSAR; }
 
   // ── 3. Effort MDs + Costs: AppState → API ──
   let effortMDs = AppState._effortMonthMDs?.[phaseKey];
@@ -1184,7 +1185,6 @@ async function profRecomputeAll(phaseKey) {
     const remInp  = tr.querySelector('.remaining-input');
     const completionPct = parseFloat(compInp?.value) || 0;
     const remainingMDs  = parseFloat(remInp?.value)  || 0;
-    if (rowIdx <= 2) console.log(`[row ${monthKey}] compInp.value="${compInp?.value}" → pct=${completionPct}, rem=${remainingMDs}, actualMDs=${actualMDs}, totalEstMDs=${totalEstMDs}, totalEstCostSAR=${totalEstCostSAR}`);
 
     // Current Cost = cumulative cost from effort (SAR)
     let accCostUSD = 0;
