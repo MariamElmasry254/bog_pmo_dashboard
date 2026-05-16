@@ -74,8 +74,15 @@ async function loadTagsAnalysis() {
     if (!AppState.activeTagPhases) AppState.activeTagPhases = d.phases_active || [];
 
     const isBogTags = AppState._overviewData?.is_bog !== false;
-    renderTagPhaseFilters(phaseGroup, isBogTags ? (d.phases_available || []) : []);
-    if (!isBogTags) AppState.activeTagPhases = null;
+    // Show phases dropdown for all projects (non-BOG gets filtered phases from backend)
+    renderTagPhaseFilters(phaseGroup, d.phases_available || []);
+    if (!isBogTags && (!d.phases_available || !d.phases_available.length)) {
+      AppState.activeTagPhases = null;
+    } else if (!isBogTags && d.phases_available?.length) {
+      if (!AppState.activeTagPhases || AppState.activeTagPhases.length === 0) {
+        AppState.activeTagPhases = [...d.phases_available];
+      }
+    }
 
     if (!d.tags || !d.tags.length) {
       cont.innerHTML = '<div class="card"><div class="loading">No tagged tasks found in this phase.</div></div>';
@@ -448,18 +455,23 @@ async function loadOverviewKPIs() {
     // Phase revenues from Final Budget (async, non-blocking)
     _loadPhaseRevenues();
 
-    // Phase progress + remaining MDs
-    // development
-    set('kpiDevProgress',  d.progress_pct || '—');
-    set('kpiDevRemaining', d.remaining_mds !== undefined ? fmt.decimal(d.remaining_mds) + ' MD' : '—');
-    const devBar = document.getElementById('kpiDevProgressBar');
-    if (devBar) devBar.style.width = Math.min(100, d.progress_pct || 0) + '%';
+    if (!_isBog) {
+      // Non-BOG: Progress/Remaining come from Variance profitability (_latestProfData)
+      // They get updated when user opens Variance tab via _overviewUpdateProfKPIs callback
+      // Load Current Cost from effort API
+      _loadPhaseCostKPIs();
+    } else {
+      // BOG: Phase progress from API
+      set('kpiDevProgress',  d.progress_pct || '—');
+      set('kpiDevRemaining', d.remaining_mds !== undefined ? fmt.decimal(d.remaining_mds) + ' MD' : '—');
+      const devBar = document.getElementById('kpiDevProgressBar');
+      if (devBar) devBar.style.width = Math.min(100, d.progress_pct || 0) + '%';
 
-    // consultation — separate plan_overrides read on backend
-    set('kpiConProgress',  d.con_progress_pct  !== undefined ? d.con_progress_pct  : '—');
-    set('kpiConRemaining', d.con_remaining_mds !== undefined ? fmt.decimal(d.con_remaining_mds) + ' MD' : '—');
-    const conBar = document.getElementById('kpiConProgressBar');
-    if (conBar) conBar.style.width = Math.min(100, d.con_progress_pct || 0) + '%';
+      set('kpiConProgress',  d.con_progress_pct  !== undefined ? d.con_progress_pct  : '—');
+      set('kpiConRemaining', d.con_remaining_mds !== undefined ? fmt.decimal(d.con_remaining_mds) + ' MD' : '—');
+      const conBar = document.getElementById('kpiConProgressBar');
+      if (conBar) conBar.style.width = Math.min(100, d.con_progress_pct || 0) + '%';
+    }
 
   } catch(e) { console.error('Overview KPIs error:', e); }
 
@@ -796,9 +808,18 @@ async function loadTaskAnalysis(phaseGroup) {
     if (!AppState.activeEmployees) AppState.activeEmployees = [];
 
     const isBogTA = AppState._overviewData?.is_bog !== false;
-    renderPhaseFilters(phaseGroup, isBogTA ? (d.phases_available || []) : []);
-    // Non-BOG: no phase filter → show all tasks (activePhases=null means no filter)
-    if (!isBogTA) AppState.activePhases = null;
+    // For non-BOG: show available phases in dropdown (filtered by services/support on backend)
+    // For BOG: show all phases
+    renderPhaseFilters(phaseGroup, d.phases_available || []);
+    if (!isBogTA && (!d.phases_available || !d.phases_available.length)) {
+      // No phases returned from backend — show all tasks
+      AppState.activePhases = null;
+    } else if (!isBogTA && d.phases_available?.length) {
+      // Pre-select all available phases
+      if (!AppState.activePhases || AppState.activePhases.length === 0) {
+        AppState.activePhases = [...d.phases_available];
+      }
+    }
     renderEmployeeFilter(d.employees_available || []);
     populateStageFilter(d.stages_used || []);
     renderTaskList(phaseGroup);
