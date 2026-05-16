@@ -409,9 +409,6 @@ function renderDirectInvoices(invoices, note, summary) {
     ? ['development','consultation','support','license']
     : ['services','support','license'];
 
-  // Show only posted invoices in the UI (draft excluded)
-  invoices = invoices.filter(i => i.state === 'posted');
-
   // Group by phase
   const groups = {};
   invoices.forEach((inv,i) => {
@@ -487,47 +484,31 @@ function renderDirectInvoices(invoices, note, summary) {
   return html;
 }
 
-window.reclassifyDirectInv = function(idx, newPhase) {
+window.reclassifyDirectInv = async function(idx, newPhase) {
   if (!window._directInvoices) return;
   const inv = window._directInvoices[idx];
   inv.phase = newPhase;
 
-  // Save to DB: use invoice name as key
-  fetch('/api/plan-overrides', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({
-      phase: 'direct_inv_phase',
-      month_key: inv.name.replace(/\//g,'_'),
-      field: 'phase',
-      value: newPhase
-    })
-  }).catch(()=>{});
-
-  // Rebuild AppState._salesInvoicesByPhase from all direct invoices
-  const newByPhase = {};
-  window._directInvoices.forEach(i => {
-    if (i.state !== 'posted') return;
-    const ph = i.phase || 'services';
-    const mk = (i.date||'').substring(0,7);
-    if (!mk) return;
-    if (!newByPhase[ph]) newByPhase[ph] = {};
-    newByPhase[ph][mk] = (newByPhase[ph][mk] || 0) + i.amount_untaxed;
-  });
-  // Build cumulative structure matching API format: {YYYY-MM: {month, cumulative}}
-  const byPhaseCum = {};
-  Object.keys(newByPhase).forEach(ph => {
-    let running = 0;
-    byPhaseCum[ph] = {};
-    Object.keys(newByPhase[ph]).sort().forEach(mk => {
-      running += newByPhase[ph][mk];
-      byPhaseCum[ph][mk] = {month: newByPhase[ph][mk], cumulative: running};
+  // Save to DB: use invoice name as key — await so we know it's persisted before reload
+  try {
+    await fetch('/api/plan-overrides', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        phase: 'direct_inv_phase',
+        month_key: inv.name.replace(/\//g,'_'),
+        field: 'phase',
+        value: newPhase
+      })
     });
-  });
-  window.AppState._salesInvoicesByPhase = byPhaseCum;
-  // Clear invoice cumulative cache
-  if (window.AppState._invoiceCumulative) window.AppState._invoiceCumulative = {};
-  // Re-render
-  const cont = document.getElementById('salesContent') || document.getElementById('sales');
-  if (cont) cont.innerHTML = renderDirectInvoices(window._directInvoices, '', {});
+  } catch(e) { console.warn('Save phase override failed:', e); }
+
+  // Clear cached sales data so Variance tab reloads with new mapping
+  if (window.AppState) {
+    window.AppState._salesInvoicesByPhase = null;
+    window.AppState._invoiceCumulative    = {};
+  }
+
+  // Reload full sales tab from backend (picks up DB-persisted phases)
+  if (window.loadSalesOrders) await loadSalesOrders();
 };
