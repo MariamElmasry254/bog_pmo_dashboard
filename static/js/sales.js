@@ -74,9 +74,36 @@ window.loadSalesOrders = async function() {
 
     window._salesPhaseFilter = null; // null = all
 
-    // KPI strip
+    // KPI strip + per-SO breakdown
+    const soBreakdownRows = d.orders.map(o => {
+      const invPct = o.amount_untaxed > 0 ? (o.invoiced_amt / o.amount_untaxed * 100) : 0;
+      const barW   = Math.min(100, invPct).toFixed(0);
+      const remColor = o.remaining > 0 ? '#D97706' : '#059669';
+      const stLabel  = o.state === 'sale' ? 'Confirmed' : o.state === 'done' ? 'Done' : o.state === 'draft' ? 'Draft' : o.state;
+      const stColor  = o.state === 'sale' ? '#059669'  : o.state === 'done' ? '#3B82F6' : '#9CA3AF';
+      return `<div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border);">
+        <div style="min-width:90px;">
+          <div style="font-size:12px;font-weight:700;color:var(--navy);">${o.name}</div>
+          <div style="font-size:10px;font-weight:600;color:${stColor};">${stLabel}</div>
+        </div>
+        <div style="flex:1;min-width:100px;">
+          <div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:3px;">
+            <span style="color:var(--text-muted);">${fSAR(o.amount_untaxed)} SAR</span>
+            <span style="color:#059669;font-weight:600;">${fSAR(o.invoiced_amt)} inv</span>
+          </div>
+          <div style="height:6px;background:#F3F4F6;border-radius:3px;">
+            <div style="width:${barW}%;height:100%;background:#059669;border-radius:3px;transition:width .3s;"></div>
+          </div>
+        </div>
+        <div style="text-align:right;min-width:90px;">
+          <div style="font-size:11px;font-weight:700;color:${remColor};">${fSAR(o.remaining)} rem</div>
+          <div style="font-size:10px;color:var(--text-muted);">${fPct(invPct)} invoiced</div>
+        </div>
+      </div>`;
+    }).join('');
+
     let html = `
-      <div class="kpi-strip kpi-strip-small" style="margin-bottom:20px;">
+      <div class="kpi-strip kpi-strip-small" style="margin-bottom:16px;flex-wrap:wrap;">
         <div class="kpi-card kpi-navy compact">
           <div class="kpi-label">TOTAL ORDERS</div>
           <div class="kpi-value">${s.total_orders}</div>
@@ -87,7 +114,7 @@ window.loadSalesOrders = async function() {
           <div class="kpi-foot">SAR</div>
         </div>
         <div class="kpi-card kpi-green compact">
-          <div class="kpi-label">TOTAL INVOICED</div>
+          <div class="kpi-label">TOTAL INVOICED (excl. VAT)</div>
           <div class="kpi-value">${fSAR(s.total_invoiced)}</div>
           <div class="kpi-foot">${fPct(s.overall_invoiced_pct)} of total</div>
         </div>
@@ -95,6 +122,20 @@ window.loadSalesOrders = async function() {
           <div class="kpi-label">REMAINING</div>
           <div class="kpi-value">${fSAR(s.total_remaining)}</div>
           <div class="kpi-foot">SAR</div>
+        </div>
+      </div>
+      <!-- Per-SO breakdown -->
+      <div class="card" style="margin-bottom:18px;padding:14px 18px;">
+        <div style="font-size:11px;font-weight:700;color:var(--text-muted);letter-spacing:.5px;text-transform:uppercase;margin-bottom:12px;">
+          Sales Orders — Value vs Invoiced (excl. VAT)
+        </div>
+        ${soBreakdownRows}
+        <div style="display:flex;gap:24px;align-items:center;margin-top:10px;padding-top:10px;border-top:2px solid var(--navy);">
+          <span style="font-size:12px;font-weight:700;color:var(--navy);">TOTAL</span>
+          <span style="font-size:12px;color:var(--text-muted);">Value: <b>${fSAR(s.total_untaxed)}</b> SAR</span>
+          <span style="font-size:12px;color:#059669;">Invoiced: <b>${fSAR(s.total_invoiced)}</b> SAR</span>
+          <span style="font-size:12px;color:#D97706;">Remaining: <b>${fSAR(s.total_remaining)}</b> SAR</span>
+          <span style="font-size:11px;color:var(--text-muted);margin-left:auto;">${fPct(s.overall_invoiced_pct)} invoiced</span>
         </div>
       </div>`;
 
