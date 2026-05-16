@@ -802,15 +802,18 @@ async function _loadModalTeamTab(phase) {
       if (e.is_onsite_row || e.onsite) return false;
       return true;
     });
-    // Check if effort returned employees but no support phases exist
     const isBogModal = AppState._overviewData?.is_bog !== false;
-    if (!isBogModal && (phase === 'support') && employees.length === 0) {
-      cont.innerHTML = `<div style="text-align:center;padding:24px;color:var(--text-muted);">
-        <div style="font-size:24px;margin-bottom:8px;">📭</div>
-        <div style="font-size:13px;font-weight:600;">No Support phases found in this project</div>
-        <div style="font-size:11px;margin-top:6px;">Tasks are not assigned to phases with support/operation/دعم keywords</div>
-      </div>`;
-      return;
+    // Non-BOG support with no data → show message
+    if (!isBogModal && phase === 'support' && !team.length) {
+      const cfg = await fetch('/api/project-phases-available').then(r=>r.json()).catch(()=>({}));
+      if (!cfg.has_support) {
+        cont.innerHTML = `<div style="text-align:center;padding:24px;color:var(--text-muted);">
+          <div style="font-size:24px;margin-bottom:8px;">📭</div>
+          <div style="font-size:13px;font-weight:600;">No Support phases in this project</div>
+          <div style="font-size:11px;margin-top:6px;">All team members are shown under Services</div>
+        </div>`;
+        return;
+      }
     }
     if (!team.length) { cont.innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:8px 0;">No members found for this phase.</p>'; return; }
     cont.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;">
