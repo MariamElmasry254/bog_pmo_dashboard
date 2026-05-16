@@ -7814,7 +7814,7 @@ def api_sales_orders():
                         ODOO_DB, odoo.uid, ODOO_PASSWORD,
                         'account.move', 'search_read',
                         [[('move_type', '=', 'out_invoice'),
-                          ('state', 'in', ['posted', 'draft']),
+                          ('state', '=', 'posted'),
                           ('invoice_line_ids.analytic_account_id', '=', analytic_account_id)]],
                         {'fields': ['id', 'name', 'invoice_date', 'invoice_date_due',
                                     'amount_untaxed', 'amount_tax', 'amount_total',
@@ -7869,10 +7869,33 @@ def api_sales_orders():
             } for i in direct_invoices]
 
             total_inv = sum(i['amount_untaxed'] for i in inv_list if i['state']=='posted')
+
+            # Build invoices_by_phase cumulative for direct invoices (used by Variance tab)
+            dir_inv_by_phase = {}
+            for i in inv_list:
+                if i['state'] != 'posted':
+                    continue
+                ph  = i['phase']
+                mk  = (i['date'] or '')[:7]
+                if not mk:
+                    continue
+                if ph not in dir_inv_by_phase:
+                    dir_inv_by_phase[ph] = {}
+                dir_inv_by_phase[ph][mk] = dir_inv_by_phase[ph].get(mk, 0) + i['amount_untaxed']
+            dir_inv_by_phase_cum = {}
+            for ph, monthly in dir_inv_by_phase.items():
+                running = 0
+                cum = {}
+                for mk in sorted(monthly.keys()):
+                    running += monthly[mk]
+                    cum[mk] = {'month': monthly[mk], 'cumulative': round(running, 2)}
+                dir_inv_by_phase_cum[ph] = cum
+
             return jsonify({'ok': True, 'orders': [], 'direct_invoices': inv_list,
                            'summary': {'total_orders': 0, 'total_untaxed': 0,
                                        'total_invoiced': round(total_inv,2),
                                        'total_remaining': 0, 'overall_invoiced_pct': 0},
+                           'invoices_by_phase': dir_inv_by_phase_cum,
                            'note': f'No sales orders found. Showing {len(inv_list)} direct invoices.'})
 
         so_ids = [s['id'] for s in sos]
@@ -7900,7 +7923,7 @@ def api_sales_orders():
                 ODOO_DB, odoo.uid, ODOO_PASSWORD,
                 'account.move', 'search_read',
                 [[('move_type', '=', 'out_invoice'),
-                  ('state', 'in', ['posted', 'draft']),
+                  ('state', '=', 'posted'),
                   ('invoice_line_ids.sale_line_ids.order_id', 'in', so_ids)]],
                 {'fields': ['id', 'name', 'invoice_date', 'invoice_date_due',
                             'amount_untaxed', 'amount_tax', 'amount_total',
