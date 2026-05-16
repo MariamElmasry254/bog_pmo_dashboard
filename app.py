@@ -4780,7 +4780,7 @@ def get_phase_mapping():
     return {'services': [], 'support': []}
 
 
-SUPPORT_KWS = ['support', 'operation', 'maintenance', 'hypercare', 'دعم', 'الدعم', 'دعم فني', 'تشغيل']
+SUPPORT_KWS = ['support', 'operation', 'maintenance', 'hypercare', 'production', 'production activities', 'دعم', 'الدعم', 'دعم فني', 'تشغيل']
 
 def auto_detect_phases_for_project(project_id, phase_key):
     """For non-BOG projects: tasks have no phase_id, only stage_id (Kanban).
