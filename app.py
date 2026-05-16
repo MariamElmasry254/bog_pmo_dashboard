@@ -7791,8 +7791,57 @@ def api_sales_orders():
         except Exception as e:
             logger.warning(f"SO by analytic_account_id failed: {e}")
 
+        # Fallback: try SO by project_id field
         if not sos:
-            return jsonify({'ok': True, 'orders': [], 'summary': {}})
+            try:
+                sos = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'sale.order', 'search_read',
+                    [[('project_id', 'in', project_ids)]],
+                    {'fields': ['id', 'name', 'partner_id', 'date_order', 'state',
+                                'amount_untaxed', 'amount_tax', 'amount_total',
+                                'invoice_status', 'currency_id', 'order_line'], 'limit': 500}
+                )
+                logger.info(f"SOs by project_id field: {len(sos)}")
+            except Exception as _e: logger.warning(f"SO by project_id: {_e}")
+
+        # No SOs → fetch direct invoices by analytic account
+        if not sos:
+            direct_invoices = []
+            if analytic_account_id:
+                try:
+                    direct_invoices = odoo.models.execute_kw(
+                        ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                        'account.move', 'search_read',
+                        [[('move_type', '=', 'out_invoice'),
+                          ('state', 'in', ['posted', 'draft']),
+                          ('invoice_line_ids.analytic_account_id', '=', analytic_account_id)]],
+                        {'fields': ['id', 'name', 'invoice_date', 'invoice_date_due',
+                                    'amount_untaxed', 'amount_tax', 'amount_total',
+                                    'state', 'invoice_origin', 'payment_state',
+                                    'narration', 'purpose', 'ref'],
+                         'limit': 200, 'order': 'invoice_date asc'}
+                    )
+                except Exception as _e: logger.warning(f"Direct invoices: {_e}")
+
+            inv_list = [{
+                'name':          i['name'],
+                'date':          (i.get('invoice_date') or '')[:10],
+                'due_date':      (i.get('invoice_date_due') or '')[:10],
+                'amount_untaxed': round(i.get('amount_untaxed',0), 2),
+                'amount_tax':    round(i.get('amount_tax',0), 2),
+                'amount_total':  round(i.get('amount_total',0), 2),
+                'state':         i.get('state',''),
+                'payment_state': i.get('payment_state',''),
+                'purpose':       i.get('narration') or i.get('purpose') or i.get('ref') or '',
+            } for i in direct_invoices]
+
+            total_inv = sum(i['amount_untaxed'] for i in inv_list if i['state']=='posted')
+            return jsonify({'ok': True, 'orders': [], 'direct_invoices': inv_list,
+                           'summary': {'total_orders': 0, 'total_untaxed': 0,
+                                       'total_invoiced': round(total_inv,2),
+                                       'total_remaining': 0, 'overall_invoiced_pct': 0},
+                           'note': f'No sales orders found. Showing {len(inv_list)} direct invoices.'})
 
         so_ids = [s['id'] for s in sos]
 
@@ -7984,6 +8033,9 @@ def api_sales_orders():
                     mid = li.get('move_id')
                     if mid and mid not in inv_phase_map:
                         inv_phase_map[mid] = lp
+
+        logger.info(f"line_var_map from DB: {line_var_map}")
+        logger.info(f"inv_phase_map: {inv_phase_map}")
 
         # Step 2: Accumulate FULL invoice amount_untaxed per phase per month
         processed_invs = set()
