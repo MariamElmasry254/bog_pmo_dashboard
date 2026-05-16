@@ -297,7 +297,12 @@ function renderBudget(data, phaseKey) {
       <div class="kpi-card kpi-blue compact">
         <div class="kpi-label">PRESALES MDs</div>
         <div class="kpi-value" id="kpi-mds-${phaseKey}">${fmt.num(a.total_mandays || 0)}</div>
-        <div class="kpi-foot">from Estimated Cost</div>
+        <div class="kpi-foot" id="kpi-mds-foot-${phaseKey}">approved</div>
+      </div>
+      <div class="kpi-card kpi-blue compact">
+        <div class="kpi-label">FINAL MDs</div>
+        <div class="kpi-value" id="kpi-mds-final-${phaseKey}">—</div>
+        <div class="kpi-foot">after changes</div>
       </div>
       <div class="kpi-card kpi-navy compact">
         <div class="kpi-label">REVENUE (FINAL)</div>
@@ -717,7 +722,10 @@ function budgetAutoCalc(phaseKey) {
       }).catch(()=>{});
     }
   }
+  const deltaMDsTotal = changes.reduce((s,c) => s + (parseFloat(c.delta_mds)||0), 0);
+  const finMDs = mds + deltaMDsTotal;
   setEl(`kpi-mds-${phaseKey}`,       mds > 0 ? fmt.num(Math.round(mds)) : '—');
+  setEl(`kpi-mds-final-${phaseKey}`, finMDs > 0 ? fmt.num(Math.round(finMDs)) : '—');
   setEl(`kpi-rev-${phaseKey}`,       finRevSAR > 0 ? fmt.money(Math.round(finRevSAR)) : '—');
   setEl(`kpi-cost-${phaseKey}`,      finCostSAR > 0 ? fmt.money(Math.round(finCostSAR)) : (costSAR > 0 ? fmt.money(Math.round(costSAR)) : '—'));
   setEl(`kpi-final-pct-${phaseKey}`, finRevSAR > 0 ? fmt.decimal(finProfitPct)+'%' : '—', profColor(finProfitPct));
@@ -727,7 +735,9 @@ function budgetAutoCalc(phaseKey) {
   if (!AppState._budgetFinalCost)   AppState._budgetFinalCost   = {};
   if (!AppState._budgetPresalesMDs) AppState._budgetPresalesMDs = {};
   AppState._budgetFinalCost[phaseKey]   = finCostSAR || costSAR;
-  AppState._budgetPresalesMDs[phaseKey] = mds;
+  AppState._budgetPresalesMDs[phaseKey] = mds;       // approved MDs
+  if (!AppState._budgetFinalMDs) AppState._budgetFinalMDs = {};
+  AppState._budgetFinalMDs[phaseKey] = finMDs;       // final MDs after all changes
 }
 
 // Wire up auto-save for budget inputs
