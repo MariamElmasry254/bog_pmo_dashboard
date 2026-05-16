@@ -431,10 +431,12 @@ async function loadOverviewKPIs() {
                 <div id="kpiSupProgressBar" style="height:100%;background:var(--amber);border-radius:3px;width:0%;transition:width .6s;"></div>
               </div>
               <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);">
-                <span>Remaining MDs</span>
+                <span id="kpiSupProgressFoot" style="font-size:11px;color:var(--muted);">Remaining MDs</span>
                 <span style="font-size:13px;font-weight:700;color:var(--text);" id="kpiSupRemaining">—</span>
               </div>`;
             progressRow.appendChild(card);
+            // Re-run phase progress to fill Support card now that element exists
+            setTimeout(_loadPhaseProgress, 100);
           }
         }
       }).catch(()=>{});
@@ -530,12 +532,9 @@ async function _loadPhaseProgress() {
       setEl(`kpi${pre}Remaining`, data.remaining > 0 ? fmtN(data.remaining) + ' MD' : '—');
       const bar = document.getElementById(`kpi${pre}ProgressBar`);
       if (bar) bar.style.width = Math.min(pct, 100) + '%';
-      // Show "as of YYYY-MM" footer
-      const card = document.getElementById(`kpi${pre}Progress`)?.closest('[style*="border-radius"]');
-      if (card) {
-        const foot = card.querySelector('.kpi-foot') || card.querySelector('[style*="font-size:11px"]');
-        if (foot) foot.textContent = `as of ${data.month_key}`;
-      }
+      // Show "as of YYYY-MM" footer using ID
+      const footEl = document.getElementById(`kpi${pre}ProgressFoot`);
+      if (footEl) footEl.textContent = `as of ${data.month_key}`;
     }
   } catch(e) { console.warn('Phase progress error:', e); }
 }
