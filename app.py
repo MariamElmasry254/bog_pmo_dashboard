@@ -7932,7 +7932,55 @@ def api_sales_orders():
             'overall_invoiced_pct': round(total_invoiced / total_untaxed * 100, 1) if total_untaxed else 0,
         }
 
-        return jsonify({'ok': True, 'orders': orders, 'summary': summary})
+        # Build invoices_by_phase: for each order line product → group invoices by month
+        # Phase detection: match product name against SUPPORT_KWS
+        invoices_by_phase = {}  # { phase_key: { 'YYYY-MM': amount_excl_vat } }
+
+        # Build invoice date lookup
+        inv_date_map = {}  # move_id → invoice_date
+        for inv in invoices_raw:
+            inv_date_map[inv['id']] = (inv.get('invoice_date') or '')[:7]  # YYYY-MM
+
+        for order in orders:
+            for line in order.get('lines', []):
+                prod_name = ''
+                if isinstance(line.get('product_id'), list):
+                    prod_name = line['product_id'][1] if len(line['product_id']) > 1 else ''
+                elif line.get('name'):
+                    prod_name = line['name']
+
+                # Determine phase from product name
+                prod_lower = prod_name.lower()
+                if any(kw in prod_lower for kw in SUPPORT_KWS):
+                    phase_key = 'support'
+                elif 'license' in prod_lower:
+                    phase_key = 'license'
+                else:
+                    phase_key = 'services'
+
+                if phase_key not in invoices_by_phase:
+                    invoices_by_phase[phase_key] = {}
+
+                for li in line.get('line_invoices', []):
+                    move_id = li.get('move_id')
+                    month = inv_date_map.get(move_id, '')
+                    if month:
+                        invoices_by_phase[phase_key][month] = (
+                            invoices_by_phase[phase_key].get(month, 0) + (li.get('amount') or 0)
+                        )
+
+        # Build cumulative per phase
+        invoices_by_phase_cumulative = {}
+        for phase_key, monthly in invoices_by_phase.items():
+            cumulative = {}
+            running = 0
+            for month in sorted(monthly.keys()):
+                running += monthly[month]
+                cumulative[month] = {'month': monthly[month], 'cumulative': round(running, 2)}
+            invoices_by_phase_cumulative[phase_key] = cumulative
+
+        return jsonify({'ok': True, 'orders': orders, 'summary': summary,
+                        'invoices_by_phase': invoices_by_phase_cumulative})
 
     except Exception as e:
         import traceback
