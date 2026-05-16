@@ -4228,7 +4228,9 @@ def api_overview_financials():
     Revenue = approved.revenue_sar + sum of delta_rev from budget_changes.
     Uses same logic as budgetAutoCalc in variance.js.
     """
-    phases = ['development', 'consultation', 'support']
+    _proj_id_fin = session.get('project_id')
+    _is_bog_fin  = not _proj_id_fin or str(_proj_id_fin) == '228'
+    phases = ['development', 'consultation', 'support'] if _is_bog_fin else ['services', 'support']
     result = {}
     total_rev = 0.0
     for phase in phases:
