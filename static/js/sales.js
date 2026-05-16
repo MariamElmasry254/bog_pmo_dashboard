@@ -400,9 +400,11 @@ window.setSoLineVarTab = function(lineId, varTab) {
     headers: {'Content-Type':'application/json'},
     body: JSON.stringify({phase: 'so_line_map', month_key: String(lineId), field: 'var_tab', value: varTab})
   }).catch(()=>{});
-  // Reset invoice cache so profitability reloads with new mapping
-  if (window.AppState._invoiceCumulative) delete window.AppState._invoiceCumulative[varTab];
-  if (window.AppState._salesInvoicesByPhase) window.AppState._salesInvoicesByPhase = null;
+  // Clear full invoice cache so profitability reloads with new mapping from API
+  if (window.AppState) {
+    window.AppState._invoiceCumulative    = {};
+    window.AppState._salesInvoicesByPhase = null;
+  }
 };
 
 
