@@ -980,12 +980,23 @@ async function _doBuildProfTable(phaseKey, wrap, months) {
   `;
 
   wrap.innerHTML = tableHtml;
+  // Set input values from saved overrides explicitly (HTML value attr may not set DOM value)
+  const savedOvs = (AppState.planOverrides?.[phaseKey]) || {};
+  document.querySelectorAll(`#profit-table-${phaseKey} tr[data-month-key]`).forEach(tr => {
+    const mk = tr.dataset.monthKey;
+    const mo = savedOvs[mk] || {};
+    const compInp = tr.querySelector('.completion-input');
+    const remInp  = tr.querySelector('.remaining-input');
+    if (compInp && mo.completion !== undefined) compInp.value = parseFloat(mo.completion).toFixed(2);
+    if (remInp  && mo.remaining  !== undefined) remInp.value  = parseFloat(mo.remaining).toFixed(2);
+  });
+
   // Auto-fill remaining MDs from Tasks Analysis if available
   const taskRemMD = AppState._taskRemainingMDs && AppState._taskRemainingMDs[phaseKey];
   if (taskRemMD) {
-    profFillFromTasks(phaseKey);
+    setTimeout(() => profFillFromTasks(phaseKey), 50);
   } else {
-    profRecomputeAll(phaseKey);
+    setTimeout(() => profRecomputeAll(phaseKey), 50);
   }
 }
 
@@ -1186,14 +1197,7 @@ async function profRecomputeAll(phaseKey) {
     // Expected Overrun = (Actual/EstMDs) / (%Comp/100) - 1
     const expectedOverrun = (completionPct > 0 && totalEstMDs > 0 && actualMDs > 0)
       ? (actualMDs / totalEstMDs) / (completionPct / 100) - 1 : null;
-    if (monthKey === months[0]?.key) {
-      console.log(`[Prof Debug] phase=${phaseKey} month=${monthKey}`, {
-        completionPct, actualMDs, totalEstMDs, totalEstCostSAR,
-        currentCostSAR, remainingMDs, expectedOverrun,
-        approvedMDsBase: AppState._budgetApprovedMDs?.[phaseKey],
-        approvedCostBase: AppState._budgetFinalCost?.[phaseKey],
-      });
-    }
+
 
     // Avg cost per MD for this month = Current Cost SAR / Actual MDs to Date (running)
     // This is the "current effort average" - changes each month as more data comes in
