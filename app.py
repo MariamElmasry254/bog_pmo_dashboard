@@ -7717,6 +7717,170 @@ def debug():
 
     return jsonify(info)
 
+
+@app.route('/api/sales-orders')
+def api_sales_orders():
+    """Return all sale orders for current project with amounts, delivery %, and invoices."""
+    try:
+        if not odoo.uid: odoo.connect()
+        _proj_name = active_project_name()
+        _proj_id   = session.get('project_id')
+
+        # Find project in Odoo
+        projects = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.project', 'search_read',
+            [[('name', 'ilike', _proj_name)]],
+            {'fields': ['id', 'name'], 'limit': 5}
+        )
+        if not projects:
+            return jsonify({'ok': True, 'orders': [], 'summary': {}})
+
+        project_ids = [p['id'] for p in projects]
+
+        # Get sale orders linked to project
+        sos = []
+        try:
+            sos = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'sale.order', 'search_read',
+                [[('project_ids', 'in', project_ids)]],
+                {'fields': ['id', 'name', 'partner_id', 'date_order', 'state',
+                            'amount_untaxed', 'amount_tax', 'amount_total',
+                            'invoice_status', 'currency_id',
+                            'order_line'], 'limit': 200}
+            )
+        except Exception as e:
+            logger.warning(f"SO by project_ids failed: {e}")
+            # Fallback: search by analytic account
+            try:
+                sos = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'sale.order', 'search_read',
+                    [[('analytic_account_id.name', 'ilike', _proj_name)]],
+                    {'fields': ['id', 'name', 'partner_id', 'date_order', 'state',
+                                'amount_untaxed', 'amount_tax', 'amount_total',
+                                'invoice_status', 'currency_id', 'order_line'], 'limit': 200}
+                )
+            except Exception as e2:
+                logger.warning(f"SO fallback failed: {e2}")
+
+        if not sos:
+            return jsonify({'ok': True, 'orders': [], 'summary': {}})
+
+        so_ids = [s['id'] for s in sos]
+
+        # Get order lines for qty delivered/invoiced
+        all_line_ids = [lid for s in sos for lid in (s.get('order_line') or [])]
+        line_map = {}
+        if all_line_ids:
+            lines = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'sale.order.line', 'read',
+                [all_line_ids],
+                {'fields': ['id', 'order_id', 'name', 'product_id',
+                            'product_uom_qty', 'qty_delivered', 'qty_invoiced',
+                            'price_unit', 'price_subtotal', 'discount']}
+            )
+            for l in lines:
+                oid = l['order_id'][0] if isinstance(l['order_id'], list) else l['order_id']
+                line_map.setdefault(oid, []).append(l)
+
+        # Get invoices for these SOs
+        invoices_raw = []
+        try:
+            invoices_raw = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'account.move', 'search_read',
+                [[('move_type', '=', 'out_invoice'),
+                  ('state', 'in', ['posted', 'draft']),
+                  ('invoice_line_ids.sale_line_ids.order_id', 'in', so_ids)]],
+                {'fields': ['id', 'name', 'invoice_date', 'invoice_date_due',
+                            'amount_untaxed', 'amount_tax', 'amount_total',
+                            'state', 'invoice_origin', 'payment_state'],
+                 'limit': 500, 'order': 'invoice_date asc'}
+            )
+        except Exception as e:
+            logger.warning(f"Invoice fetch failed: {e}")
+
+        # Build invoice map by SO name
+        inv_by_so = {}
+        for inv in invoices_raw:
+            origin = inv.get('invoice_origin') or ''
+            for s in sos:
+                if s['name'] in origin:
+                    inv_by_so.setdefault(s['id'], []).append({
+                        'name':          inv['name'],
+                        'date':          inv.get('invoice_date') or '',
+                        'due_date':      inv.get('invoice_date_due') or '',
+                        'amount_untaxed': inv.get('amount_untaxed') or 0,
+                        'amount_tax':    inv.get('amount_tax') or 0,
+                        'amount_total':  inv.get('amount_total') or 0,
+                        'state':         inv.get('state') or '',
+                        'payment_state': inv.get('payment_state') or '',
+                    })
+
+        # Build orders list
+        orders = []
+        total_untaxed = 0
+        total_invoiced = 0
+        total_delivered_pct = 0
+
+        for s in sos:
+            lines = line_map.get(s['id'], [])
+            untaxed   = s.get('amount_untaxed') or 0
+            total_ordered_qty  = sum(l.get('product_uom_qty', 0) or 0 for l in lines)
+            total_delivered_qty= sum(l.get('qty_delivered',   0) or 0 for l in lines)
+            total_invoiced_qty = sum(l.get('qty_invoiced',    0) or 0 for l in lines)
+            delivered_pct = round(total_delivered_qty / total_ordered_qty * 100, 1) if total_ordered_qty else 0
+            invoiced_pct  = round(total_invoiced_qty  / total_ordered_qty * 100, 1) if total_ordered_qty else 0
+
+            # Invoiced amount from invoice lines
+            so_invoices  = inv_by_so.get(s['id'], [])
+            invoiced_amt = sum(i['amount_untaxed'] for i in so_invoices if i['state'] == 'posted')
+            remaining    = untaxed - invoiced_amt
+
+            partner = s.get('partner_id')
+            partner_name = partner[1] if isinstance(partner, list) else ''
+
+            total_untaxed  += untaxed
+            total_invoiced += invoiced_amt
+
+            orders.append({
+                'id':            s['id'],
+                'name':          s['name'],
+                'partner':       partner_name,
+                'date':          (s.get('date_order') or '')[:10],
+                'state':         s.get('state') or '',
+                'invoice_status':s.get('invoice_status') or '',
+                'amount_untaxed':round(untaxed, 2),
+                'amount_tax':    round(s.get('amount_tax') or 0, 2),
+                'amount_total':  round(s.get('amount_total') or 0, 2),
+                'invoiced_amt':  round(invoiced_amt, 2),
+                'remaining':     round(remaining, 2),
+                'delivered_pct': delivered_pct,
+                'invoiced_pct':  invoiced_pct,
+                'lines':         lines,
+                'invoices':      so_invoices,
+            })
+
+        orders.sort(key=lambda x: x['date'], reverse=True)
+
+        summary = {
+            'total_orders':   len(orders),
+            'total_untaxed':  round(total_untaxed, 2),
+            'total_invoiced': round(total_invoiced, 2),
+            'total_remaining':round(total_untaxed - total_invoiced, 2),
+            'overall_invoiced_pct': round(total_invoiced / total_untaxed * 100, 1) if total_untaxed else 0,
+        }
+
+        return jsonify({'ok': True, 'orders': orders, 'summary': summary})
+
+    except Exception as e:
+        import traceback
+        return jsonify({'ok': False, 'error': str(e), 'trace': traceback.format_exc()}), 500
+
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
