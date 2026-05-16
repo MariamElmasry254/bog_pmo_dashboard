@@ -5740,6 +5740,12 @@ def api_effort_all_months(phase_key):
             else:
                 use_all_tasks_eff = True  # no phases → all tasks
 
+        # Non-BOG support with no phases → return empty with clear message
+        if not _is_bog_eff and phase_key == 'support' and not phase_names:
+            return jsonify({'employees': [], 'months': [], 'total_employees': 0,
+                           'has_phases': False,
+                           'note': f'No support/operation phases found in this project'})
+
         # Find phases: try project.phase first (BOG), then project.task.type (non-BOG stages)
         phases = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
