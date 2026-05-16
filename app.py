@@ -7737,7 +7737,9 @@ def api_sales_orders():
         pass
     try:
         if not odoo.uid: odoo.connect()
-        _proj_name = active_project_name()
+        # Allow project_name override from query param (used by manage tab)
+        _proj_name_override = request.args.get('project_name', '').strip()
+        _proj_name = _proj_name_override if _proj_name_override else active_project_name()
         _proj_id   = session.get('project_id')
 
         # Find project in Odoo
@@ -7804,73 +7806,6 @@ def api_sales_orders():
                 )
                 logger.info(f"SOs by project_id field: {len(sos)}")
             except Exception as _e: logger.warning(f"SO by project_id: {_e}")
-
-        # Fallback: try project_ids (many2many)
-        if not sos:
-            try:
-                sos = odoo.models.execute_kw(
-                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                    'sale.order', 'search_read',
-                    [[('project_ids', 'in', project_ids)]],
-                    {'fields': ['id', 'name', 'partner_id', 'date_order', 'state',
-                                'amount_untaxed', 'amount_tax', 'amount_total',
-                                'invoice_status', 'currency_id', 'order_line'], 'limit': 500}
-                )
-                logger.info(f"SOs by project_ids m2m: {len(sos)}")
-            except Exception as _e: logger.warning(f"SO by project_ids: {_e}")
-
-        # Fallback: find SOs via invoice_origin on posted invoices for this analytic account
-        if not sos and analytic_account_id:
-            try:
-                # Get posted invoices linked to the analytic account
-                linked_invs = odoo.models.execute_kw(
-                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                    'account.move', 'search_read',
-                    [[('move_type', '=', 'out_invoice'),
-                      ('state', '=', 'posted'),
-                      ('invoice_line_ids.analytic_account_id', '=', analytic_account_id)]],
-                    {'fields': ['invoice_origin'], 'limit': 500}
-                )
-                # Collect SO names from invoice_origin
-                so_names = set()
-                for inv in linked_invs:
-                    for part in (inv.get('invoice_origin') or '').split(','):
-                        part = part.strip()
-                        if part and part.startswith('S'):
-                            so_names.add(part)
-                if so_names:
-                    sos = odoo.models.execute_kw(
-                        ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                        'sale.order', 'search_read',
-                        [[('name', 'in', list(so_names))]],
-                        {'fields': ['id', 'name', 'partner_id', 'date_order', 'state',
-                                    'amount_untaxed', 'amount_tax', 'amount_total',
-                                    'invoice_status', 'currency_id', 'order_line'], 'limit': 500}
-                    )
-                    logger.info(f"SOs via invoice_origin fallback: {len(sos)}")
-            except Exception as _e: logger.warning(f"SO via invoice_origin: {_e}")
-
-        # Fallback: find SOs via task/timesheet sale_line_id
-        if not sos:
-            try:
-                tasks = odoo.models.execute_kw(
-                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                    'project.task', 'search_read',
-                    [[('project_id', 'in', project_ids), ('sale_order_id', '!=', False)]],
-                    {'fields': ['sale_order_id'], 'limit': 500}
-                )
-                task_so_ids = list({t['sale_order_id'][0] for t in tasks if t.get('sale_order_id')})
-                if task_so_ids:
-                    sos = odoo.models.execute_kw(
-                        ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                        'sale.order', 'read',
-                        [task_so_ids],
-                        {'fields': ['id', 'name', 'partner_id', 'date_order', 'state',
-                                    'amount_untaxed', 'amount_tax', 'amount_total',
-                                    'invoice_status', 'currency_id', 'order_line']}
-                    )
-                    logger.info(f"SOs via task.sale_order_id: {len(sos)}")
-            except Exception as _e: logger.warning(f"SO via tasks: {_e}")
 
         # No SOs → fetch direct invoices by analytic account
         if not sos:
