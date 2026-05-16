@@ -253,7 +253,7 @@ function renderSOLines(lines) {
                 return `<tr style="border-top:1px solid #FEF3C7;">
                   <td style="padding:4px 6px;font-weight:700;color:var(--navy);">${i.move_name}</td>
                   <td style="padding:4px 6px;font-family:var(--mono);font-size:10px;">${i.inv_date || '—'}</td>
-                  <td style="padding:4px 6px;color:var(--text-muted);font-size:10px;max-width:160px;">${i.name || '—'}</td>
+                  <td style="padding:4px 6px;color:var(--text-muted);font-size:10px;max-width:200px;white-space:normal;">${i.purpose || i.name || '—'}</td>
                   <td style="text-align:right;padding:4px 6px;">${fNum(i.qty)}</td>
                   <td style="text-align:right;padding:4px 6px;font-weight:600;color:var(--green);">${fSAR(amtExcl)}</td>
                   <td style="text-align:right;padding:4px 6px;color:var(--text-muted);">${fSAR(vat)}</td>
@@ -323,7 +323,7 @@ function renderSOInvoices(invoices, soName) {
 
   let html = `<table class="data-table" style="font-size:11px;margin-top:8px;width:100%;">
     <thead><tr>
-      <th>Invoice #</th><th>Date</th><th>Due Date</th>
+      <th>Invoice #</th><th>Date</th><th>Due Date</th><th>Purpose</th>
       <th class="num">Amount (excl. VAT)</th><th class="num">VAT</th><th class="num">Total</th>
       <th>Status</th><th>Payment</th>
     </tr></thead><tbody>`;
@@ -334,6 +334,7 @@ function renderSOInvoices(invoices, soName) {
       <td><b>${inv.name}</b></td>
       <td style="font-family:var(--mono);">${inv.date || '—'}</td>
       <td style="font-family:var(--mono);">${inv.due_date || '—'}</td>
+      <td style="font-size:10px;color:var(--text-muted);max-width:180px;white-space:normal;">${(inv.purpose||'').replace(/<[^>]+>/g,'').substring(0,120) || '—'}</td>
       <td class="num">${fSAR(inv.amount_untaxed)}</td>
       <td class="num" style="color:var(--text-muted);">${fSAR(inv.amount_tax)}</td>
       <td class="num"><b>${fSAR(inv.amount_total)}</b></td>
