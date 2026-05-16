@@ -1062,6 +1062,16 @@ async function profRecomputeAll(phaseKey) {
     } catch(e) {}
   }
 
+  // Ensure approvedMDsBase fallback uses totalEstMDs if AppState not loaded yet
+  if (!AppState._budgetApprovedMDs?.[phaseKey] && totalEstMDs > 0) {
+    if (!AppState._budgetApprovedMDs) AppState._budgetApprovedMDs = {};
+    AppState._budgetApprovedMDs[phaseKey] = totalEstMDs;
+  }
+  if (!AppState._budgetFinalCost?.[phaseKey] && totalEstCostSAR > 0) {
+    if (!AppState._budgetFinalCost) AppState._budgetFinalCost = {};
+    AppState._budgetFinalCost[phaseKey] = totalEstCostSAR;
+  }
+
   // ── 3. Effort MDs + Costs: AppState → API ──
   let effortMDs = AppState._effortMonthMDs?.[phaseKey];
   let effortCosts = AppState._effortMonthCosts?.[phaseKey];
