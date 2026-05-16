@@ -728,33 +728,38 @@ async function openTeamModal() {
   modal.style.display = 'flex';
   const body = document.getElementById('teamModalBody');
 
+  const isBogTeam = AppState._overviewData?.is_bog !== false;
+  const teamPhases = isBogTeam
+    ? [{id:'modalTabDev', phase:'development', label:'Development'}, {id:'modalTabCon', phase:'consultation', label:'Consultation'}]
+    : [{id:'modalTabSvc', phase:'services',    label:'Services'},    {id:'modalTabSup', phase:'support',      label:'Support'}];
+
+  const tabsHtml = teamPhases.map((t, i) => `
+    <button id="${t.id}" onclick="switchModalTeamTab('${t.phase}')"
+      style="padding:10px 20px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
+             border:none;border-bottom:2px solid ${i===0?'var(--navy)':'transparent'};
+             color:${i===0?'var(--navy)':'var(--text-muted)'};background:none;cursor:pointer;">
+      ${t.label}
+    </button>`).join('');
+
   body.innerHTML = `
     <div style="display:flex;border-bottom:1px solid var(--border);margin:-20px -24px 16px;padding:0 24px;">
-      <button id="modalTabDev" onclick="switchModalTeamTab('development')"
-        style="padding:10px 20px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
-               border:none;border-bottom:2px solid var(--navy);color:var(--navy);background:none;cursor:pointer;">
-        Development
-      </button>
-      <button id="modalTabCon" onclick="switchModalTeamTab('consultation')"
-        style="padding:10px 20px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
-               border:none;border-bottom:2px solid transparent;color:var(--text-muted);background:none;cursor:pointer;">
-        Consultation
-      </button>
+      ${tabsHtml}
     </div>
     <div id="modalTeamContent"><div class="loading">Loading…</div></div>`;
 
-  window._modalTeamActiveTab = 'development';
-  _loadModalTeamTab('development');
+  window._modalTeamPhases = teamPhases;
+  window._modalTeamActiveTab = teamPhases[0].phase;
+  _loadModalTeamTab(teamPhases[0].phase);
 }
 
 
 window.switchModalTeamTab = function(phase) {
   window._modalTeamActiveTab = phase;
-  ['development','consultation'].forEach(p => {
-    const btn = document.getElementById(p==='development'?'modalTabDev':'modalTabCon');
+  (window._modalTeamPhases || []).forEach(t => {
+    const btn = document.getElementById(t.id);
     if (btn) {
-      btn.style.borderBottomColor = p===phase ? 'var(--navy)' : 'transparent';
-      btn.style.color = p===phase ? 'var(--navy)' : 'var(--text-muted)';
+      btn.style.borderBottomColor = t.phase===phase ? 'var(--navy)' : 'transparent';
+      btn.style.color = t.phase===phase ? 'var(--navy)' : 'var(--text-muted)';
     }
   });
   _loadModalTeamTab(phase);
