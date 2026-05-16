@@ -1,5 +1,19 @@
 /* Sales Orders & Invoices Tab */
 
+const _SUPP_KWS = ['support','operation','maintenance','hypercare','production','production activities','دعم','الدعم','تشغيل'];
+
+function phaseOf(name) {
+  const n = (name||'').toLowerCase();
+  if (_SUPP_KWS.some(k => n.includes(k))) return 'support';
+  if (n.includes('license')) return 'license';
+  if (n.includes('consultation') || n.includes('consult')) return 'consultation';
+  return 'development';
+}
+
+function phaseLabel(key) {
+  return {development:'Development', consultation:'Consultation', support:'Support', license:'License', services:'Services'}[key] || key;
+}
+
 window.loadSalesOrders = async function() {
   // Use the sales panel directly — salesContent is inside it
   const panel = document.getElementById('sales');
@@ -29,15 +43,8 @@ window.loadSalesOrders = async function() {
     const fPct = v => `${(v||0).toFixed(1)}%`;
 
     // Collect unique phases from order lines (product names)
-    const SUPP_KWS = ['support','operation','maintenance','hypercare','production','دعم','تشغيل'];
-    const phaseOf = name => {
-      const n = (name||'').toLowerCase();
-      if (SUPP_KWS.some(k => n.includes(k))) return 'Support';
-      if (n.includes('license')) return 'License';
-      return 'Development / Services';
-    };
     const allPhases = [...new Set(d.orders.flatMap(o =>
-      (o.lines||[]).map(l => phaseOf(Array.isArray(l.product_id) ? l.product_id[1] : (l.name||'')))
+      (o.lines||[]).map(l => phaseLabel(phaseOf(Array.isArray(l.product_id) ? l.product_id[1] : (l.name||''))))
     ))].sort();
 
     window._salesPhaseFilter = null; // null = all
@@ -191,6 +198,17 @@ function renderSOLines(lines) {
            🧾 ${lineInvs.length}
          </button>` : '';
 
+    // Variance tab mapping selector
+    const isBog = window.AppState?._overviewData?.is_bog !== false;
+    const varTabs = isBog
+      ? ['development','consultation','support']
+      : ['services','support'];
+    const savedVarTab = (window.AppState?._soLineVarMap || {})[l.id] || phaseOf(Array.isArray(l.product_id) ? l.product_id[1] : (l.name||''));
+    const varSelector = `<select data-line-id="${l.id}" onchange="setSoLineVarTab(${l.id},this.value)"
+      style="font-size:10px;padding:2px 4px;border:1px solid var(--border);border-radius:3px;margin-left:6px;background:var(--bg-subtle);">
+      ${varTabs.map(t => `<option value="${t}" ${savedVarTab===t?'selected':''}>${phaseLabel(t)}</option>`).join('')}
+    </select>`;
+
     const invDetail = lineInvs.length > 0 ? `
       <tr id="${lineId}" style="display:none;">
         <td colspan="8" style="padding:4px 8px 10px 32px;background:#FFFBEB;">
@@ -211,10 +229,11 @@ function renderSOLines(lines) {
         </td>
       </tr>` : '';
 
-    const linePhase = phaseOf(Array.isArray(l.product_id) ? l.product_id[1] : (l.name||''));
+    const linePhase = phaseLabel(phaseOf(Array.isArray(l.product_id) ? l.product_id[1] : (l.name||'')));
     return `<tr style="cursor:default;" data-line-phase="${linePhase}" data-detail-id="${lineId}">
       <td style="max-width:200px;white-space:normal;">
         <div style="font-weight:600;font-size:12px;">${prod} ${invBtn}</div>
+        <div style="margin-top:3px;">${varSelector}</div>
         ${l.name && l.name !== prod ? `<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">${l.name}</div>` : ''}
       </td>
       <td class="num">${fSAR(l.price_unit)} ${disc}</td>
@@ -307,14 +326,6 @@ window.setSalesPhase = function(phase, btn) {
   btn.style.color = 'white';
   btn.style.borderColor = 'var(--navy)';
 
-  const SUPP_KWS = ['support','operation','maintenance','hypercare','production','دعم','تشغيل'];
-  const phaseOf = name => {
-    const n = (name||'').toLowerCase();
-    if (SUPP_KWS.some(k => n.includes(k))) return 'Support';
-    if (n.includes('license')) return 'License';
-    return 'Development / Services';
-  };
-
   // Show/hide order line rows by phase
   document.querySelectorAll('tbody tr[data-line-phase]').forEach(tr => {
     const linePhase = tr.dataset.linePhase;
@@ -326,4 +337,19 @@ window.setSalesPhase = function(phase, btn) {
       if (det) det.style.display = 'none'; // collapse on filter change
     }
   });
+};
+
+
+window.setSoLineVarTab = function(lineId, varTab) {
+  if (!window.AppState._soLineVarMap) window.AppState._soLineVarMap = {};
+  window.AppState._soLineVarMap[lineId] = varTab;
+  // Save to DB
+  fetch('/api/plan-overrides', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({phase: 'so_line_map', month_key: String(lineId), field: 'var_tab', value: varTab})
+  }).catch(()=>{});
+  // Reset invoice cache so profitability reloads with new mapping
+  if (window.AppState._invoiceCumulative) delete window.AppState._invoiceCumulative[varTab];
+  if (window.AppState._salesInvoicesByPhase) window.AppState._salesInvoicesByPhase = null;
 };
