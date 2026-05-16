@@ -28,6 +28,20 @@ window.loadSalesOrders = async function() {
     const fSAR = v => new Intl.NumberFormat('en-US', {maximumFractionDigits:0}).format(v || 0);
     const fPct = v => `${(v||0).toFixed(1)}%`;
 
+    // Collect unique phases from order lines (product names)
+    const SUPP_KWS = ['support','operation','maintenance','hypercare','production','دعم','تشغيل'];
+    const phaseOf = name => {
+      const n = (name||'').toLowerCase();
+      if (SUPP_KWS.some(k => n.includes(k))) return 'Support';
+      if (n.includes('license')) return 'License';
+      return 'Development / Services';
+    };
+    const allPhases = [...new Set(d.orders.flatMap(o =>
+      (o.lines||[]).map(l => phaseOf(Array.isArray(l.product_id) ? l.product_id[1] : (l.name||'')))
+    ))].sort();
+
+    window._salesPhaseFilter = null; // null = all
+
     // KPI strip
     let html = `
       <div class="kpi-strip kpi-strip-small" style="margin-bottom:20px;">
@@ -51,6 +65,15 @@ window.loadSalesOrders = async function() {
           <div class="kpi-foot">SAR</div>
         </div>
       </div>`;
+
+    // Phase filter bar
+    if (allPhases.length > 1) {
+      html += `<div style="display:flex;gap:8px;margin-bottom:16px;align-items:center;">
+        <span style="font-size:11px;color:var(--text-muted);font-weight:600;">FILTER BY PHASE:</span>
+        <button onclick="setSalesPhase(null,this)" class="so-phase-btn" style="font-size:11px;padding:4px 12px;border-radius:4px;border:1px solid var(--navy);background:var(--navy);color:white;cursor:pointer;">All</button>
+        ${allPhases.map(p => `<button onclick="setSalesPhase('${p}',this)" class="so-phase-btn" style="font-size:11px;padding:4px 12px;border-radius:4px;border:1px solid var(--border);background:var(--bg-subtle);cursor:pointer;">${p}</button>`).join('')}
+      </div>`;
+    }
 
     // Orders table
     html += `
@@ -188,7 +211,8 @@ function renderSOLines(lines) {
         </td>
       </tr>` : '';
 
-    return `<tr style="cursor:default;">
+    const linePhase = phaseOf(Array.isArray(l.product_id) ? l.product_id[1] : (l.name||''));
+    return `<tr style="cursor:default;" data-line-phase="${linePhase}" data-detail-id="${lineId}">
       <td style="max-width:200px;white-space:normal;">
         <div style="font-weight:600;font-size:12px;">${prod} ${invBtn}</div>
         ${l.name && l.name !== prod ? `<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">${l.name}</div>` : ''}
@@ -270,3 +294,36 @@ function toggleSODetail(id) {
   if (!el) return;
   el.style.display = el.style.display === 'none' ? '' : 'none';
 }
+
+
+window.setSalesPhase = function(phase, btn) {
+  window._salesPhaseFilter = phase;
+  document.querySelectorAll('.so-phase-btn').forEach(b => {
+    b.style.background = 'var(--bg-subtle)';
+    b.style.color = 'var(--text)';
+    b.style.borderColor = 'var(--border)';
+  });
+  btn.style.background = 'var(--navy)';
+  btn.style.color = 'white';
+  btn.style.borderColor = 'var(--navy)';
+
+  const SUPP_KWS = ['support','operation','maintenance','hypercare','production','دعم','تشغيل'];
+  const phaseOf = name => {
+    const n = (name||'').toLowerCase();
+    if (SUPP_KWS.some(k => n.includes(k))) return 'Support';
+    if (n.includes('license')) return 'License';
+    return 'Development / Services';
+  };
+
+  // Show/hide order line rows by phase
+  document.querySelectorAll('tbody tr[data-line-phase]').forEach(tr => {
+    const linePhase = tr.dataset.linePhase;
+    tr.style.display = (!phase || linePhase === phase) ? '' : 'none';
+    // Also hide/show associated detail rows
+    const detailId = tr.dataset.detailId;
+    if (detailId) {
+      const det = document.getElementById(detailId);
+      if (det) det.style.display = 'none'; // collapse on filter change
+    }
+  });
+};
