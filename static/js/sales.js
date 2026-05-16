@@ -51,6 +51,7 @@ window.loadSalesOrders = async function() {
     if (!d.orders || !d.orders.length) {
       // Show direct invoices if available
       if (d.direct_invoices && d.direct_invoices.length) {
+        window._soSummary = d.so_summary || {};
         cont.innerHTML = renderDirectInvoices(d.direct_invoices, d.note, d.summary);
       } else {
         cont.innerHTML = `<div class="card" style="text-align:center;padding:40px;">
@@ -402,6 +403,7 @@ window.setSoLineVarTab = function(lineId, varTab) {
 
 function renderDirectInvoices(invoices, note, summary) {
   const fSAR = v => new Intl.NumberFormat('en-US',{maximumFractionDigits:0}).format(v||0);
+  const fPct = v => (v||0).toFixed(1)+'%';
   const payColor = p => p==='paid'?'var(--green)':p==='partial'?'var(--amber)':'var(--red)';
   const payLabel = p => p==='paid'?'✅ Paid':p==='partial'?'⚡ Partial':'❌ Unpaid';
   const isBog      = window.AppState?._overviewData?.is_bog !== false;
@@ -411,20 +413,19 @@ function renderDirectInvoices(invoices, note, summary) {
   const phBgColor  = {services:'#EFF6FF',development:'#EFF6FF',consultation:'#EFF6FF',support:'#FEF3C7',license:'#F3F4F6'};
   const phTxtColor = {services:'#1D4ED8',development:'#1D4ED8',consultation:'#1D4ED8',support:'#92400E',license:'#374151'};
   const phBdColor  = {services:'#BFDBFE',development:'#BFDBFE',consultation:'#BFDBFE',support:'#FCD34D',license:'#D1D5DB'};
-  const phSectionBorder = {services:'#3B82F6',development:'#3B82F6',consultation:'#1E3A5F',support:'#F59E0B',license:'#9CA3AF'};
+  const phSectionBorder={services:'#3B82F6',development:'#3B82F6',consultation:'#1E3A5F',support:'#F59E0B',license:'#9CA3AF'};
   const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   const kpiPhases  = isBog
     ? [['development','Development'],['consultation','Consultation'],['support','Support'],['license','License']]
     : [['services','Services'],['support','Support'],['license','License']];
 
-  // Ensure every invoice has a stable _idx matching its position in the array
-  invoices.forEach((inv, i) => { inv._idx = i; });
+  invoices.forEach((inv,i) => { inv._idx = i; });
   window._directInvoices = invoices;
-  if (!window._salesFilter) window._salesFilter = {year:null, month:null, sort:'asc', view:'table'};
+  if (!window._salesFilter) window._salesFilter = {year:null,month:null,sort:'asc',view:'table'};
   const SF = window._salesFilter;
 
   // ── Filter & sort ─────────────────────────────────────────────────────────
-  let filtered = invoices.filter(i => i.state === 'posted');
+  let filtered = invoices.filter(i=>i.state==='posted');
   if (SF.year)  filtered = filtered.filter(i=>(i.date||'').startsWith(SF.year));
   if (SF.month) filtered = filtered.filter(i=>(i.date||'').startsWith(SF.month));
   filtered = [...filtered].sort((a,b)=>{
@@ -437,15 +438,15 @@ function renderDirectInvoices(invoices, note, summary) {
   const byPh={};
   filtered.forEach(i=>{ byPh[i.phase]=(byPh[i.phase]||0)+i.amount_untaxed; });
 
-  // ── Year/Month filter buttons ─────────────────────────────────────────────
+  // ── Year/Month buttons ────────────────────────────────────────────────────
   const allYears  = [...new Set(invoices.map(i=>(i.date||'').substring(0,4)).filter(Boolean))].sort();
   const allMonths = [...new Set(invoices.map(i=>(i.date||'').substring(0,7)).filter(Boolean))].sort();
   const visMonths = SF.year ? allMonths.filter(m=>m.startsWith(SF.year)) : allMonths;
-  const bs = (active,col) =>
+  const bs=(active,col)=>
     `font-size:12px;padding:4px 13px;border-radius:4px;cursor:pointer;font-weight:${active?700:500};`+
     `border:1px solid ${active?col:'var(--border)'};background:${active?col:'var(--bg-subtle)'};color:${active?'white':'var(--text)'}`;
   const yearBtns = ['All',...allYears].map(y=>{
-    const val=y==='All'?'':y, active=(y==='All'&&!SF.year)||y===SF.year;
+    const val=y==='All'?'':y,active=(y==='All'&&!SF.year)||y===SF.year;
     return `<button onclick="_salesSetYear('${val}')" style="${bs(active,'var(--navy)')}">${y}</button>`;
   }).join('');
   const monthBtns = visMonths.map(mk=>{
@@ -453,36 +454,114 @@ function renderDirectInvoices(invoices, note, summary) {
     const lbl=monthNames[parseInt(mk.substring(5,7))-1]+" '"+mk.substring(2,4);
     return `<button onclick="_salesSetMonth('${mk}')" style="${bs(active,'var(--amber)')}">${lbl}</button>`;
   }).join('');
-  const sortIcon = SF.sort==='asc'?'↑ Oldest':'↓ Newest';
+  const sortIcon=SF.sort==='asc'?'↑ Oldest':'↓ Newest';
 
-  // ── Pills helper (shared by both views) ───────────────────────────────────
-  const renderPills = (inv) => phaseOpts.map(p => {
-    const active = inv.phase===p;
-    return `<button onclick="_pillSet(${inv._idx},'${p}',this)"
-      style="font-size:11px;padding:3px 12px;border-radius:20px;cursor:pointer;
-             font-weight:${active?700:500};transition:all .12s;
+  // ── Pills helper ──────────────────────────────────────────────────────────
+  const renderPills = inv => phaseOpts.map(p=>{
+    const active=inv.phase===p;
+    return `<button onclick="_pillSet(${inv._idx},'${p}')"
+      style="font-size:11px;padding:2px 10px;border-radius:20px;cursor:pointer;font-weight:${active?700:500};
              border:1px solid ${active?phBdColor[p]:'var(--border)'};
              background:${active?phBgColor[p]:'var(--bg-subtle)'};
-             color:${active?phTxtColor[p]:'var(--text-muted)'};">
+             color:${active?phTxtColor[p]:'var(--text-muted)'}">
       ${phaseLabels[p].replace(' / 3rd Party','')}
     </button>`;
   }).join('');
 
+  // ── SO Summary panel ──────────────────────────────────────────────────────
+  const soSum = window._soSummary || {};
+  const soKeys = Object.keys(soSum).sort();
+  let soPanel = '';
+  if (soKeys.length) {
+    const soRows = soKeys.map(soName => {
+      const so = soSum[soName];
+      const issuedPct = so.amount_untaxed > 0 ? (so.issued / so.amount_untaxed * 100) : 0;
+      const remColor  = so.remaining > 0 ? 'var(--amber)' : 'var(--green)';
+      const stateLabel= so.state==='sale'?'Confirmed':so.state==='done'?'Done':so.state==='draft'?'Draft':so.state||'—';
+      const invStatus = so.invoice_status==='invoiced'?'✅ Fully Invoiced':
+                        so.invoice_status==='to invoice'?'⏳ To Invoice':
+                        so.invoice_status==='nothing'?'—':so.invoice_status||'—';
+      // Which invoices reference this SO
+      const linkedInvs = filtered.filter(i=>(i.invoice_origin||'').includes(soName));
+      const invNames   = linkedInvs.map(i=>
+        `<span style="font-size:10px;background:#EFF6FF;color:#1D4ED8;padding:1px 7px;
+                      border-radius:10px;border:1px solid #BFDBFE;">${i.name}</span>`
+      ).join(' ');
+
+      return `<tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:10px 14px;font-weight:700;font-size:13px;white-space:nowrap;">${soName}</td>
+        <td style="padding:10px 14px;font-size:12px;color:var(--text-muted);">${so.partner||'—'}</td>
+        <td style="padding:10px 14px;font-size:11px;font-family:var(--mono);white-space:nowrap;">${so.date||'—'}</td>
+        <td style="padding:10px 14px;"><span style="font-size:11px;font-weight:600;color:var(--blue);">${stateLabel}</span></td>
+        <td style="text-align:right;padding:10px 14px;font-size:13px;font-weight:600;">${fSAR(so.amount_untaxed)}</td>
+        <td style="text-align:right;padding:10px 14px;">
+          <div style="display:flex;align-items:center;gap:8px;justify-content:flex-end;">
+            <div style="width:60px;height:5px;background:#F3F4F6;border-radius:3px;">
+              <div style="width:${Math.min(100,issuedPct).toFixed(0)}%;height:100%;background:var(--green);border-radius:3px;"></div>
+            </div>
+            <span style="font-size:13px;font-weight:700;color:var(--green);">${fSAR(so.issued)}</span>
+            <span style="font-size:10px;color:var(--text-muted);">${fPct(issuedPct)}</span>
+          </div>
+        </td>
+        <td style="text-align:right;padding:10px 14px;font-size:13px;font-weight:700;color:${remColor};">${fSAR(so.remaining)}</td>
+        <td style="padding:10px 14px;font-size:11px;">${invStatus}</td>
+        <td style="padding:10px 14px;">${invNames||'<span style="font-size:11px;color:var(--text-muted);">—</span>'}</td>
+      </tr>`;
+    }).join('');
+
+    const totalSOAmt    = soKeys.reduce((s,k)=>s+soSum[k].amount_untaxed,0);
+    const totalSOIssued = soKeys.reduce((s,k)=>s+soSum[k].issued,0);
+    const totalSORem    = soKeys.reduce((s,k)=>s+soSum[k].remaining,0);
+
+    soPanel = `
+      <div class="card" style="margin-bottom:20px;border-top:3px solid var(--navy);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+          <h3 class="card-title" style="margin:0;">📋 Sales Orders linked to Invoices
+            <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">detected via invoice origin</span>
+          </h3>
+        </div>
+        <div class="table-scroll">
+          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            <thead><tr style="background:var(--navy);color:white;">
+              <th style="padding:10px 14px;text-align:left;font-size:11px;letter-spacing:.4px;">SO #</th>
+              <th style="padding:10px 14px;text-align:left;font-size:11px;letter-spacing:.4px;">CUSTOMER</th>
+              <th style="padding:10px 14px;text-align:left;font-size:11px;letter-spacing:.4px;white-space:nowrap;">DATE</th>
+              <th style="padding:10px 14px;text-align:left;font-size:11px;letter-spacing:.4px;">STATUS</th>
+              <th style="padding:10px 14px;text-align:right;font-size:11px;letter-spacing:.4px;white-space:nowrap;">SO VALUE (excl.VAT)</th>
+              <th style="padding:10px 14px;text-align:right;font-size:11px;letter-spacing:.4px;white-space:nowrap;">ISSUED SAR</th>
+              <th style="padding:10px 14px;text-align:right;font-size:11px;letter-spacing:.4px;white-space:nowrap;">REMAINING</th>
+              <th style="padding:10px 14px;text-align:left;font-size:11px;letter-spacing:.4px;white-space:nowrap;">INV. STATUS</th>
+              <th style="padding:10px 14px;text-align:left;font-size:11px;letter-spacing:.4px;">LINKED INVOICES</th>
+            </tr></thead>
+            <tbody>${soRows}</tbody>
+            <tfoot><tr style="background:#F8FAFC;border-top:2px solid var(--navy);font-weight:700;">
+              <td colspan="4" style="padding:10px 14px;font-size:13px;">TOTAL (${soKeys.length} SOs)</td>
+              <td style="text-align:right;padding:10px 14px;font-size:13px;">${fSAR(totalSOAmt)}</td>
+              <td style="text-align:right;padding:10px 14px;font-size:13px;color:var(--green);">${fSAR(totalSOIssued)}</td>
+              <td style="text-align:right;padding:10px 14px;font-size:13px;color:var(--amber);">${fSAR(totalSORem)}</td>
+              <td colspan="2"></td>
+            </tr></tfoot>
+          </table>
+        </div>
+      </div>`;
+  }
+
   // ════════════════════════════════════════════════════════════════════════
-  // VIEW 1: Flat table with checkboxes + bulk assign + pills per row
+  // VIEW 1: Flat table with checkboxes + bulk assign + pills
   // ════════════════════════════════════════════════════════════════════════
   const renderTableView = () => {
-    const rows = filtered.map(inv => {
-      const purposeTxt = (inv.purpose||'').replace(/<[^>]+>/g,'').substring(0,200);
+    const rows = filtered.map(inv=>{
+      const purposeTxt=(inv.purpose||'').replace(/<[^>]+>/g,'').substring(0,200);
+      const originBadge=inv.invoice_origin
+        ? `<span style="font-size:10px;color:#6B7280;margin-left:6px;">↗ ${inv.invoice_origin}</span>` : '';
       return `<tr data-idx="${inv._idx}" style="cursor:default;border-bottom:1px solid var(--border);">
         <td style="padding:12px 14px;width:36px;vertical-align:middle;">
-          <input type="checkbox" class="inv-chk" data-idx="${inv._idx}"
-            onchange="_salesChkChange()"
+          <input type="checkbox" class="inv-chk" data-idx="${inv._idx}" onchange="_salesChkChange()"
             style="width:16px;height:16px;cursor:pointer;accent-color:var(--navy);">
         </td>
         <td style="padding:12px 14px;vertical-align:middle;min-width:155px;">
-          <div style="font-weight:700;font-size:13px;margin-bottom:6px;">${inv.name}</div>
-          <div style="display:flex;gap:5px;flex-wrap:wrap;">${renderPills(inv)}</div>
+          <div style="font-weight:700;font-size:13px;margin-bottom:2px;">${inv.name}${originBadge}</div>
+          <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:5px;">${renderPills(inv)}</div>
         </td>
         <td style="font-family:var(--mono);font-size:12px;padding:12px 14px;white-space:nowrap;vertical-align:middle;">${inv.date||'—'}</td>
         <td style="font-size:12px;color:var(--text-muted);padding:12px 14px;max-width:260px;white-space:normal;vertical-align:middle;line-height:1.5;">${purposeTxt||'—'}</td>
@@ -496,7 +575,6 @@ function renderDirectInvoices(invoices, note, summary) {
     }).join('');
 
     return `
-      <!-- Bulk toolbar -->
       <div id="bulk-toolbar" style="display:none;align-items:center;gap:10px;padding:10px 16px;
         background:#EFF6FF;border:1px solid #BFDBFE;border-radius:8px;margin-bottom:12px;flex-wrap:wrap;">
         <span id="bulk-count" style="font-size:13px;font-weight:700;color:#1E3A5F;">0 selected</span>
@@ -506,130 +584,108 @@ function renderDirectInvoices(invoices, note, summary) {
           <option value="">— choose phase —</option>
           ${phaseOpts.map(p=>`<option value="${p}">${phaseLabels[p]}</option>`).join('')}
         </select>
-        <button onclick="_salesBulkAssign()"
-          style="font-size:13px;padding:5px 18px;background:var(--navy);color:white;
-                 border:none;border-radius:6px;cursor:pointer;font-weight:700;">Apply</button>
-        <button onclick="_salesClearSelection()"
-          style="font-size:12px;padding:5px 12px;background:white;color:var(--text-muted);
-                 border:1px solid var(--border);border-radius:6px;cursor:pointer;">Cancel</button>
+        <button onclick="_salesBulkAssign()" style="font-size:13px;padding:5px 18px;background:var(--navy);
+          color:white;border:none;border-radius:6px;cursor:pointer;font-weight:700;">Apply</button>
+        <button onclick="_salesClearSelection()" style="font-size:12px;padding:5px 12px;background:white;
+          color:var(--text-muted);border:1px solid var(--border);border-radius:6px;cursor:pointer;">Cancel</button>
         <span id="bulk-saved-msg" style="font-size:12px;color:var(--green);opacity:0;transition:opacity .4s;">✓ saved</span>
       </div>
-
-      <!-- Table -->
       <div class="card" style="padding:0;overflow:hidden;">
         <div style="overflow-x:auto;">
           <table style="width:100%;border-collapse:collapse;">
-            <thead>
-              <tr style="background:var(--navy);color:white;">
-                <th style="padding:12px 14px;width:36px;">
-                  <input type="checkbox" id="chk-all" onchange="_salesSelectAll(this)"
-                    style="width:16px;height:16px;cursor:pointer;accent-color:#93C5FD;">
-                </th>
-                <th style="text-align:left;padding:12px 14px;font-size:11px;letter-spacing:.5px;font-weight:700;">INVOICE # / PHASE</th>
-                <th style="text-align:left;padding:12px 14px;font-size:11px;letter-spacing:.5px;font-weight:700;white-space:nowrap;">DATE</th>
-                <th style="text-align:left;padding:12px 14px;font-size:11px;letter-spacing:.5px;font-weight:700;">PURPOSE</th>
-                <th style="text-align:right;padding:12px 14px;font-size:11px;letter-spacing:.5px;font-weight:700;white-space:nowrap;">EXCL. VAT</th>
-                <th style="text-align:right;padding:12px 14px;font-size:11px;letter-spacing:.5px;font-weight:700;white-space:nowrap;">VAT</th>
-                <th style="text-align:right;padding:12px 14px;font-size:11px;letter-spacing:.5px;font-weight:700;white-space:nowrap;">TOTAL INCL. VAT</th>
-                <th style="text-align:left;padding:12px 14px;font-size:11px;letter-spacing:.5px;font-weight:700;white-space:nowrap;">PAYMENT</th>
-              </tr>
-            </thead>
-            <tbody id="inv-tbody">
-              ${rows||'<tr><td colspan="8" style="text-align:center;padding:32px;color:var(--text-muted);">No invoices match selected filters</td></tr>'}
-            </tbody>
-            <tfoot>
-              <tr style="background:#F8FAFC;border-top:2px solid var(--navy);">
-                <td colspan="4" style="padding:12px 14px;font-weight:700;font-size:13px;">
-                  TOTAL <span style="font-weight:400;color:var(--text-muted);">(${filtered.length} invoices)</span>
-                </td>
-                <td style="text-align:right;padding:12px 14px;font-weight:700;font-size:13px;">${fSAR(totalExclVAT)}</td>
-                <td style="text-align:right;padding:12px 14px;font-weight:600;font-size:12px;color:var(--text-muted);">${fSAR(filtered.reduce((s,i)=>s+i.amount_tax,0))}</td>
-                <td style="text-align:right;padding:12px 14px;font-weight:700;font-size:14px;">${fSAR(filtered.reduce((s,i)=>s+i.amount_total,0))}</td>
-                <td></td>
-              </tr>
-            </tfoot>
+            <thead><tr style="background:var(--navy);color:white;">
+              <th style="padding:12px 14px;width:36px;">
+                <input type="checkbox" id="chk-all" onchange="_salesSelectAll(this)"
+                  style="width:16px;height:16px;cursor:pointer;accent-color:#93C5FD;">
+              </th>
+              <th style="text-align:left;padding:12px 14px;font-size:11px;letter-spacing:.5px;">INVOICE # / PHASE</th>
+              <th style="text-align:left;padding:12px 14px;font-size:11px;letter-spacing:.5px;white-space:nowrap;">DATE</th>
+              <th style="text-align:left;padding:12px 14px;font-size:11px;letter-spacing:.5px;">PURPOSE</th>
+              <th style="text-align:right;padding:12px 14px;font-size:11px;letter-spacing:.5px;white-space:nowrap;">EXCL. VAT</th>
+              <th style="text-align:right;padding:12px 14px;font-size:11px;letter-spacing:.5px;white-space:nowrap;">VAT</th>
+              <th style="text-align:right;padding:12px 14px;font-size:11px;letter-spacing:.5px;white-space:nowrap;">TOTAL INCL. VAT</th>
+              <th style="text-align:left;padding:12px 14px;font-size:11px;letter-spacing:.5px;white-space:nowrap;">PAYMENT</th>
+            </tr></thead>
+            <tbody id="inv-tbody">${rows||'<tr><td colspan="8" style="text-align:center;padding:32px;color:var(--text-muted);">No invoices match selected filters</td></tr>'}</tbody>
+            <tfoot><tr style="background:#F8FAFC;border-top:2px solid var(--navy);">
+              <td colspan="4" style="padding:12px 14px;font-weight:700;font-size:13px;">
+                TOTAL <span style="font-weight:400;color:var(--text-muted);">(${filtered.length})</span></td>
+              <td style="text-align:right;padding:12px 14px;font-weight:700;font-size:13px;">${fSAR(totalExclVAT)}</td>
+              <td style="text-align:right;padding:12px 14px;font-weight:600;font-size:12px;color:var(--text-muted);">${fSAR(filtered.reduce((s,i)=>s+i.amount_tax,0))}</td>
+              <td style="text-align:right;padding:12px 14px;font-weight:700;font-size:14px;">${fSAR(filtered.reduce((s,i)=>s+i.amount_total,0))}</td>
+              <td></td>
+            </tr></tfoot>
           </table>
         </div>
       </div>`;
   };
 
   // ════════════════════════════════════════════════════════════════════════
-  // VIEW 2: Grouped by phase sections
+  // VIEW 2: Grouped by phase
   // ════════════════════════════════════════════════════════════════════════
-  const renderGroupView = () => {
-    const sections = phaseOpts.map(ph => {
-      const phInvs = filtered.filter(i => i.phase === ph);
-      if (!phInvs.length) return `
-        <div style="border:1px solid var(--border);border-radius:8px;margin-bottom:14px;overflow:hidden;opacity:.5;">
-          <div style="padding:10px 16px;background:${phBgColor[ph]};border-bottom:1px solid ${phBdColor[ph]};
-                      display:flex;justify-content:space-between;align-items:center;">
-            <span style="font-size:13px;font-weight:700;color:${phTxtColor[ph]};">${phaseLabels[ph]}</span>
-            <span style="font-size:12px;color:${phTxtColor[ph]};">0 invoices</span>
-          </div>
-          <div style="padding:14px 16px;font-size:12px;color:var(--text-muted);">No invoices assigned to this phase</div>
-        </div>`;
-
-      const phTotal = phInvs.reduce((s,i)=>s+i.amount_untaxed,0);
-      const invRows = phInvs.map(inv => {
-        const purposeTxt=(inv.purpose||'').replace(/<[^>]+>/g,'').substring(0,180);
-        return `<tr style="border-bottom:1px solid var(--border);">
-          <td style="padding:11px 16px;vertical-align:middle;min-width:150px;">
-            <div style="font-weight:700;font-size:13px;margin-bottom:5px;">${inv.name}</div>
-            <div style="display:flex;gap:5px;flex-wrap:wrap;">${renderPills(inv)}</div>
-          </td>
-          <td style="font-family:var(--mono);font-size:12px;padding:11px 14px;white-space:nowrap;vertical-align:middle;">${inv.date||'—'}</td>
-          <td style="font-size:12px;color:var(--text-muted);padding:11px 14px;max-width:280px;white-space:normal;vertical-align:middle;line-height:1.5;">${purposeTxt||'—'}</td>
-          <td style="text-align:right;font-size:13px;font-weight:600;padding:11px 14px;white-space:nowrap;vertical-align:middle;">${fSAR(inv.amount_untaxed)}</td>
-          <td style="text-align:right;font-size:12px;color:var(--text-muted);padding:11px 14px;white-space:nowrap;vertical-align:middle;">${fSAR(inv.amount_tax)}</td>
-          <td style="text-align:right;font-size:13px;font-weight:700;padding:11px 14px;white-space:nowrap;vertical-align:middle;">${fSAR(inv.amount_total)}</td>
-          <td style="padding:11px 14px;white-space:nowrap;vertical-align:middle;">
-            <span style="font-size:12px;font-weight:600;color:${payColor(inv.payment_state)};">${payLabel(inv.payment_state)}</span>
-          </td>
-        </tr>`;
-      }).join('');
-
-      return `
-        <div style="border:1px solid ${phBdColor[ph]};border-radius:8px;margin-bottom:14px;overflow:hidden;
-                    border-left:4px solid ${phSectionBorder[ph]};">
-          <div style="padding:10px 16px;background:${phBgColor[ph]};border-bottom:1px solid ${phBdColor[ph]};
-                      display:flex;justify-content:space-between;align-items:center;">
-            <span style="font-size:14px;font-weight:700;color:${phTxtColor[ph]};">${phaseLabels[ph]}</span>
-            <span style="font-size:13px;font-weight:700;color:${phTxtColor[ph]};">
-              ${phInvs.length} invoice${phInvs.length!==1?'s':''} · ${fSAR(phTotal)} SAR
-            </span>
-          </div>
-          <div style="overflow-x:auto;">
-            <table style="width:100%;border-collapse:collapse;">
-              <thead>
-                <tr style="background:rgba(0,0,0,.03);">
-                  <th style="text-align:left;padding:8px 16px;font-size:10px;letter-spacing:.5px;font-weight:700;color:var(--text-muted);">INVOICE # / CHANGE PHASE</th>
-                  <th style="text-align:left;padding:8px 14px;font-size:10px;letter-spacing:.5px;font-weight:700;color:var(--text-muted);white-space:nowrap;">DATE</th>
-                  <th style="text-align:left;padding:8px 14px;font-size:10px;letter-spacing:.5px;font-weight:700;color:var(--text-muted);">PURPOSE</th>
-                  <th style="text-align:right;padding:8px 14px;font-size:10px;letter-spacing:.5px;font-weight:700;color:var(--text-muted);white-space:nowrap;">EXCL. VAT</th>
-                  <th style="text-align:right;padding:8px 14px;font-size:10px;letter-spacing:.5px;font-weight:700;color:var(--text-muted);white-space:nowrap;">VAT</th>
-                  <th style="text-align:right;padding:8px 14px;font-size:10px;letter-spacing:.5px;font-weight:700;color:var(--text-muted);white-space:nowrap;">TOTAL INCL. VAT</th>
-                  <th style="text-align:left;padding:8px 14px;font-size:10px;letter-spacing:.5px;font-weight:700;color:var(--text-muted);white-space:nowrap;">PAYMENT</th>
-                </tr>
-              </thead>
-              <tbody>${invRows}</tbody>
-              <tfoot>
-                <tr style="background:rgba(0,0,0,.03);border-top:1px solid ${phBdColor[ph]};">
-                  <td colspan="3" style="padding:9px 16px;font-weight:700;font-size:12px;color:${phTxtColor[ph]};">SUBTOTAL</td>
-                  <td style="text-align:right;padding:9px 14px;font-weight:700;font-size:13px;color:${phTxtColor[ph]};">${fSAR(phTotal)}</td>
-                  <td style="text-align:right;padding:9px 14px;font-weight:600;font-size:12px;color:var(--text-muted);">${fSAR(phInvs.reduce((s,i)=>s+i.amount_tax,0))}</td>
-                  <td style="text-align:right;padding:9px 14px;font-weight:700;font-size:13px;color:${phTxtColor[ph]};">${fSAR(phInvs.reduce((s,i)=>s+i.amount_total,0))}</td>
-                  <td></td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        </div>`;
+  const renderGroupView = () => phaseOpts.map(ph=>{
+    const phInvs=filtered.filter(i=>i.phase===ph);
+    if(!phInvs.length) return `
+      <div style="border:1px solid var(--border);border-radius:8px;margin-bottom:12px;overflow:hidden;opacity:.45;">
+        <div style="padding:10px 16px;background:${phBgColor[ph]};display:flex;justify-content:space-between;">
+          <span style="font-size:13px;font-weight:700;color:${phTxtColor[ph]};">${phaseLabels[ph]}</span>
+          <span style="font-size:12px;color:${phTxtColor[ph]};">0 invoices</span>
+        </div>
+        <div style="padding:12px 16px;font-size:12px;color:var(--text-muted);">No invoices assigned to this phase</div>
+      </div>`;
+    const phTotal=phInvs.reduce((s,i)=>s+i.amount_untaxed,0);
+    const rows=phInvs.map(inv=>{
+      const purposeTxt=(inv.purpose||'').replace(/<[^>]+>/g,'').substring(0,180);
+      const originBadge=inv.invoice_origin
+        ? `<span style="font-size:10px;color:#6B7280;">↗ ${inv.invoice_origin}</span>` : '';
+      return `<tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:10px 16px;vertical-align:middle;min-width:155px;">
+          <div style="font-weight:700;font-size:13px;margin-bottom:2px;">${inv.name}</div>
+          ${originBadge}
+          <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:5px;">${renderPills(inv)}</div>
+        </td>
+        <td style="font-family:var(--mono);font-size:12px;padding:10px 14px;white-space:nowrap;vertical-align:middle;">${inv.date||'—'}</td>
+        <td style="font-size:12px;color:var(--text-muted);padding:10px 14px;max-width:260px;white-space:normal;vertical-align:middle;">${purposeTxt||'—'}</td>
+        <td style="text-align:right;font-size:13px;font-weight:600;padding:10px 14px;white-space:nowrap;vertical-align:middle;">${fSAR(inv.amount_untaxed)}</td>
+        <td style="text-align:right;font-size:12px;color:var(--text-muted);padding:10px 14px;white-space:nowrap;">${fSAR(inv.amount_tax)}</td>
+        <td style="text-align:right;font-size:13px;font-weight:700;padding:10px 14px;white-space:nowrap;">${fSAR(inv.amount_total)}</td>
+        <td style="padding:10px 14px;white-space:nowrap;">
+          <span style="font-size:12px;font-weight:600;color:${payColor(inv.payment_state)};">${payLabel(inv.payment_state)}</span>
+        </td>
+      </tr>`;
     }).join('');
+    return `
+      <div style="border:1px solid ${phBdColor[ph]};border-left:4px solid ${phSectionBorder[ph]};
+                  border-radius:8px;margin-bottom:14px;overflow:hidden;">
+        <div style="padding:10px 16px;background:${phBgColor[ph]};border-bottom:1px solid ${phBdColor[ph]};
+                    display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-size:14px;font-weight:700;color:${phTxtColor[ph]};">${phaseLabels[ph]}</span>
+          <span style="font-size:13px;font-weight:700;color:${phTxtColor[ph]};">${phInvs.length} inv · ${fSAR(phTotal)} SAR</span>
+        </div>
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;">
+            <thead><tr style="background:rgba(0,0,0,.03);">
+              <th style="text-align:left;padding:7px 16px;font-size:10px;letter-spacing:.5px;color:var(--text-muted);">INVOICE # / CHANGE PHASE</th>
+              <th style="text-align:left;padding:7px 14px;font-size:10px;letter-spacing:.5px;color:var(--text-muted);white-space:nowrap;">DATE</th>
+              <th style="text-align:left;padding:7px 14px;font-size:10px;letter-spacing:.5px;color:var(--text-muted);">PURPOSE</th>
+              <th style="text-align:right;padding:7px 14px;font-size:10px;letter-spacing:.5px;color:var(--text-muted);white-space:nowrap;">EXCL. VAT</th>
+              <th style="text-align:right;padding:7px 14px;font-size:10px;letter-spacing:.5px;color:var(--text-muted);white-space:nowrap;">VAT</th>
+              <th style="text-align:right;padding:7px 14px;font-size:10px;letter-spacing:.5px;color:var(--text-muted);white-space:nowrap;">TOTAL</th>
+              <th style="text-align:left;padding:7px 14px;font-size:10px;letter-spacing:.5px;color:var(--text-muted);white-space:nowrap;">PAYMENT</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+            <tfoot><tr style="background:rgba(0,0,0,.03);border-top:1px solid ${phBdColor[ph]};">
+              <td colspan="3" style="padding:8px 16px;font-weight:700;font-size:12px;color:${phTxtColor[ph]};">SUBTOTAL</td>
+              <td style="text-align:right;padding:8px 14px;font-weight:700;font-size:13px;color:${phTxtColor[ph]};">${fSAR(phTotal)}</td>
+              <td style="text-align:right;padding:8px 14px;font-weight:600;font-size:12px;color:var(--text-muted);">${fSAR(phInvs.reduce((s,i)=>s+i.amount_tax,0))}</td>
+              <td style="text-align:right;padding:8px 14px;font-weight:700;font-size:13px;color:${phTxtColor[ph]};">${fSAR(phInvs.reduce((s,i)=>s+i.amount_total,0))}</td>
+              <td></td>
+            </tr></tfoot>
+          </table>
+        </div>
+      </div>`;
+  }).join('');
 
-    return sections;
-  };
-
-  // ── Assemble page ─────────────────────────────────────────────────────────
   const isTable = SF.view !== 'group';
 
   return `
@@ -667,22 +723,20 @@ function renderDirectInvoices(invoices, note, summary) {
         <span style="font-size:12px;font-weight:700;color:var(--text-muted);">MONTH:</span>${monthBtns}
       </div>`:''}
       <div style="display:flex;gap:0;margin-left:auto;border:1px solid var(--border);border-radius:6px;overflow:hidden;">
-        <button onclick="_salesSetView('table')"
-          style="font-size:12px;padding:5px 14px;cursor:pointer;font-weight:600;border:none;
-                 background:${isTable?'var(--navy)':'var(--bg-subtle)'};
-                 color:${isTable?'white':'var(--text)'};">
-          ☰ Table
-        </button>
-        <button onclick="_salesSetView('group')"
-          style="font-size:12px;padding:5px 14px;cursor:pointer;font-weight:600;
-                 border-left:1px solid var(--border);border-top:none;border-right:none;border-bottom:none;
-                 background:${!isTable?'var(--navy)':'var(--bg-subtle)'};
-                 color:${!isTable?'white':'var(--text)'};">
-          ⊞ By Phase
-        </button>
+        <button onclick="_salesSetView('table')" style="font-size:12px;padding:5px 14px;cursor:pointer;font-weight:600;
+          border:none;background:${isTable?'var(--navy)':'var(--bg-subtle)'};color:${isTable?'white':'var(--text)'};">
+          ☰ Table</button>
+        <button onclick="_salesSetView('group')" style="font-size:12px;padding:5px 14px;cursor:pointer;font-weight:600;
+          border-left:1px solid var(--border);border-top:none;border-right:none;border-bottom:none;
+          background:${!isTable?'var(--navy)':'var(--bg-subtle)'};color:${!isTable?'white':'var(--text)'};">
+          ⊞ By Phase</button>
       </div>
-      <button onclick="_salesToggleSort()" style="font-size:12px;padding:5px 14px;border-radius:4px;cursor:pointer;border:1px solid var(--border);background:var(--bg-subtle);font-weight:600;">${sortIcon}</button>
+      <button onclick="_salesToggleSort()" style="font-size:12px;padding:5px 14px;border-radius:4px;
+        cursor:pointer;border:1px solid var(--border);background:var(--bg-subtle);font-weight:600;">${sortIcon}</button>
     </div>
+
+    <!-- SO Summary (always shown if data exists) -->
+    ${soPanel}
 
     <!-- View content -->
     <div id="inv-view-content">
@@ -690,7 +744,7 @@ function renderDirectInvoices(invoices, note, summary) {
     </div>`;
 }
 
-// ── Selection handlers (table view) ──────────────────────────────────────
+// ── Handlers ──────────────────────────────────────────────────────────────
 window._salesChkChange = function() {
   const checked=document.querySelectorAll('.inv-chk:checked');
   const toolbar=document.getElementById('bulk-toolbar');
@@ -701,16 +755,15 @@ window._salesChkChange = function() {
   if(countEl) countEl.textContent=checked.length+' selected';
   if(allChk)  allChk.indeterminate=checked.length>0&&checked.length<total;
   document.querySelectorAll('#inv-tbody tr[data-idx]').forEach(tr=>{
-    const chk=tr.querySelector('.inv-chk');
-    tr.style.background=chk?.checked?'#EFF6FF':'';
+    tr.style.background=tr.querySelector('.inv-chk')?.checked?'#EFF6FF':'';
   });
 };
-window._salesSelectAll = function(chkAll) {
-  document.querySelectorAll('.inv-chk').forEach(c=>c.checked=chkAll.checked);
+window._salesSelectAll = function(c) {
+  document.querySelectorAll('.inv-chk').forEach(x=>x.checked=c.checked);
   _salesChkChange();
 };
 window._salesClearSelection = function() {
-  document.querySelectorAll('.inv-chk').forEach(c=>c.checked=false);
+  document.querySelectorAll('.inv-chk').forEach(x=>x.checked=false);
   const a=document.getElementById('chk-all');
   if(a){a.checked=false;a.indeterminate=false;}
   _salesChkChange();
@@ -728,50 +781,27 @@ window._salesBulkAssign = async function() {
   const msg=document.getElementById('bulk-saved-msg');
   if(msg){msg.style.opacity=1;setTimeout(()=>msg.style.opacity=0,1800);}
 };
-
-// ── Pills handler ─────────────────────────────────────────────────────────
-window._pillSet = async function(idx, newPhase) {
-  await _salesDoReclassify(idx, newPhase, true);
-};
-
-// ── View / filter / sort ──────────────────────────────────────────────────
-window._salesSetView = function(v) {
-  window._salesFilter.view=v; _salesRerender();
-};
-window._salesSetYear = function(year) {
-  window._salesFilter.year=year||null; window._salesFilter.month=null; _salesRerender();
-};
-window._salesSetMonth = function(month) {
-  window._salesFilter.month=(window._salesFilter.month===month)?null:month; _salesRerender();
-};
-window._salesToggleSort = function() {
-  window._salesFilter.sort=window._salesFilter.sort==='asc'?'desc':'asc'; _salesRerender();
-};
-function _salesRerender() {
+window._pillSet = async function(idx,newPhase) { await _salesDoReclassify(idx,newPhase,true); };
+window._salesSetView  = function(v){window._salesFilter.view=v;_salesRerender();};
+window._salesSetYear  = function(y){window._salesFilter.year=y||null;window._salesFilter.month=null;_salesRerender();};
+window._salesSetMonth = function(m){window._salesFilter.month=(window._salesFilter.month===m)?null:m;_salesRerender();};
+window._salesToggleSort=function(){window._salesFilter.sort=window._salesFilter.sort==='asc'?'desc':'asc';_salesRerender();};
+function _salesRerender(){
   const cont=document.getElementById('salesContent')||document.getElementById('sales');
   if(cont&&window._directInvoices) cont.innerHTML=renderDirectInvoices(window._directInvoices,'',{});
 }
-
-// ── Core: save to DB + update in-memory ───────────────────────────────────
-async function _salesDoReclassify(idx, newPhase, doRerender=true) {
+async function _salesDoReclassify(idx,newPhase,doRerender=true){
   if(!window._directInvoices) return;
   const inv=window._directInvoices[idx];
   if(!inv) return;
   inv.phase=newPhase;
-  try {
-    await fetch('/api/plan-overrides',{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        phase:'direct_inv_phase',
-        month_key:inv.name.replace(/\//g,'_'),
-        field:'phase',value:newPhase
-      })
-    });
-  } catch(e){console.warn('Save failed:',e);}
+  try{
+    await fetch('/api/plan-overrides',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({phase:'direct_inv_phase',month_key:inv.name.replace(/\//g,'_'),field:'phase',value:newPhase})});
+  }catch(e){console.warn('Save failed:',e);}
   if(doRerender){_rebuildSalesByPhase();_salesRerender();}
 }
-
-function _rebuildSalesByPhase() {
+function _rebuildSalesByPhase(){
   if(!window._directInvoices) return;
   const nbp={};
   window._directInvoices.forEach(i=>{
@@ -788,7 +818,4 @@ function _rebuildSalesByPhase() {
   });
   if(window.AppState){window.AppState._salesInvoicesByPhase=cum;window.AppState._invoiceCumulative={};}
 }
-
-window.reclassifyDirectInv = async function(idx,newPhase){
-  await _salesDoReclassify(idx,newPhase);
-};
+window.reclassifyDirectInv=async function(idx,newPhase){await _salesDoReclassify(idx,newPhase);};
