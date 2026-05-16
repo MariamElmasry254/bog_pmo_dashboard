@@ -7728,16 +7728,11 @@ def api_sales_orders():
         pfx = active_db_prefix()
         plan_ns = f'{pfx}_plan' if pfx else 'plan'
         so_map_raw = db.get_namespace_overrides(plan_ns, 'so_line_map') or {}
-        for raw_key, val in so_map_raw.items():
-            # POST saves as key='12345.var_tab', value='support'
-            if raw_key.endswith('.var_tab'):
-                line_id = raw_key[:-len('.var_tab')]
-                if isinstance(val, str) and val:
-                    line_var_map[line_id] = val
-            elif isinstance(val, dict) and val.get('var_tab'):
-                line_var_map[str(raw_key)] = val['var_tab']
-            elif isinstance(val, str) and val:
-                line_var_map[str(raw_key)] = val
+        for line_id_key, fields in so_map_raw.items():
+            if isinstance(fields, dict) and fields.get('var_tab'):
+                line_var_map[str(line_id_key)] = fields['var_tab']
+            elif isinstance(fields, str):
+                line_var_map[str(line_id_key)] = fields
     except Exception:
         pass
     try:
@@ -7850,11 +7845,6 @@ def api_sales_orders():
             # Classify each direct invoice by saved override or auto-detection
             def classify_direct_inv(inv_id, inv_name=''):
                 key = (inv_name or '').replace('/', '_')
-                # POST saves as key='INV_2025_0057.phase', value='support'
-                phase_val = dir_inv_overrides.get(f'{key}.phase')
-                if phase_val and isinstance(phase_val, str):
-                    return phase_val
-                # Fallback: legacy dict format
                 override = dir_inv_overrides.get(key, {})
                 if isinstance(override, dict) and override.get('phase'):
                     return override['phase']
@@ -7910,7 +7900,7 @@ def api_sales_orders():
                 ODOO_DB, odoo.uid, ODOO_PASSWORD,
                 'account.move', 'search_read',
                 [[('move_type', '=', 'out_invoice'),
-                  ('state', 'in', ['posted', 'draft']),
+                  ('state', '=', 'posted'),
                   ('invoice_line_ids.sale_line_ids.order_id', 'in', so_ids)]],
                 {'fields': ['id', 'name', 'invoice_date', 'invoice_date_due',
                             'amount_untaxed', 'amount_tax', 'amount_total',
@@ -7918,8 +7908,29 @@ def api_sales_orders():
                             'invoice_line_ids', 'narration', 'purpose', 'ref'],
                  'limit': 500, 'order': 'invoice_date asc'}
             )
+            logger.info(f"Invoices via sale_line_ids: {len(invoices_raw)}")
         except Exception as e:
-            logger.warning(f"Invoice fetch failed: {e}")
+            logger.warning(f"Invoice fetch via sale_line_ids failed: {e}")
+
+        # Fallback: get invoices via invoice_origin matching SO names
+        if not invoices_raw:
+            try:
+                so_names = [s['name'] for s in sos]
+                invoices_raw = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'account.move', 'search_read',
+                    [[('move_type', '=', 'out_invoice'),
+                      ('state', '=', 'posted'),
+                      ('invoice_origin', 'in', so_names)]],
+                    {'fields': ['id', 'name', 'invoice_date', 'invoice_date_due',
+                                'amount_untaxed', 'amount_tax', 'amount_total',
+                                'state', 'invoice_origin', 'payment_state',
+                                'invoice_line_ids', 'narration', 'purpose', 'ref'],
+                     'limit': 500, 'order': 'invoice_date asc'}
+                )
+                logger.info(f"Invoices via invoice_origin fallback: {len(invoices_raw)}")
+            except Exception as e2:
+                logger.warning(f"Invoice fetch via invoice_origin failed: {e2}")
 
         # Fetch invoice lines with sale_line_ids linkage
         inv_line_map = {}  # invoice_line_id -> {sale_line_id, amount, name}
@@ -8083,6 +8094,25 @@ def api_sales_orders():
                             inv_phase_map[mid] = lp
 
         # Step 2: Accumulate FULL invoice amount_untaxed per phase per month
+        # For invoices not in inv_phase_map (fallback via invoice_origin),
+        # detect phase from SO line products via invoice_origin
+        origin_so_phase = {}  # so_name -> phase (from SO lines)
+        for order in orders:
+            for line in order.get('lines', []):
+                prod_name = ''
+                if isinstance(line.get('product_id'), list):
+                    prod_name = line['product_id'][1] if len(line['product_id']) > 1 else ''
+                elif line.get('name'):
+                    prod_name = line['name']
+                pl = prod_name.lower()
+                if any(kw in pl for kw in SUPPORT_KWS):
+                    ph = 'support'
+                elif 'license' in pl or '3rd party' in pl:
+                    ph = 'license'
+                else:
+                    ph = line_var_map.get(str(line.get('id','')), 'development')
+                origin_so_phase[order['name']] = ph  # last line wins; good enough
+
         processed_invs = set()
         for inv in invoices_raw:
             if inv['id'] in processed_invs:
@@ -8093,7 +8123,16 @@ def api_sales_orders():
             month = (inv.get('invoice_date') or '')[:7]
             if not month:
                 continue
-            lp = inv_phase_map.get(inv['id'], 'development')
+            # Phase: from explicit map, else from invoice_origin → SO phase
+            if inv['id'] in inv_phase_map:
+                lp = inv_phase_map[inv['id']]
+            else:
+                origin = inv.get('invoice_origin') or ''
+                lp = 'development'
+                for so_name, so_ph in origin_so_phase.items():
+                    if so_name in origin:
+                        lp = so_ph
+                        break
             if lp not in invoices_by_phase:
                 invoices_by_phase[lp] = {}
             invoices_by_phase[lp][month] = (
@@ -8112,171 +8151,6 @@ def api_sales_orders():
 
         return jsonify({'ok': True, 'orders': orders, 'summary': summary,
                         'invoices_by_phase': invoices_by_phase_cumulative})
-
-    except Exception as e:
-        import traceback
-        return jsonify({'ok': False, 'error': str(e), 'trace': traceback.format_exc()}), 500
-
-
-@app.route('/api/all-sales-orders')
-def api_all_sales_orders():
-    """Return all confirmed/done SOs with their invoices, detecting project via analytic account."""
-    try:
-        if not odoo.uid: odoo.connect()
-
-        # Step 1: Get all confirmed + done SOs
-        sos = odoo.models.execute_kw(
-            ODOO_DB, odoo.uid, ODOO_PASSWORD,
-            'sale.order', 'search_read',
-            [[('state', 'in', ['sale', 'done'])]],
-            {'fields': ['id', 'name', 'partner_id', 'date_order', 'state',
-                        'amount_untaxed', 'amount_tax', 'amount_total',
-                        'invoice_status', 'invoice_ids'],
-             'limit': 500, 'order': 'date_order desc'}
-        )
-        if not sos:
-            return jsonify({'ok': True, 'orders': [], 'summary': {}})
-
-        so_ids    = [s['id'] for s in sos]
-        inv_ids_all = []
-        so_inv_map  = {}  # so_id -> [inv_id]
-        for s in sos:
-            ids = s.get('invoice_ids') or []
-            so_inv_map[s['id']] = ids
-            inv_ids_all.extend(ids)
-
-        # Step 2: Get posted invoices + their analytic accounts
-        project_by_inv = {}   # inv_id -> project_name
-        analytic_by_inv = {}  # inv_id -> analytic_account_name
-
-        if inv_ids_all:
-            # Get invoice basic info
-            invoices = odoo.models.execute_kw(
-                ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                'account.move', 'search_read',
-                [[('id', 'in', inv_ids_all),
-                  ('state', '=', 'posted'),
-                  ('move_type', '=', 'out_invoice')]],
-                {'fields': ['id', 'name', 'invoice_date', 'invoice_date_due',
-                            'amount_untaxed', 'amount_tax', 'amount_total',
-                            'state', 'payment_state', 'narration', 'ref',
-                            'invoice_line_ids'],
-                 'limit': 2000}
-            )
-            inv_map = {i['id']: i for i in invoices}
-
-            # Get analytic accounts from invoice lines
-            all_line_ids = []
-            for inv in invoices:
-                all_line_ids.extend(inv.get('invoice_line_ids', []))
-
-            if all_line_ids:
-                inv_lines = odoo.models.execute_kw(
-                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                    'account.move.line', 'search_read',
-                    [[('id', 'in', all_line_ids),
-                      ('display_type', 'not in', ['line_section', 'line_note'])]],
-                    {'fields': ['move_id', 'analytic_account_id'], 'limit': 5000}
-                )
-                # Map invoice -> analytic account
-                inv_analytic = {}  # inv_id -> analytic_account_id
-                for l in inv_lines:
-                    mid = l['move_id'][0] if isinstance(l['move_id'], list) else l['move_id']
-                    aa  = l.get('analytic_account_id')
-                    if aa and isinstance(aa, list) and aa[0]:
-                        inv_analytic[mid] = aa  # [id, name]
-
-                # Get project names from analytic accounts
-                analytic_ids = list({aa[0] for aa in inv_analytic.values()})
-                if analytic_ids:
-                    projects = odoo.models.execute_kw(
-                        ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                        'project.project', 'search_read',
-                        [[('analytic_account_id', 'in', analytic_ids)]],
-                        {'fields': ['id', 'name', 'analytic_account_id'], 'limit': 300}
-                    )
-                    analytic_to_proj = {
-                        p['analytic_account_id'][0]: p['name']
-                        for p in projects if p.get('analytic_account_id')
-                    }
-                    for inv_id, aa in inv_analytic.items():
-                        proj_name = analytic_to_proj.get(aa[0])
-                        if proj_name:
-                            project_by_inv[inv_id]  = proj_name
-                        analytic_by_inv[inv_id] = aa[1] if len(aa) > 1 else ''
-        else:
-            inv_map = {}
-
-        # Step 3: Build response
-        fSAR = lambda v: round(float(v or 0), 2)
-        orders = []
-        total_untaxed = 0
-        total_invoiced = 0
-
-        for s in sos:
-            inv_ids  = so_inv_map.get(s['id'], [])
-            invoices_for_so = [inv_map[i] for i in inv_ids if i in inv_map]
-
-            # Detect project: majority vote from invoices
-            proj_counts = {}
-            for inv in invoices_for_so:
-                pn = project_by_inv.get(inv['id'])
-                if pn:
-                    proj_counts[pn] = proj_counts.get(pn, 0) + inv.get('amount_untaxed', 0)
-            project_name = max(proj_counts, key=proj_counts.get) if proj_counts else ''
-
-            invoiced_amt = sum(i.get('amount_untaxed', 0) for i in invoices_for_so)
-
-            inv_list = [{
-                'id':            i['id'],
-                'name':          i['name'],
-                'date':          (i.get('invoice_date') or '')[:10],
-                'due_date':      (i.get('invoice_date_due') or '')[:10],
-                'amount_untaxed': fSAR(i.get('amount_untaxed', 0)),
-                'amount_tax':    fSAR(i.get('amount_tax', 0)),
-                'amount_total':  fSAR(i.get('amount_total', 0)),
-                'state':         i.get('state', ''),
-                'payment_state': i.get('payment_state', ''),
-                'purpose':       i.get('narration') or i.get('ref') or '',
-                'project':       project_by_inv.get(i['id'], ''),
-            } for i in invoices_for_so]
-
-            amt = fSAR(s.get('amount_untaxed', 0))
-            total_untaxed  += amt
-            total_invoiced += invoiced_amt
-            remaining = round(amt - invoiced_amt, 2)
-
-            orders.append({
-                'id':             s['id'],
-                'name':           s['name'],
-                'partner':        s['partner_id'][1] if s.get('partner_id') else '',
-                'date':           (s.get('date_order') or '')[:10],
-                'state':          s.get('state', ''),
-                'amount_untaxed': amt,
-                'amount_tax':     fSAR(s.get('amount_tax', 0)),
-                'amount_total':   fSAR(s.get('amount_total', 0)),
-                'invoice_status': s.get('invoice_status', ''),
-                'invoiced_amt':   round(invoiced_amt, 2),
-                'remaining':      remaining,
-                'invoiced_pct':   round(invoiced_amt / amt * 100, 1) if amt > 0 else 0,
-                'project':        project_name,
-                'invoices':       inv_list,
-            })
-
-        total_remaining = round(total_untaxed - total_invoiced, 2)
-        overall_pct     = round(total_invoiced / total_untaxed * 100, 1) if total_untaxed > 0 else 0
-
-        return jsonify({
-            'ok': True,
-            'orders': orders,
-            'summary': {
-                'total_orders':    len(orders),
-                'total_untaxed':   round(total_untaxed, 2),
-                'total_invoiced':  round(total_invoiced, 2),
-                'total_remaining': total_remaining,
-                'overall_pct':     overall_pct,
-            }
-        })
 
     except Exception as e:
         import traceback
