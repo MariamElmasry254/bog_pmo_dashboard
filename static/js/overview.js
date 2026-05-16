@@ -70,11 +70,21 @@ async function loadTagsAnalysis() {
       return;
     }
 
+    // No phases found for this tab
+    if (d.no_phases) {
+      cont.innerHTML = `<div class="card" style="padding:24px;text-align:center;color:var(--text-muted);">
+        <div style="font-size:28px;margin-bottom:8px;">📭</div>
+        <div style="font-size:13px;font-weight:600;color:var(--text);">No ${phaseGroup} phases found</div>
+        <div style="font-size:11px;margin-top:6px;max-width:400px;margin-inline:auto;">${d.note || 'No tasks assigned to phases matching ' + phaseGroup + ' keywords'}</div>
+      </div>`;
+      summary.innerHTML = '';
+      return;
+    }
+
     AppState.tagsData = d;
     if (!AppState.activeTagPhases) AppState.activeTagPhases = d.phases_active || [];
 
     const isBogTags = AppState._overviewData?.is_bog !== false;
-    // Show phases dropdown for all projects (non-BOG gets filtered phases from backend)
     renderTagPhaseFilters(phaseGroup, d.phases_available || []);
     if (!isBogTags && (!d.phases_available || !d.phases_available.length)) {
       AppState.activeTagPhases = null;
