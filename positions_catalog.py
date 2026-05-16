@@ -60,6 +60,7 @@ TUNIS_RATES_SEED = [
     {'name': 'Khoubaieb GHAOUARI',        'hour_rate': 19.30},
     {'name': 'Rafeh ZEKRI',               'hour_rate': 12.80},
     {'name': 'Samia ACHOURI',             'hour_rate': 25.80},
+    {'name': 'Samia Achori',             'hour_rate': 25.80},
     {'name': 'Achraf SALMI',              'hour_rate': 19.30},
     {'name': 'Zein el Abidin TRABELSI',   'hour_rate': 25.80},
     {'name': 'Arafet ZOUARI',             'hour_rate': 16.00},
