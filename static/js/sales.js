@@ -486,21 +486,32 @@ function renderDirectInvoices(invoices, note, summary) {
 
 window.reclassifyDirectInv = function(idx, newPhase) {
   if (!window._directInvoices) return;
-  window._directInvoices[idx].phase = newPhase;
-  // Save to AppState for profitability
-  if (!window.AppState._salesInvoicesByPhase) window.AppState._salesInvoicesByPhase = {};
-  // Rebuild from direct invoices
+  const inv = window._directInvoices[idx];
+  inv.phase = newPhase;
+
+  // Save to DB: use invoice name as key
+  fetch('/api/plan-overrides', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      phase: 'direct_inv_phase',
+      month_key: inv.name.replace(/\//g,'_'),
+      field: 'phase',
+      value: newPhase
+    })
+  }).catch(()=>{});
+
+  // Rebuild AppState._salesInvoicesByPhase
   window.AppState._salesInvoicesByPhase = {};
-  window._directInvoices.forEach(inv => {
-    const ph = inv.phase || 'services';
-    const mk = inv.date?.substring(0,7);
-    if (!mk || inv.state !== 'posted') return;
+  window._directInvoices.forEach(i => {
+    const ph = i.phase || 'services';
+    const mk = (i.date||'').substring(0,7);
+    if (!mk || i.state !== 'posted') return;
     if (!window.AppState._salesInvoicesByPhase[ph]) window.AppState._salesInvoicesByPhase[ph] = {};
-    const cur = window.AppState._salesInvoicesByPhase[ph][mk] || {month:0,cumulative:0};
-    cur.month += inv.amount_untaxed;
-    window.AppState._salesInvoicesByPhase[ph][mk] = cur;
+    window.AppState._salesInvoicesByPhase[ph][mk] = window.AppState._salesInvoicesByPhase[ph][mk] || {month:0,cumulative:0};
+    window.AppState._salesInvoicesByPhase[ph][mk].month += i.amount_untaxed;
   });
-  // Rebuild cumulatives
+  // Build cumulatives
   Object.keys(window.AppState._salesInvoicesByPhase).forEach(ph => {
     let running = 0;
     Object.keys(window.AppState._salesInvoicesByPhase[ph]).sort().forEach(mk => {
@@ -508,7 +519,7 @@ window.reclassifyDirectInv = function(idx, newPhase) {
       window.AppState._salesInvoicesByPhase[ph][mk].cumulative = running;
     });
   });
-  // Clear invoice cache
+  // Clear invoice cumulative cache
   if (window.AppState._invoiceCumulative) window.AppState._invoiceCumulative = {};
   // Re-render
   const cont = document.getElementById('salesContent') || document.getElementById('sales');
