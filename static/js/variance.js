@@ -1153,19 +1153,49 @@ async function profRecomputeAll(phaseKey) {
   // ── 4. Issued Invoices: load monthly_cumulative per phase (once, cached) ──
   if (!AppState._invoiceCumulative) AppState._invoiceCumulative = {};
   if (!AppState._invoiceCumulative[phaseKey]) {
+    // Try sales API first (has invoices split by product/phase)
     try {
-      const invRes = await fetch(`/api/invoices/by-phase/${phaseKey}`);
-      if (invRes.ok) {
-        const invData = await invRes.json();
-        // monthly_cumulative[YYYY-MM].total = cumulative issued SAR up to that month
+      if (AppState._salesInvoicesByPhase) {
+        // Already loaded from sales tab
+        const phaseData = AppState._salesInvoicesByPhase[phaseKey] || {};
         const cum = {};
-        const mc = invData.monthly_cumulative || {};
-        for (const [mk, v] of Object.entries(mc)) {
-          cum[mk] = v.total || 0;
+        for (const [mk, v] of Object.entries(phaseData)) {
+          cum[mk] = v.cumulative || 0;
         }
         AppState._invoiceCumulative[phaseKey] = cum;
+      } else {
+        // Load from sales API
+        const salesRes = await fetch('/api/sales-orders');
+        if (salesRes.ok) {
+          const salesData = await salesRes.json();
+          if (salesData.invoices_by_phase) {
+            AppState._salesInvoicesByPhase = salesData.invoices_by_phase;
+            const phaseData = salesData.invoices_by_phase[phaseKey] || {};
+            const cum = {};
+            for (const [mk, v] of Object.entries(phaseData)) {
+              cum[mk] = v.cumulative || 0;
+            }
+            AppState._invoiceCumulative[phaseKey] = cum;
+          }
+        }
       }
-    } catch(e) { console.warn('Invoice load error:', e); }
+    } catch(e) { console.warn('Sales invoice load error:', e); }
+
+    // Fallback to old endpoint
+    if (!AppState._invoiceCumulative[phaseKey]) {
+      try {
+        const invRes = await fetch(`/api/invoices/by-phase/${phaseKey}`);
+        if (invRes.ok) {
+          const invData = await invRes.json();
+          const cum = {};
+          const mc = invData.monthly_cumulative || {};
+          for (const [mk, v] of Object.entries(mc)) {
+            cum[mk] = v.total || 0;
+          }
+          AppState._invoiceCumulative[phaseKey] = cum;
+        }
+      } catch(e) { console.warn('Invoice fallback error:', e); }
+    }
     if (!AppState._invoiceCumulative[phaseKey]) AppState._invoiceCumulative[phaseKey] = {};
   }
 
