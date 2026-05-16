@@ -1184,6 +1184,7 @@ async function profRecomputeAll(phaseKey) {
     const remInp  = tr.querySelector('.remaining-input');
     const completionPct = parseFloat(compInp?.value) || 0;
     const remainingMDs  = parseFloat(remInp?.value)  || 0;
+    if (rowIdx <= 2) console.log(`[row ${monthKey}] compInp.value="${compInp?.value}" → pct=${completionPct}, rem=${remainingMDs}, actualMDs=${actualMDs}, totalEstMDs=${totalEstMDs}, totalEstCostSAR=${totalEstCostSAR}`);
 
     // Current Cost = cumulative cost from effort (SAR)
     let accCostUSD = 0;
