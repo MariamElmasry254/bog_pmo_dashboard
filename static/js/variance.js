@@ -1001,16 +1001,25 @@ async function profRecomputeAll(phaseKey) {
   totalRevSAR += budgChanges.reduce((s,c) => s + (parseFloat(c.delta_rev)||0), 0);
 
   // Per-month helpers: apply only changes effective by that month's date
+  // Approved revenue = saved revenue (before any changes)
+  const approvedRevBase = AppState._savedRevenue?.[phaseKey] || 0;
+
   const _getMonthlyRev = (mk) => {
-    let rev = AppState._savedRevenue?.[phaseKey] || 0;
+    // Start from approved base, add only changes effective by this month
+    let rev = approvedRevBase;
     budgChanges.forEach(c => {
       const cd = (c.change_date||'').slice(0,7);
       if (!cd || cd <= mk) rev += parseFloat(c.delta_rev)||0;
     });
     return rev;
   };
+  // Approved cost = Final Budget cost MINUS all changes (base before any changes)
+  const totalDeltaCostAll = budgChanges.reduce((s,c) => s + (parseFloat(c.delta_cost)||0), 0);
+  const approvedCostSARBase = (AppState._budgetFinalCost?.[phaseKey] || totalEstCostSAR) - totalDeltaCostAll;
+
   const _getMonthlyEstCost = (mk) => {
-    let cost = totalEstCostSAR;
+    // Start from approved base, add only changes effective by this month
+    let cost = approvedCostSARBase;
     budgChanges.forEach(c => {
       const cd = (c.change_date||'').slice(0,7);
       if (!cd || cd <= mk) cost += parseFloat(c.delta_cost)||0;
