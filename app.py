@@ -7956,7 +7956,7 @@ def api_sales_orders():
                 elif 'license' in prod_lower:
                     phase_key = 'license'
                 else:
-                    phase_key = 'services'
+                    phase_key = 'development'  # dev/consulting lines
 
                 if phase_key not in invoices_by_phase:
                     invoices_by_phase[phase_key] = {}
