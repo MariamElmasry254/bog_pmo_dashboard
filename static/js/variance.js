@@ -1400,7 +1400,7 @@ function renderEffort(data, phaseKey) {
           <span class="muted-text" style="font-size: 11px;">Live from Odoo · Starting from first month with logs · Regular / Ramadan / Overtime split per country rules</span>
         </div>
         <button class="btn-primary" id="effort-reload-${phaseKey}" onclick="loadEffortLive('${phaseKey}','${containerId}')">↻ Refresh from Odoo</button>
-        <button class="btn-outline" style="font-size:12px;" onclick="checkUnassignedHours('${phaseKey}')">⚠ Check Unassigned Hours</button>
+        <button style="font-size:11px;padding:6px 14px;background:#FEF3C7;border:1px solid #F59E0B;color:#92400E;border-radius:6px;cursor:pointer;font-weight:600;" onclick="checkUnassignedHours('${phaseKey}')">⚠ Unassigned Hours</button>
       </div>
       <div id="unassigned-banner-${phaseKey}"></div>
       <div id="${containerId}"><div class="loading">Loading from Odoo…</div></div>
@@ -1463,18 +1463,27 @@ async function checkUnassignedHours(phaseKey) {
 
 async function addUnassignedToPhase(currentPhase, targetPhase) {
   const banner = document.getElementById(`unassigned-banner-${currentPhase}`);
-  if (banner) banner.innerHTML = '<div class="loading" style="padding:8px;">Processing…</div>';
+  if (banner) banner.innerHTML = '<div style="padding:8px;font-size:12px;color:#6B7280;">Saving…</div>';
   try {
-    // Re-fetch effort for the target phase which now includes these hours
-    const containerId = `effort-live-${targetPhase}`;
-    await loadEffortLive(targetPhase, containerId);
+    // Save override: include unassigned hours in this phase
+    await fetch('/api/plan-overrides', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ phase: targetPhase, month_key: 'unassigned', field: 'include_unassigned', value: true })
+    });
     if (banner) banner.innerHTML = `
-      <div style="background:#D1FAE5;border:1px solid #6EE7B7;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:12px;color:#065F46;">
-        ✅ Hours added to ${targetPhase} phase — see the ${targetPhase} tab Current Effort.
+      <div style="background:#D1FAE5;border:1px solid #6EE7B7;border-radius:8px;padding:10px 14px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;">
+        <span style="font-size:12px;color:#065F46;font-weight:600;">✅ Unassigned hours will now be included in <b>${targetPhase}</b> Current Effort</span>
+        <button onclick="document.getElementById('unassigned-banner-${currentPhase}').innerHTML=''"
+          style="background:none;border:none;cursor:pointer;color:#065F46;font-size:16px;">×</button>
       </div>`;
-    setTimeout(() => { if(banner) banner.innerHTML = ''; }, 4000);
+    // Reload effort for target phase
+    const containerId = `effort-live-${targetPhase}`;
+    if (document.getElementById(containerId)) {
+      await loadEffortLive(targetPhase, containerId);
+    }
   } catch(e) {
-    if (banner) banner.innerHTML = '';
+    if (banner) banner.innerHTML = `<div style="color:var(--red);font-size:12px;padding:8px;">Error: ${e.message}</div>`;
   }
 }
 
