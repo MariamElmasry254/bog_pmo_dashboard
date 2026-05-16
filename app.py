@@ -3095,7 +3095,11 @@ def api_overview_analysis(phase_group):
                 stage_id = t['stage_id'][0]
                 stage = t['stage_id'][1]
 
-            phase_label = (phase_id_to_name.get(t.get('phase_id', [None, ''])[0]) or '') if t.get('phase_id') else ''
+            _ph = t.get('phase_id')
+            if _ph and isinstance(_ph, list) and _ph[0]:
+                phase_label = phase_id_to_name.get(_ph[0]) or (_ph[1] if len(_ph)>1 else 'No Phase')
+            else:
+                phase_label = 'No Phase'
 
             parent_id = None
             parent_name = ''
@@ -3257,11 +3261,17 @@ def api_overview_analysis(phase_group):
         total_actual = sum(t['actual_hours'] for t in ordered)
         overall_progress = round(min(150, total_actual / total_planned * 100), 1) if total_planned > 0 else 0
 
+        # Check if any tasks have no phase → add 'No Phase' option
+        has_no_phase_tasks = any(t.get('phase') == 'No Phase' for t in ordered)
+        phases_avail = [p for p in phase_names if p]
+        if has_no_phase_tasks and 'No Phase' not in phases_avail:
+            phases_avail.append('No Phase')
+
         return jsonify({
             'tasks': ordered,
             'connected': True,
-            'phases_available': [p for p in phase_names if p],  # Non-BOG: show actual project phases (filter None)
-            'phases_active': phase_names,
+            'phases_available': phases_avail,
+            'phases_active': phases_avail,
             'employees_available': sorted(all_employees_set),
             'employees_filter': employees_filter,
             'stages_used': [{'id': sid, 'name': name} for sid, name in stages_used.items()],
