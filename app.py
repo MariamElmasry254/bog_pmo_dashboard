@@ -1741,6 +1741,38 @@ def api_import_summary_excel():
     return jsonify({'ok': True, 'sheets': wb.sheetnames, 'needs_sheet_selection': True})
 
 
+@app.route('/api/overview/phase-progress')
+def api_overview_phase_progress():
+    """Return latest % completion + remaining MDs per phase from plan_overrides."""
+    _proj_id = session.get('project_id')
+    _is_bog  = not _proj_id or str(_proj_id) == '228'
+    phases = ['development', 'consultation', 'support'] if _is_bog else ['services', 'support']
+    result = {}
+    for phase in phases:
+        try:
+            overrides = load_plan_overrides().get('plan_overrides', {}).get(phase, {})
+            if not overrides:
+                result[phase] = {}
+                continue
+            # Find last month with completion or remaining entered
+            latest = {}
+            latest_month = ''
+            for month_key, fields in sorted(overrides.items()):
+                pct = fields.get('completion')
+                rem = fields.get('remaining')
+                if pct or rem:
+                    latest = fields
+                    latest_month = month_key
+            result[phase] = {
+                'completion': float(latest.get('completion', 0) or 0),
+                'remaining':  float(latest.get('remaining',  0) or 0),
+                'month_key':  latest_month,
+            }
+        except Exception as e:
+            result[phase] = {}
+    return jsonify({'ok': True, 'phases': result})
+
+
 @app.route('/api/project-phases-available')
 def api_project_phases_available():
     """Check which phase groups exist for this project — uses Excel config first."""
