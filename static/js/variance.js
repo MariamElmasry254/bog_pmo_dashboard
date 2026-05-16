@@ -1163,6 +1163,7 @@ async function profRecomputeAll(phaseKey) {
           }
         }
       }
+      console.log('[InvDebug] salesInvoicesByPhase=', JSON.stringify(AppState._salesInvoicesByPhase));
       if (AppState._salesInvoicesByPhase) {
         // Map variance tab → sales phase keys
         // BOG: development & consultation → 'development', support → 'support', license excluded
