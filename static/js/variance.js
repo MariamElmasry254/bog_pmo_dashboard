@@ -1164,16 +1164,24 @@ async function profRecomputeAll(phaseKey) {
         }
       }
       if (AppState._salesInvoicesByPhase) {
-        // Build cumulative for this phase
-        // Apply _soLineVarMap overrides: re-map invoice amounts by user-set var tab
-        const monthly = {};  // { 'YYYY-MM': amount }
+        // Map variance tab → sales phase keys
+        // BOG: development & consultation → 'development', support → 'support', license excluded
+        // Non-BOG: services → 'development', support → 'support'
+        const phaseMapping = {
+          development:  ['development', 'consultation'],
+          consultation: ['development', 'consultation'],
+          services:     ['development', 'consultation'],
+          support:      ['support'],
+        };
+        const matchPhases = phaseMapping[phaseKey] || [phaseKey];
+
+        const monthly = {};
         for (const [srcPhase, phaseData] of Object.entries(AppState._salesInvoicesByPhase)) {
-          // Determine target var tab (default = srcPhase, override via _soLineVarMap)
-          // For now use srcPhase directly — _soLineVarMap maps line_id not phase
-          if (srcPhase === phaseKey || srcPhase === phaseKey.replace('services','development')) {
-            for (const [mk, v] of Object.entries(phaseData)) {
-              monthly[mk] = (monthly[mk] || 0) + (v.month || 0);
-            }
+          // Skip license — not part of variance profitability
+          if (srcPhase === 'license') continue;
+          if (!matchPhases.includes(srcPhase)) continue;
+          for (const [mk, v] of Object.entries(phaseData)) {
+            monthly[mk] = (monthly[mk] || 0) + (v.month || 0);
           }
         }
         // Build cumulative
@@ -1189,21 +1197,6 @@ async function profRecomputeAll(phaseKey) {
       }
     } catch(e) { console.warn('Sales invoice load error:', e); }
 
-    // Fallback to old endpoint
-    if (!AppState._invoiceCumulative[phaseKey]) {
-      try {
-        const invRes = await fetch(`/api/invoices/by-phase/${phaseKey}`);
-        if (invRes.ok) {
-          const invData = await invRes.json();
-          const cum = {};
-          const mc = invData.monthly_cumulative || {};
-          for (const [mk, v] of Object.entries(mc)) {
-            cum[mk] = v.total || 0;
-          }
-          AppState._invoiceCumulative[phaseKey] = cum;
-        }
-      } catch(e) { console.warn('Invoice fallback error:', e); }
-    }
     if (!AppState._invoiceCumulative[phaseKey]) AppState._invoiceCumulative[phaseKey] = {};
   }
 
