@@ -5779,6 +5779,13 @@ def api_effort_all_months(phase_key):
             relevant_ids = {t['id'] for t in all_proj_tasks}
             logger.info(f"Non-BOG effort {phase_key}: using all {len(relevant_ids)} tasks (no phases)")
 
+        # Check if user chose to include unassigned hours in this phase
+        _incl_unassigned = proj_get_override('plan', phase_key, 'unassigned.include_unassigned')
+        if _incl_unassigned:
+            unassigned_ids = {t['id'] for t in all_proj_tasks if not t.get('phase_id')}
+            relevant_ids = relevant_ids | unassigned_ids
+            logger.info(f"Including {len(unassigned_ids)} unassigned tasks in {phase_key}")
+
         # Walk parent chains to include sub-tasks of phase tasks
         for t in all_proj_tasks:
             if t['id'] in relevant_ids:
