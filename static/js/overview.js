@@ -310,8 +310,10 @@ async function loadOverviewKPIs() {
       const fmtN = n => n ? new Intl.NumberFormat('en-US',{maximumFractionDigits:1}).format(n) : '—';
       const setOv = (id, val) => { const el=document.getElementById(id); if(el) el.textContent=val; };
       // services/consultation → Con prefix, support/development → Dev prefix
-      const isSupport = phaseKey === 'support' || phaseKey === 'development';
-      const pre = isSupport ? 'Dev' : 'Con';
+      // services/consultation → Con, support → Sup, development → Dev
+      let pre = 'Con';
+      if (phaseKey === 'support') pre = 'Sup';
+      else if (phaseKey === 'development') pre = 'Dev';
       const pct = d.completionPct || 0;
       setOv(`kpi${pre}Progress`,  pct > 0 ? fmtN(pct) : '—');
       setOv(`kpi${pre}Remaining`, d.remainingMDs ? fmtN(d.remainingMDs) + ' MD' : '—');
@@ -522,10 +524,9 @@ async function _loadPhaseRevenues() {
       set('kpiDevRev', fSAR(d.development));
       set('kpiSupRev', fSAR(d.support));
     } else {
-      // Non-BOG: services revenue = consultation, support = support
-      set('kpiConRev', fSAR(d.consultation || d.services));
+      // Non-BOG: services→Con row, support→Sup row
+      set('kpiConRev', fSAR(d.services));
       set('kpiSupRev', fSAR(d.support));
-      // Hide Dev row (already hidden by label rename)
     }
   } catch(e) { console.warn('Phase revenue error:', e); }
 }
@@ -673,8 +674,12 @@ async function _loadPhaseCostKPIs() {
       const eacCostSAR = profData?.eacMDs ? cumCostSAR + profData.eacMDs * avgCPMD : cumCostSAR;
       totalEACSAR += eacCostSAR;
 
-      // Map phase to element prefix
-      const pre = (phase === 'development' || phase === 'services') ? 'Con' : 'Dev';
+      // Map phase to element prefix: services→Con, support→Sup, development→Dev, consultation→Con
+      let pre = 'Con';
+      if (phase === 'support') pre = 'Sup';
+      else if (phase === 'development') pre = 'Dev';
+      else if (phase === 'consultation') pre = 'Con';
+      else if (phase === 'services') pre = 'Con';
       set(`kpi${pre}Cost`, fSAR(cumCostSAR));
       set(`kpi${pre}EAC`,  fSAR(eacCostSAR));
     } catch(e) {
