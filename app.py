@@ -2884,6 +2884,9 @@ def api_overview_analysis(phase_group):
             return jsonify({'tasks': [], 'connected': False, 'error': 'Odoo unreachable'})
 
     try:
+        _has_unphased = False  # default — updated after project domain is known
+        _include_no_phase = 'No Phase' in (phases_param or '')
+
         # Get phase IDs — try project.phase first (BOG), then task.type (non-BOG)
         phases = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
