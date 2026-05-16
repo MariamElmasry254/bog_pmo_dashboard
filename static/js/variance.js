@@ -1170,7 +1170,9 @@ async function profRecomputeAll(phaseKey) {
         const phaseMapping = {
           development:  ['development'],
           consultation: ['consultation'],
-          services:     ['development', 'consultation'],  // non-BOG: services gets dev+consult
+          // non-BOG: services tab maps to both 'services' and 'development'/'consultation'
+          // (user may assign invoices as 'services' directly, or via SO line as 'development')
+          services:     ['services', 'development', 'consultation'],
           support:      ['support'],
         };
         const matchPhases = phaseMapping[phaseKey] || [phaseKey];
