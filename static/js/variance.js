@@ -1026,35 +1026,47 @@ async function profRecomputeAll(phaseKey) {
     return v;
   };
   const _getMonthlyEstMDs = (mk) => {
-    const approvedBase = (AppState._budgetPresalesMDs?.[phaseKey] || totalEstMDs) - totalDeltaMDsAll;
+    // Base = Presales MDs from Budget (estimated rows) BEFORE any changes
+    const presalesMDs = AppState._budgetPresalesMDs?.[phaseKey] || totalEstMDs || 0;
+    const approvedBase = presalesMDs - totalDeltaMDsAll;
     let v = approvedBase;
     budgChanges.forEach(c => { const cd=(c.change_date||'').slice(0,7); if(!cd||cd<=mk) v+=parseFloat(c.delta_mds)||0; });
-    return v;
+    return v > 0 ? v : presalesMDs; // fallback: if no changes, show presales MDs
   };
 
-  // ── 2. Estimated rows: cache → DB ──
-  const estRows = (_estPhase === phaseKey && _estRows?.length) ? _estRows : null;
-  if (estRows) {
-    let costUSD = 0;
-    estRows.forEach(r => {
-      const hr=parseFloat(r.hourRate)||0, at=parseFloat(r.actualTime)||0, em=parseFloat(r.estMonths)||0;
-      costUSD += hr*at*em; totalEstMDs += at*em/8;
-    });
-    totalEstCostSAR = costUSD * 3.75;
-  } else {
-    try {
-      const r = await fetch(`/api/estimated-rows?phase=${phaseKey}`);
-      if (r.ok) {
-        const d = await r.json();
-        let costUSD = 0;
-        (d.rows||[]).forEach(r => {
-          const hr=parseFloat(r.hourRate)||0, at=parseFloat(r.actualTime)||0, em=parseFloat(r.estMonths)||0;
-          costUSD += hr*at*em; totalEstMDs += at*em/8;
-        });
-        totalEstCostSAR = costUSD * 3.75;
-        if (!_estRows?.length) { _estRows = d.rows||[]; _estPhase = phaseKey; }
-      }
-    } catch(e) {}
+  // ── 2. Estimated MDs + Cost ──
+  // MDs: from Budget Presales MDs (AppState) → estimated rows → API
+  if (AppState._budgetPresalesMDs?.[phaseKey]) {
+    totalEstMDs = AppState._budgetPresalesMDs[phaseKey];
+  }
+  if (AppState._budgetFinalCost?.[phaseKey]) {
+    totalEstCostSAR = AppState._budgetFinalCost[phaseKey];
+  }
+  // Fallback: compute from rows if not in AppState
+  if (!totalEstCostSAR || !totalEstMDs) {
+    const estRows = (_estPhase === phaseKey && _estRows?.length) ? _estRows : null;
+    if (estRows) {
+      let costUSD = 0;
+      estRows.forEach(r => {
+        const hr=parseFloat(r.hourRate)||0, at=parseFloat(r.actualTime)||0, em=parseFloat(r.estMonths)||0;
+        costUSD += hr*at*em; if(!totalEstMDs) totalEstMDs += at*em/8;
+      });
+      if(!totalEstCostSAR) totalEstCostSAR = costUSD * 3.75;
+    } else {
+      try {
+        const r = await fetch(`/api/estimated-rows?phase=${phaseKey}`);
+        if (r.ok) {
+          const d = await r.json();
+          let costUSD = 0;
+          (d.rows||[]).forEach(r => {
+            const hr=parseFloat(r.hourRate)||0, at=parseFloat(r.actualTime)||0, em=parseFloat(r.estMonths)||0;
+            costUSD += hr*at*em; if(!totalEstMDs) totalEstMDs += at*em/8;
+          });
+          if(!totalEstCostSAR) totalEstCostSAR = costUSD * 3.75;
+          if (!_estRows?.length) { _estRows = d.rows||[]; _estPhase = phaseKey; }
+        }
+      } catch(e) {}
+    }
   }
 
   // ── 3. Effort MDs + Costs: AppState → API ──
