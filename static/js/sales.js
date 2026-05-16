@@ -417,6 +417,8 @@ function renderDirectInvoices(invoices, note, summary) {
     ? [['development','Development'],['consultation','Consultation'],['support','Support'],['license','License']]
     : [['services','Services'],['support','Support'],['license','License']];
 
+  // Ensure every invoice has a stable _idx matching its position in the array
+  invoices.forEach((inv, i) => { inv._idx = i; });
   window._directInvoices = invoices;
   if (!window._salesFilter) window._salesFilter = {year:null, month:null, sort:'asc', view:'table'};
   const SF = window._salesFilter;
@@ -722,9 +724,9 @@ window._salesBulkAssign = async function() {
   const idxs=[...checked].map(c=>parseInt(c.dataset.idx));
   await Promise.all(idxs.map(idx=>_salesDoReclassify(idx,newPhase,false)));
   _rebuildSalesByPhase();
+  _salesRerender();
   const msg=document.getElementById('bulk-saved-msg');
   if(msg){msg.style.opacity=1;setTimeout(()=>msg.style.opacity=0,1800);}
-  setTimeout(_salesRerender,300);
 };
 
 // ── Pills handler ─────────────────────────────────────────────────────────
