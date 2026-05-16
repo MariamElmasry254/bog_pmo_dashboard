@@ -1130,15 +1130,6 @@ async function profRecomputeAll(phaseKey) {
   }
 
   const costPerMD = totalEstMDs > 0 ? totalEstCostSAR / totalEstMDs : 0;
-
-  // Avg Cost per MD from Current Effort (Total Cost SAR ÷ Total MDs in effort tab)
-  let effortAvgCostPerMD = AppState._effortAvgCostPerMD?.[phaseKey];
-  if (!effortAvgCostPerMD) {
-    // Calculate from effort month costs and MDs
-    const allMDs   = Object.values(effortMDsFinal).reduce((s,v) => s+v, 0);
-    const allCosts = Object.values(effortCostsFinal).reduce((s,v) => s+v, 0) * 3.75;
-    effortAvgCostPerMD = allMDs > 0 ? allCosts / allMDs : costPerMD;
-  }
   const finProfitPct = AppState._finalProfitPct?.[phaseKey];
   // If no saved profit%, calculate from budget: (revenue - est cost) / revenue
   const plannedProfitSAR = finProfitPct != null
@@ -1150,33 +1141,50 @@ async function profRecomputeAll(phaseKey) {
   const effortCostsFinal = AppState._effortMonthCosts?.[phaseKey] || {};
   const monthsFinal      = AppState._effortMonths?.[phaseKey]     || [];
 
+  // Avg Cost per MD from effort data
+  let effortAvgCostPerMD = AppState._effortAvgCostPerMD?.[phaseKey];
+  if (!effortAvgCostPerMD) {
+    const allMDs   = Object.values(effortMDsFinal).reduce((s,v) => s+v, 0);
+    const allCosts = Object.values(effortCostsFinal).reduce((s,v) => s+v, 0) * 3.75;
+    effortAvgCostPerMD = allMDs > 0 ? allCosts / allMDs : costPerMD;
+  }
+
   // ── 4. Issued Invoices: load monthly_cumulative per phase (once, cached) ──
   if (!AppState._invoiceCumulative) AppState._invoiceCumulative = {};
   if (!AppState._invoiceCumulative[phaseKey]) {
-    // Try sales API first (has invoices split by product/phase)
+    // Load invoices from sales API grouped by variance tab
     try {
-      if (AppState._salesInvoicesByPhase) {
-        // Already loaded from sales tab
-        const phaseData = AppState._salesInvoicesByPhase[phaseKey] || {};
-        const cum = {};
-        for (const [mk, v] of Object.entries(phaseData)) {
-          cum[mk] = v.cumulative || 0;
-        }
-        AppState._invoiceCumulative[phaseKey] = cum;
-      } else {
-        // Load from sales API
+      if (!AppState._salesInvoicesByPhase) {
         const salesRes = await fetch('/api/sales-orders');
         if (salesRes.ok) {
           const salesData = await salesRes.json();
           if (salesData.invoices_by_phase) {
             AppState._salesInvoicesByPhase = salesData.invoices_by_phase;
-            const phaseData = salesData.invoices_by_phase[phaseKey] || {};
-            const cum = {};
-            for (const [mk, v] of Object.entries(phaseData)) {
-              cum[mk] = v.cumulative || 0;
-            }
-            AppState._invoiceCumulative[phaseKey] = cum;
           }
+        }
+      }
+      if (AppState._salesInvoicesByPhase) {
+        // Build cumulative for this phase
+        // Apply _soLineVarMap overrides: re-map invoice amounts by user-set var tab
+        const monthly = {};  // { 'YYYY-MM': amount }
+        for (const [srcPhase, phaseData] of Object.entries(AppState._salesInvoicesByPhase)) {
+          // Determine target var tab (default = srcPhase, override via _soLineVarMap)
+          // For now use srcPhase directly — _soLineVarMap maps line_id not phase
+          if (srcPhase === phaseKey || srcPhase === phaseKey.replace('services','development')) {
+            for (const [mk, v] of Object.entries(phaseData)) {
+              monthly[mk] = (monthly[mk] || 0) + (v.month || 0);
+            }
+          }
+        }
+        // Build cumulative
+        let running = 0;
+        const cum = {};
+        for (const mk of Object.keys(monthly).sort()) {
+          running += monthly[mk];
+          cum[mk] = running;
+        }
+        if (Object.keys(cum).length) {
+          AppState._invoiceCumulative[phaseKey] = cum;
         }
       }
     } catch(e) { console.warn('Sales invoice load error:', e); }
