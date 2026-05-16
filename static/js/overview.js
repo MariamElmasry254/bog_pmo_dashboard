@@ -73,7 +73,9 @@ async function loadTagsAnalysis() {
     AppState.tagsData = d;
     if (!AppState.activeTagPhases) AppState.activeTagPhases = d.phases_active || [];
 
-    renderTagPhaseFilters(phaseGroup, d.phases_available || []);
+    const isBogTags = AppState._overviewData?.is_bog !== false;
+    renderTagPhaseFilters(phaseGroup, isBogTags ? (d.phases_available || []) : []);
+    if (!isBogTags) AppState.activeTagPhases = null;
 
     if (!d.tags || !d.tags.length) {
       cont.innerHTML = '<div class="card"><div class="loading">No tagged tasks found in this phase.</div></div>';
@@ -299,25 +301,20 @@ async function loadOverviewKPIs() {
       const d = AppState._latestProfData?.[phaseKey];
       if (!d) return;
       const fmtN = n => n ? new Intl.NumberFormat('en-US',{maximumFractionDigits:1}).format(n) : '—';
-      const setOv = (id, val, color) => {
-        const el = document.getElementById(id);
-        if (!el) return;
-        el.textContent = val;
-        if (color) el.style.color = color;
-      };
-      // Map phase → overview element prefix
-      const isSupport = phaseKey === 'support';
-      const pre = isSupport ? 'Dev' : 'Con'; // Dev=Support progress card, Con=Services progress card
+      const setOv = (id, val) => { const el=document.getElementById(id); if(el) el.textContent=val; };
+      // services/consultation → Con prefix, support/development → Dev prefix
+      const isSupport = phaseKey === 'support' || phaseKey === 'development';
+      const pre = isSupport ? 'Dev' : 'Con';
       const pct = d.completionPct || 0;
       setOv(`kpi${pre}Progress`,  pct > 0 ? fmtN(pct) : '—');
-      setOv(`kpi${pre}Remaining`, d.remainingMDs ? fmtN(d.remainingMDs) : '—');
-      setOv(`kpi${pre}EAC`,       d.eacMDs       ? fmtN(d.eacMDs)       : '—');
-      // Update progress bar
+      setOv(`kpi${pre}Remaining`, d.remainingMDs ? fmtN(d.remainingMDs) + ' MD' : '—');
+      setOv(`kpi${pre}EAC`,       d.eacMDs       ? fmtN(d.eacMDs)               : '—');
       const bar = document.getElementById(`kpi${pre}ProgressBar`);
       if (bar) bar.style.width = Math.min(pct, 100) + '%';
-      // Show month label
       if (d.monthKey) {
-        const foot = document.querySelector(`#kpi${pre}Progress`)?.closest('.kpi-card')?.querySelector('.kpi-foot');
+        // Update footer with "as of YYYY-MM"
+        const card = document.getElementById(`kpi${pre}Progress`)?.closest('[style*="border-radius"]');
+        const foot = card?.querySelector('[style*="font-size:11px"], .kpi-foot');
         if (foot) foot.textContent = `as of ${d.monthKey}`;
       }
     };
@@ -507,9 +504,17 @@ async function _loadPhaseRevenues() {
     const d = await res.json();
     const fSAR = v => (v && v > 0) ? fmt.money(Math.round(v)) : '—';
     const set  = (id, v) => { const el=document.getElementById(id); if(el) el.textContent=v; };
-    set('kpiConRev', fSAR(d.consultation));
-    set('kpiDevRev', fSAR(d.development));
-    set('kpiSupRev', fSAR(d.support));
+    const isBog = AppState._overviewData?.is_bog !== false;
+    if (isBog) {
+      set('kpiConRev', fSAR(d.consultation));
+      set('kpiDevRev', fSAR(d.development));
+      set('kpiSupRev', fSAR(d.support));
+    } else {
+      // Non-BOG: services revenue = consultation, support = support
+      set('kpiConRev', fSAR(d.consultation || d.services));
+      set('kpiSupRev', fSAR(d.support));
+      // Hide Dev row (already hidden by label rename)
+    }
   } catch(e) { console.warn('Phase revenue error:', e); }
 }
 
@@ -621,7 +626,10 @@ async function _loadPhaseCostKPIs() {
   let totalCostSAR = 0;
   let totalEACSAR  = 0;
 
-  for (const phase of ['consultation', 'development']) {
+  const isBogCost = AppState._overviewData?.is_bog !== false;
+  const phases = isBogCost ? ['consultation', 'development'] : ['services', 'support'];
+
+  for (const phase of phases) {
     try {
       let months = AppState._effortMonths?.[phase]     || [];
       let mCosts = AppState._effortMonthCosts?.[phase] || {};
@@ -646,18 +654,17 @@ async function _loadPhaseCostKPIs() {
       const cumCostSAR = cumCostUSD * 3.75;
       totalCostSAR += cumCostSAR;
 
-      const overviewData = AppState._overviewData || {};
-      const eacMDs  = phase === 'development' ? (overviewData.dev_eac_mds || 0)
-                                               : (overviewData.con_eac_mds || 0);
       const totalMDs = Object.values(mMDs).reduce((s,v)=>s+v, 0);
       const avgCPMD  = totalMDs > 0 ? cumCostSAR / totalMDs : 0;
-      const eacCostSAR = cumCostSAR + eacMDs * avgCPMD;
+      // EAC from profitability data if available
+      const profData = AppState._latestProfData?.[phase];
+      const eacCostSAR = profData?.eacMDs ? cumCostSAR + profData.eacMDs * avgCPMD : cumCostSAR;
       totalEACSAR += eacCostSAR;
 
-      const pre = phase === 'development' ? 'Dev' : 'Con';
-      set(`kpi${pre}Cost`,   fSAR(cumCostSAR));
-      set(`kpi${pre}EAC`, fSAR(eacCostSAR));
-      // EACmds not shown in EAC card (shown in progress cards)
+      // Map phase to element prefix
+      const pre = (phase === 'development' || phase === 'services') ? 'Con' : 'Dev';
+      set(`kpi${pre}Cost`, fSAR(cumCostSAR));
+      set(`kpi${pre}EAC`,  fSAR(eacCostSAR));
     } catch(e) {
       console.warn(`Phase cost KPI (${phase}):`, e);
     }
@@ -790,9 +797,11 @@ async function loadTaskAnalysis(phaseGroup) {
 
     const isBogTA = AppState._overviewData?.is_bog !== false;
     renderPhaseFilters(phaseGroup, isBogTA ? (d.phases_available || []) : []);
+    // Non-BOG: no phase filter → show all tasks (activePhases=null means no filter)
+    if (!isBogTA) AppState.activePhases = null;
     renderEmployeeFilter(d.employees_available || []);
     populateStageFilter(d.stages_used || []);
-    renderTaskList(phaseGroup);  // This calls renderSummary internally with filtered tasks
+    renderTaskList(phaseGroup);
   } catch (e) {
     cont.innerHTML = `<div class="banner banner-warn"><strong>Error:</strong> ${e.message}</div>`;
   }
