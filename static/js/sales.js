@@ -405,110 +405,257 @@ function renderDirectInvoices(invoices, note, summary) {
   const payColor = p => p==='paid'?'var(--green)':p==='partial'?'var(--amber)':'var(--red)';
   const payLabel = p => p==='paid'?'✅ Paid':p==='partial'?'⚡ Partial':'❌ Unpaid';
   const isBog = window.AppState?._overviewData?.is_bog !== false;
-  const phaseOpts = isBog
-    ? ['development','consultation','support','license']
-    : ['services','support','license'];
+  const phaseOpts   = isBog ? ['development','consultation','support','license'] : ['services','support','license'];
+  const phaseColors = {services:'var(--blue)',development:'var(--blue)',consultation:'var(--navy)',support:'var(--amber)',license:'#6B7280'};
+  const phaseLabels = {services:'Services',development:'Development',consultation:'Consultation',support:'Support',license:'License / 3rd Party'};
 
-  // Group by phase
-  const groups = {};
-  invoices.forEach((inv,i) => {
-    const ph = inv.phase || 'services';
-    if (!groups[ph]) groups[ph] = [];
-    groups[ph].push({...inv, _idx: i});
+  // Store globally for reclassify
+  window._directInvoices = invoices;
+
+  // Filter state
+  if (!window._salesFilter) window._salesFilter = {year: null, month: null, sort: 'asc'};
+  const SF = window._salesFilter;
+
+  // Available years/months
+  const allYears  = [...new Set(invoices.map(i=>(i.date||'').substring(0,4)).filter(Boolean))].sort();
+  const allMonths = [...new Set(invoices.map(i=>(i.date||'').substring(0,7)).filter(Boolean))].sort();
+
+  // Apply filters (already posted-only from backend, but guard anyway)
+  let filtered = invoices.filter(i => i.state === 'posted');
+  if (SF.year)  filtered = filtered.filter(i=>(i.date||'').startsWith(SF.year));
+  if (SF.month) filtered = filtered.filter(i=>(i.date||'').startsWith(SF.month));
+  filtered = [...filtered].sort((a,b) => {
+    const cmp = (a.date||'').localeCompare(b.date||'');
+    return SF.sort === 'desc' ? -cmp : cmp;
   });
 
-  const total = invoices.filter(i=>i.state==='posted').reduce((s,i)=>s+i.amount_untaxed,0);
-  let html = `
+  // KPI totals
+  const totalExclVAT = filtered.reduce((s,i)=>s+i.amount_untaxed,0);
+  const byPh = {};
+  filtered.forEach(i => { byPh[i.phase] = (byPh[i.phase]||0) + i.amount_untaxed; });
+  const kpiPhases = isBog
+    ? [['development','Development'],['consultation','Consultation'],['support','Support'],['license','License']]
+    : [['services','Services'],['support','Support'],['license','License']];
+
+  const phKpiColor = {development:'#1E3A5F',consultation:'#1E3A5F',services:'#1E3A5F',support:'#D97706',license:'#6B7280'};
+  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+  // Year buttons
+  const yearBtns = ['All',...allYears].map(y => {
+    const val    = y === 'All' ? '' : y;
+    const active = (y === 'All' && !SF.year) || y === SF.year;
+    return `<button onclick="_salesSetYear('${val}',this)"
+      style="font-size:11px;padding:3px 12px;border-radius:4px;cursor:pointer;font-weight:${active?700:400};
+             border:1px solid ${active?'var(--navy)':'var(--border)'};
+             background:${active?'var(--navy)':'var(--bg-subtle)'};
+             color:${active?'white':'var(--text)'}">${y}</button>`;
+  }).join('');
+
+  // Month buttons
+  const visMonths = SF.year ? allMonths.filter(m=>m.startsWith(SF.year)) : allMonths;
+  const monthBtns = visMonths.map(mk => {
+    const active = mk === SF.month;
+    const lbl    = monthNames[parseInt(mk.substring(5,7))-1] + " '" + mk.substring(2,4);
+    return `<button onclick="_salesSetMonth('${mk}',this)"
+      style="font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer;font-weight:${active?700:400};
+             border:1px solid ${active?'var(--amber)':'var(--border)'};
+             background:${active?'var(--amber)':'var(--bg-subtle)'};
+             color:${active?'white':'var(--text)'}">${lbl}</button>`;
+  }).join('');
+
+  // Monthly breakdown
+  const byMonth = {};
+  filtered.forEach(i => {
+    const mk = (i.date||'').substring(0,7);
+    if (!mk) return;
+    if (!byMonth[mk]) byMonth[mk] = {total:0, byPhase:{}, invs:[]};
+    byMonth[mk].total += i.amount_untaxed;
+    byMonth[mk].byPhase[i.phase] = (byMonth[mk].byPhase[i.phase]||0) + i.amount_untaxed;
+    byMonth[mk].invs.push(i);
+  });
+  const sortedMonths = Object.keys(byMonth).sort((a,b)=> SF.sort==='desc' ? b.localeCompare(a) : a.localeCompare(b));
+
+  const phaseHeaders = kpiPhases.map(([,lbl])=>`<th class="num" style="font-size:11px;">${lbl}<br><span style="font-weight:400;font-size:9px;">excl. VAT</span></th>`).join('');
+
+  const monthlyRows = sortedMonths.map(mk => {
+    const row = byMonth[mk];
+    const lbl = monthNames[parseInt(mk.substring(5,7))-1] + ' ' + mk.substring(0,4);
+    const phaseCells = kpiPhases.map(([pk]) =>
+      `<td class="num" style="color:${phKpiColor[pk]||'var(--navy)'};">${row.byPhase[pk] ? fSAR(row.byPhase[pk]) : '—'}</td>`
+    ).join('');
+    const detailHtml = renderMonthInvDetail(row.invs, phaseOpts, phaseLabels, payLabel, payColor, fSAR);
+    return `<tr style="cursor:pointer;" onclick="_salesToggleMonthDetail('${mk}')" title="Click to expand">
+      <td style="font-weight:700;padding:9px 12px;">${lbl}</td>
+      ${phaseCells}
+      <td class="num" style="font-weight:700;color:var(--navy);">${fSAR(row.total)}</td>
+      <td style="text-align:center;color:var(--text-muted);font-size:12px;" id="arr-${mk}">▼</td>
+    </tr>
+    <tr id="month-detail-${mk}" style="display:none;background:#F8FAFC;">
+      <td colspan="${kpiPhases.length+3}" style="padding:0;">${detailHtml}</td>
+    </tr>`;
+  }).join('');
+
+  const sortIcon = SF.sort === 'asc' ? '↑ Oldest first' : '↓ Newest first';
+
+  return `
     <div class="banner banner-info" style="margin-bottom:16px;">
       <b>No Sales Orders linked to this project.</b> Showing direct invoices grouped by phase.
       ${note ? `<br><small style="color:var(--text-muted);">${note}</small>` : ''}
     </div>
-    <div class="kpi-strip kpi-strip-small" style="margin-bottom:20px;">
-      <div class="kpi-card kpi-blue compact">
-        <div class="kpi-label">TOTAL INVOICES</div><div class="kpi-value">${invoices.length}</div>
+
+    <!-- KPI strip -->
+    <div class="kpi-strip kpi-strip-small" style="margin-bottom:16px;flex-wrap:wrap;">
+      <div class="kpi-card kpi-navy compact">
+        <div class="kpi-label">TOTAL INVOICES</div>
+        <div class="kpi-value">${filtered.length}</div>
+        <div class="kpi-foot">${SF.year ? SF.year : 'all years'}${SF.month ? ' · '+monthNames[parseInt(SF.month.substring(5,7))-1] : ''}</div>
       </div>
-      <div class="kpi-card kpi-green compact">
-        <div class="kpi-label">TOTAL INVOICED (excl. VAT)</div>
-        <div class="kpi-value">${fSAR(total)}</div><div class="kpi-foot">SAR · posted only</div>
+      <div class="kpi-card kpi-blue compact">
+        <div class="kpi-label">TOTAL (excl. VAT)</div>
+        <div class="kpi-value">${fSAR(totalExclVAT)}</div>
+        <div class="kpi-foot">SAR</div>
+      </div>
+      ${kpiPhases.map(([pk,plbl]) => `
+        <div class="kpi-card compact" style="border-top:3px solid ${phKpiColor[pk]||'var(--navy)'};background:white;">
+          <div class="kpi-label" style="color:${phKpiColor[pk]};">${plbl.toUpperCase()}</div>
+          <div class="kpi-value" style="color:${phKpiColor[pk]};font-size:18px;">${fSAR(byPh[pk]||0)}</div>
+          <div class="kpi-foot">excl. VAT · SAR</div>
+        </div>`).join('')}
+    </div>
+
+    <!-- Filters -->
+    <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:16px;">
+      <div style="display:flex;gap:5px;align-items:center;">
+        <span style="font-size:11px;font-weight:700;color:var(--text-muted);">YEAR:</span>
+        ${yearBtns}
+      </div>
+      ${monthBtns ? `<div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">
+        <span style="font-size:11px;font-weight:700;color:var(--text-muted);">MONTH:</span>
+        ${monthBtns}
+      </div>` : ''}
+      <button onclick="_salesToggleSort()"
+        style="margin-left:auto;font-size:11px;padding:4px 14px;border-radius:4px;cursor:pointer;
+               border:1px solid var(--border);background:var(--bg-subtle);font-weight:600;">${sortIcon}</button>
+    </div>
+
+    <!-- Monthly breakdown table -->
+    <div class="card" style="margin-bottom:20px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <h3 class="card-title" style="margin:0;">📅 Monthly Breakdown</h3>
+        <span style="font-size:11px;color:var(--text-muted);">Click a row to expand invoices</span>
+      </div>
+      <div class="table-scroll">
+        <table class="data-table" style="font-size:12px;">
+          <thead><tr>
+            <th>Month</th>${phaseHeaders}
+            <th class="num">Total (excl. VAT)</th><th></th>
+          </tr></thead>
+          <tbody>${monthlyRows}</tbody>
+          <tfoot>
+            <tr style="background:var(--navy);color:white;font-weight:700;">
+              <td style="padding:8px 12px;">TOTAL</td>
+              ${kpiPhases.map(([pk])=>`<td class="num">${fSAR(byPh[pk]||0)}</td>`).join('')}
+              <td class="num">${fSAR(totalExclVAT)}</td><td></td>
+            </tr>
+          </tfoot>
+        </table>
       </div>
     </div>`;
+}
 
-  const phaseColors = {services:'var(--blue)',development:'var(--blue)',consultation:'var(--navy)',support:'var(--amber)',license:'#6B7280'};
-  const phaseLabels = {services:'Services',development:'Development',consultation:'Consultation',support:'Support',license:'License / 3rd Party'};
-
-  const renderInvRows = (invs) => invs.map((inv) => {
-    const purposeTxt = (inv.purpose||'').replace(/<[^>]+>/g,'').substring(0,120);
-    const stateLabel = inv.state==='posted'?'Posted':inv.state==='draft'?'Draft':inv.state;
+function renderMonthInvDetail(invs, phaseOpts, phaseLabels, payLabel, payColor, fSAR) {
+  if (!invs || !invs.length) return '<p style="padding:12px;color:var(--text-muted);font-size:12px;">No invoices</p>';
+  const rows = invs.map(inv => {
+    const purposeTxt  = (inv.purpose||'').replace(/<[^>]+>/g,'').substring(0,150);
     const phaseSelect = `<select onchange="reclassifyDirectInv(${inv._idx},this.value)"
       style="font-size:10px;padding:1px 4px;border:1px solid var(--border);border-radius:3px;background:var(--bg-subtle);">
       ${phaseOpts.map(p=>`<option value="${p}" ${inv.phase===p?'selected':''}>${phaseLabels[p]||p}</option>`).join('')}
     </select>`;
     return `<tr>
-      <td><b>${inv.name}</b><br>${phaseSelect}</td>
-      <td style="font-family:var(--mono);font-size:10px;">${inv.date||'—'}</td>
-      <td style="font-family:var(--mono);font-size:10px;">${inv.due_date||'—'}</td>
-      <td style="font-size:10px;color:var(--text-muted);max-width:180px;white-space:normal;">${purposeTxt||'—'}</td>
-      <td class="num">${fSAR(inv.amount_untaxed)}</td>
-      <td class="num" style="color:var(--text-muted);">${fSAR(inv.amount_tax)}</td>
-      <td class="num"><b>${fSAR(inv.amount_total)}</b></td>
-      <td><span style="font-size:10px;color:${inv.state==='posted'?'var(--green)':'var(--text-muted)'};">${stateLabel}</span></td>
-      <td><span style="font-size:10px;font-weight:600;color:${payColor(inv.payment_state)};">${payLabel(inv.payment_state)}</span></td>
+      <td style="padding:6px 12px;"><b>${inv.name}</b><br>${phaseSelect}</td>
+      <td style="font-family:var(--mono);font-size:10px;padding:6px 8px;">${inv.date||'—'}</td>
+      <td style="font-family:var(--mono);font-size:10px;padding:6px 8px;">${inv.due_date||'—'}</td>
+      <td style="font-size:10px;color:var(--text-muted);max-width:200px;white-space:normal;padding:6px 8px;">${purposeTxt||'—'}</td>
+      <td class="num" style="padding:6px 8px;">${fSAR(inv.amount_untaxed)}</td>
+      <td class="num" style="color:var(--text-muted);padding:6px 8px;">${fSAR(inv.amount_tax)}</td>
+      <td class="num" style="font-weight:700;padding:6px 8px;">${fSAR(inv.amount_total)}</td>
+      <td style="padding:6px 8px;"><span style="font-size:10px;font-weight:600;color:${payColor(inv.payment_state)};">${payLabel(inv.payment_state)}</span></td>
     </tr>`;
   }).join('');
-
-  // Render each phase group
-  Object.entries(groups).forEach(([ph, invs]) => {
-    const col = phaseColors[ph] || 'var(--blue)';
-    const lbl = phaseLabels[ph] || ph;
-    const grpTotal = invs.filter(i=>i.state==='posted').reduce((s,i)=>s+i.amount_untaxed,0);
-    html += `<div class="card" style="margin-bottom:16px;border-top:3px solid ${col};">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-        <h3 class="card-title" style="margin:0;color:${col};">${lbl}</h3>
-        <span style="font-weight:700;">${fSAR(grpTotal)} SAR</span>
-      </div>
-      <div class="table-scroll">
-        <table class="data-table" style="font-size:11px;">
-          <thead><tr>
-            <th>Invoice # / Phase</th><th>Date</th><th>Due Date</th><th>Purpose</th>
-            <th class="num">excl. VAT</th><th class="num">VAT</th>
-            <th class="num">Total</th><th>Status</th><th>Payment</th>
-          </tr></thead>
-          <tbody>${renderInvRows(invs)}</tbody>
-        </table>
-      </div>
-    </div>`;
-  });
-
-  // Store invoices globally for reclassify
-  window._directInvoices = invoices;
-  return html;
+  return `<table class="data-table" style="font-size:11px;width:100%;border-top:2px solid var(--border);">
+    <thead><tr style="background:#EFF6FF;">
+      <th>Invoice # / Phase</th><th>Date</th><th>Due Date</th><th>Purpose</th>
+      <th class="num">excl. VAT</th><th class="num">VAT</th><th class="num">Total incl. VAT</th><th>Payment</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
 }
 
-window.reclassifyDirectInv = async function(idx, newPhase) {
+window._salesSetYear = function(year) {
+  window._salesFilter.year  = year || null;
+  window._salesFilter.month = null;
+  _salesRerender();
+};
+window._salesSetMonth = function(month) {
+  window._salesFilter.month = (window._salesFilter.month === month) ? null : month;
+  _salesRerender();
+};
+window._salesToggleSort = function() {
+  window._salesFilter.sort = window._salesFilter.sort === 'asc' ? 'desc' : 'asc';
+  _salesRerender();
+};
+window._salesToggleMonthDetail = function(mk) {
+  const el  = document.getElementById('month-detail-' + mk);
+  const arr = document.getElementById('arr-' + mk);
+  if (!el) return;
+  const open = el.style.display === 'none';
+  el.style.display  = open ? '' : 'none';
+  if (arr) arr.textContent = open ? '▲' : '▼';
+};
+function _salesRerender() {
+  const cont = document.getElementById('salesContent') || document.getElementById('sales');
+  if (cont && window._directInvoices) cont.innerHTML = renderDirectInvoices(window._directInvoices, '', {});
+}
+
+
+window.reclassifyDirectInv = function(idx, newPhase) {
   if (!window._directInvoices) return;
   const inv = window._directInvoices[idx];
   inv.phase = newPhase;
 
-  // Save to DB: use invoice name as key — await so we know it's persisted before reload
-  try {
-    await fetch('/api/plan-overrides', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({
-        phase: 'direct_inv_phase',
-        month_key: inv.name.replace(/\//g,'_'),
-        field: 'phase',
-        value: newPhase
-      })
+  // Save to DB: use invoice name as key
+  fetch('/api/plan-overrides', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      phase: 'direct_inv_phase',
+      month_key: inv.name.replace(/\//g,'_'),
+      field: 'phase',
+      value: newPhase
+    })
+  }).catch(()=>{});
+
+  // Rebuild AppState._salesInvoicesByPhase
+  window.AppState._salesInvoicesByPhase = {};
+  window._directInvoices.forEach(i => {
+    const ph = i.phase || 'services';
+    const mk = (i.date||'').substring(0,7);
+    if (!mk || i.state !== 'posted') return;
+    if (!window.AppState._salesInvoicesByPhase[ph]) window.AppState._salesInvoicesByPhase[ph] = {};
+    window.AppState._salesInvoicesByPhase[ph][mk] = window.AppState._salesInvoicesByPhase[ph][mk] || {month:0,cumulative:0};
+    window.AppState._salesInvoicesByPhase[ph][mk].month += i.amount_untaxed;
+  });
+  // Build cumulatives
+  Object.keys(window.AppState._salesInvoicesByPhase).forEach(ph => {
+    let running = 0;
+    Object.keys(window.AppState._salesInvoicesByPhase[ph]).sort().forEach(mk => {
+      running += window.AppState._salesInvoicesByPhase[ph][mk].month;
+      window.AppState._salesInvoicesByPhase[ph][mk].cumulative = running;
     });
-  } catch(e) { console.warn('Save phase override failed:', e); }
-
-  // Clear cached sales data so Variance tab reloads with new mapping
-  if (window.AppState) {
-    window.AppState._salesInvoicesByPhase = null;
-    window.AppState._invoiceCumulative    = {};
-  }
-
-  // Reload full sales tab from backend (picks up DB-persisted phases)
-  if (window.loadSalesOrders) await loadSalesOrders();
+  });
+  // Clear invoice cumulative cache
+  if (window.AppState._invoiceCumulative) window.AppState._invoiceCumulative = {};
+  // Re-render
+  const cont = document.getElementById('salesContent') || document.getElementById('sales');
+  if (cont) cont.innerHTML = renderDirectInvoices(window._directInvoices, '', {});
 };
