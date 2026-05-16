@@ -7721,6 +7721,20 @@ def debug():
 @app.route('/api/sales-orders')
 def api_sales_orders():
     """Return all sale orders for current project with amounts, delivery %, and invoices."""
+    # Accept line→variance tab mapping from frontend (user overrides)
+    line_var_map = {}
+    try:
+        # Load from DB (saved via plan-overrides)
+        pfx = active_db_prefix()
+        plan_ns = f'{pfx}_plan' if pfx else 'plan'
+        so_map_raw = db.get_namespace_overrides(plan_ns, 'so_line_map') or {}
+        for line_id_key, fields in so_map_raw.items():
+            if isinstance(fields, dict) and fields.get('var_tab'):
+                line_var_map[str(line_id_key)] = fields['var_tab']
+            elif isinstance(fields, str):
+                line_var_map[str(line_id_key)] = fields
+    except Exception:
+        pass
     try:
         if not odoo.uid: odoo.connect()
         _proj_name = active_project_name()
@@ -7810,7 +7824,7 @@ def api_sales_orders():
                 {'fields': ['id', 'name', 'invoice_date', 'invoice_date_due',
                             'amount_untaxed', 'amount_tax', 'amount_total',
                             'state', 'invoice_origin', 'payment_state',
-                            'invoice_line_ids', 'narration'],
+                            'invoice_line_ids', 'narration', 'purpose', 'ref'],
                  'limit': 500, 'order': 'invoice_date asc'}
             )
         except Exception as e:
@@ -7847,7 +7861,7 @@ def api_sales_orders():
                             'qty':           il.get('quantity') or 0,
                             'amount':        il.get('price_subtotal') or 0,
                             'inv_date':      inv_date,
-                            'purpose':       next((inv.get('narration','') for inv in invoices_raw if inv['id']==move_id), ''),
+                            'purpose':       next((inv.get('purpose') or inv.get('narration') or inv.get('ref') or '' for inv in invoices_raw if inv['id']==move_id), ''),
                         })
             except Exception as e:
                 logger.warning(f"Invoice lines fetch failed: {e}")
@@ -7867,7 +7881,7 @@ def api_sales_orders():
                         'amount_total':  inv.get('amount_total') or 0,
                         'state':         inv.get('state') or '',
                         'payment_state': inv.get('payment_state') or '',
-                        'purpose':       inv.get('narration') or '',
+                        'purpose':       inv.get('purpose') or inv.get('narration') or inv.get('ref') or '',
                     })
 
         # Build orders list
@@ -7946,7 +7960,7 @@ def api_sales_orders():
         # because some invoice lines may not be linked to analytic account
         invoices_by_phase = {}  # { phase_key: { 'YYYY-MM': amount_excl_vat } }
 
-        # Step 1: Map each invoice → phase from SO line products
+        # Step 1: Map each invoice → phase from SO line products + user overrides
         inv_phase_map = {}  # move_id → phase_key
         for order in orders:
             for line in order.get('lines', []):
@@ -7962,6 +7976,10 @@ def api_sales_orders():
                     lp = 'license'
                 else:
                     lp = 'development'
+                # User override from dropdown
+                line_id_str = str(line.get('id', ''))
+                if line_id_str in line_var_map:
+                    lp = line_var_map[line_id_str]
                 for li in line.get('line_invoices', []):
                     mid = li.get('move_id')
                     if mid and mid not in inv_phase_map:
