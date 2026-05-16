@@ -49,10 +49,16 @@ window.loadSalesOrders = async function() {
     }
 
     if (!d.orders || !d.orders.length) {
-      cont.innerHTML = `<div class="card" style="text-align:center;padding:40px;">
-        <div style="font-size:32px;margin-bottom:12px;">📋</div>
-        <div style="font-size:14px;font-weight:600;">No Sales Orders found for this project</div>
-      </div>`;
+      // Show direct invoices if available
+      if (d.direct_invoices && d.direct_invoices.length) {
+        cont.innerHTML = renderDirectInvoices(d.direct_invoices, d.note, d.summary);
+      } else {
+        cont.innerHTML = `<div class="card" style="text-align:center;padding:40px;">
+          <div style="font-size:32px;margin-bottom:12px;">📋</div>
+          <div style="font-size:14px;font-weight:600;">No Sales Orders found for this project</div>
+          ${d.note ? `<div style="font-size:12px;color:var(--text-muted);margin-top:8px;">${d.note}</div>` : ''}
+        </div>`;
+      }
       return;
     }
 
@@ -392,3 +398,57 @@ window.setSoLineVarTab = function(lineId, varTab) {
   if (window.AppState._invoiceCumulative) delete window.AppState._invoiceCumulative[varTab];
   if (window.AppState._salesInvoicesByPhase) window.AppState._salesInvoicesByPhase = null;
 };
+
+
+function renderDirectInvoices(invoices, note, summary) {
+  const fSAR = v => new Intl.NumberFormat('en-US', {maximumFractionDigits:0}).format(v||0);
+  const payColor = p => p==='paid'?'var(--green)':p==='partial'?'var(--amber)':'var(--red)';
+  const payLabel = p => p==='paid'?'✅ Paid':p==='partial'?'⚡ Partial':'❌ Unpaid';
+
+  let html = `
+    <div class="banner banner-info" style="margin-bottom:16px;">
+      <b>No Sales Orders linked to this project.</b> Showing direct invoices from analytic account.
+      ${note ? `<br><small>${note}</small>` : ''}
+    </div>
+    <div class="kpi-strip kpi-strip-small" style="margin-bottom:20px;">
+      <div class="kpi-card kpi-blue compact">
+        <div class="kpi-label">TOTAL INVOICES</div>
+        <div class="kpi-value">${invoices.length}</div>
+      </div>
+      <div class="kpi-card kpi-green compact">
+        <div class="kpi-label">TOTAL INVOICED (excl. VAT)</div>
+        <div class="kpi-value">${fSAR(summary?.total_invoiced)}</div>
+        <div class="kpi-foot">SAR</div>
+      </div>
+    </div>
+    <div class="card">
+      <h3 class="card-title" style="margin-bottom:16px;">Direct Invoices</h3>
+      <div class="table-scroll">
+        <table class="data-table" style="font-size:12px;">
+          <thead><tr>
+            <th>Invoice #</th><th>Date</th><th>Due Date</th><th>Purpose</th>
+            <th class="num">Amount excl. VAT</th><th class="num">VAT</th>
+            <th class="num">Total incl. VAT</th><th>Status</th><th>Payment</th>
+          </tr></thead>
+          <tbody>
+            ${invoices.map(inv => {
+              const purposeTxt = (inv.purpose||'').replace(/<[^>]+>/g,'').substring(0,120);
+              const stateLabel = inv.state==='posted'?'Posted':inv.state==='draft'?'Draft':inv.state;
+              return `<tr>
+                <td><b>${inv.name}</b></td>
+                <td style="font-family:var(--mono);">${inv.date||'—'}</td>
+                <td style="font-family:var(--mono);">${inv.due_date||'—'}</td>
+                <td style="font-size:10px;color:var(--text-muted);max-width:180px;white-space:normal;">${purposeTxt||'—'}</td>
+                <td class="num">${fSAR(inv.amount_untaxed)}</td>
+                <td class="num" style="color:var(--text-muted);">${fSAR(inv.amount_tax)}</td>
+                <td class="num"><b>${fSAR(inv.amount_total)}</b></td>
+                <td><span style="font-size:10px;color:${inv.state==='posted'?'var(--green)':'var(--text-muted)'};">${stateLabel}</span></td>
+                <td><span style="font-size:10px;font-weight:600;color:${payColor(inv.payment_state)};">${payLabel(inv.payment_state)}</span></td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+  return html;
+}
