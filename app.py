@@ -7728,11 +7728,16 @@ def api_sales_orders():
         pfx = active_db_prefix()
         plan_ns = f'{pfx}_plan' if pfx else 'plan'
         so_map_raw = db.get_namespace_overrides(plan_ns, 'so_line_map') or {}
-        for line_id_key, fields in so_map_raw.items():
-            if isinstance(fields, dict) and fields.get('var_tab'):
-                line_var_map[str(line_id_key)] = fields['var_tab']
-            elif isinstance(fields, str):
-                line_var_map[str(line_id_key)] = fields
+        for raw_key, val in so_map_raw.items():
+            # POST saves as key='12345.var_tab', value='support'
+            if raw_key.endswith('.var_tab'):
+                line_id = raw_key[:-len('.var_tab')]
+                if isinstance(val, str) and val:
+                    line_var_map[line_id] = val
+            elif isinstance(val, dict) and val.get('var_tab'):
+                line_var_map[str(raw_key)] = val['var_tab']
+            elif isinstance(val, str) and val:
+                line_var_map[str(raw_key)] = val
     except Exception:
         pass
     try:
@@ -7845,6 +7850,11 @@ def api_sales_orders():
             # Classify each direct invoice by saved override or auto-detection
             def classify_direct_inv(inv_id, inv_name=''):
                 key = (inv_name or '').replace('/', '_')
+                # POST saves as key='INV_2025_0057.phase', value='support'
+                phase_val = dir_inv_overrides.get(f'{key}.phase')
+                if phase_val and isinstance(phase_val, str):
+                    return phase_val
+                # Fallback: legacy dict format
                 override = dir_inv_overrides.get(key, {})
                 if isinstance(override, dict) and override.get('phase'):
                     return override['phase']
