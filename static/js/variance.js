@@ -297,12 +297,7 @@ function renderBudget(data, phaseKey) {
       <div class="kpi-card kpi-blue compact">
         <div class="kpi-label">PRESALES MDs</div>
         <div class="kpi-value" id="kpi-mds-${phaseKey}">${fmt.num(a.total_mandays || 0)}</div>
-        <div class="kpi-foot" id="kpi-mds-foot-${phaseKey}">approved</div>
-      </div>
-      <div class="kpi-card kpi-blue compact">
-        <div class="kpi-label">FINAL MDs</div>
-        <div class="kpi-value" id="kpi-mds-final-${phaseKey}">—</div>
-        <div class="kpi-foot">after changes</div>
+        <div class="kpi-foot">final after changes</div>
       </div>
       <div class="kpi-card kpi-navy compact">
         <div class="kpi-label">REVENUE (FINAL)</div>
@@ -724,8 +719,7 @@ function budgetAutoCalc(phaseKey) {
   }
   const deltaMDsTotal = changes.reduce((s,c) => s + (parseFloat(c.delta_mds)||0), 0);
   const finMDs = mds + deltaMDsTotal;
-  setEl(`kpi-mds-${phaseKey}`,       mds > 0 ? fmt.num(Math.round(mds)) : '—');
-  setEl(`kpi-mds-final-${phaseKey}`, finMDs > 0 ? fmt.num(Math.round(finMDs)) : '—');
+  setEl(`kpi-mds-${phaseKey}`, finMDs > 0 ? fmt.num(Math.round(finMDs)) : (mds > 0 ? fmt.num(Math.round(mds)) : '—'));
   setEl(`kpi-rev-${phaseKey}`,       finRevSAR > 0 ? fmt.money(Math.round(finRevSAR)) : '—');
   setEl(`kpi-cost-${phaseKey}`,      finCostSAR > 0 ? fmt.money(Math.round(finCostSAR)) : (costSAR > 0 ? fmt.money(Math.round(costSAR)) : '—'));
   setEl(`kpi-final-pct-${phaseKey}`, finRevSAR > 0 ? fmt.decimal(finProfitPct)+'%' : '—', profColor(finProfitPct));
