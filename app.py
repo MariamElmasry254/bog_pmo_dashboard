@@ -7738,8 +7738,10 @@ def api_sales_orders():
 
         project_ids = [p['id'] for p in projects]
 
-        # Get sale orders linked to project
+        # Get sale orders — try multiple methods
         sos = []
+
+        # Method 1: by project_ids
         try:
             sos = odoo.models.execute_kw(
                 ODOO_DB, odoo.uid, ODOO_PASSWORD,
@@ -7747,12 +7749,14 @@ def api_sales_orders():
                 [[('project_ids', 'in', project_ids)]],
                 {'fields': ['id', 'name', 'partner_id', 'date_order', 'state',
                             'amount_untaxed', 'amount_tax', 'amount_total',
-                            'invoice_status', 'currency_id',
-                            'order_line'], 'limit': 200}
+                            'invoice_status', 'currency_id', 'order_line'], 'limit': 200}
             )
+            logger.info(f"SOs by project_ids: {len(sos)}")
         except Exception as e:
             logger.warning(f"SO by project_ids failed: {e}")
-            # Fallback: search by analytic account
+
+        # Method 2: by analytic account (contains project name)
+        if not sos:
             try:
                 sos = odoo.models.execute_kw(
                     ODOO_DB, odoo.uid, ODOO_PASSWORD,
@@ -7762,8 +7766,35 @@ def api_sales_orders():
                                 'amount_untaxed', 'amount_tax', 'amount_total',
                                 'invoice_status', 'currency_id', 'order_line'], 'limit': 200}
                 )
+                logger.info(f"SOs by analytic account (ilike): {len(sos)}")
             except Exception as e2:
-                logger.warning(f"SO fallback failed: {e2}")
+                logger.warning(f"SO by analytic ilike failed: {e2}")
+
+        # Method 3: find analytic account by project then search SOs
+        if not sos:
+            try:
+                # Get analytic accounts linked to these projects
+                analytic_accounts = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'project.project', 'read',
+                    [project_ids],
+                    {'fields': ['id', 'name', 'analytic_account_id']}
+                )
+                aa_ids = [p['analytic_account_id'][0]
+                          for p in analytic_accounts
+                          if p.get('analytic_account_id') and isinstance(p['analytic_account_id'], list)]
+                if aa_ids:
+                    sos = odoo.models.execute_kw(
+                        ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                        'sale.order', 'search_read',
+                        [[('analytic_account_id', 'in', aa_ids)]],
+                        {'fields': ['id', 'name', 'partner_id', 'date_order', 'state',
+                                    'amount_untaxed', 'amount_tax', 'amount_total',
+                                    'invoice_status', 'currency_id', 'order_line'], 'limit': 200}
+                    )
+                    logger.info(f"SOs by analytic account id: {len(sos)}")
+            except Exception as e3:
+                logger.warning(f"SO by analytic id failed: {e3}")
 
         if not sos:
             return jsonify({'ok': True, 'orders': [], 'summary': {}})
