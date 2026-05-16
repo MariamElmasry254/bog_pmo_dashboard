@@ -409,6 +409,9 @@ function renderDirectInvoices(invoices, note, summary) {
     ? ['development','consultation','support','license']
     : ['services','support','license'];
 
+  // Show only posted invoices in the UI (draft excluded)
+  invoices = invoices.filter(i => i.state === 'posted');
+
   // Group by phase
   const groups = {};
   invoices.forEach((inv,i) => {
@@ -501,24 +504,27 @@ window.reclassifyDirectInv = function(idx, newPhase) {
     })
   }).catch(()=>{});
 
-  // Rebuild AppState._salesInvoicesByPhase
-  window.AppState._salesInvoicesByPhase = {};
+  // Rebuild AppState._salesInvoicesByPhase from all direct invoices
+  const newByPhase = {};
   window._directInvoices.forEach(i => {
+    if (i.state !== 'posted') return;
     const ph = i.phase || 'services';
     const mk = (i.date||'').substring(0,7);
-    if (!mk || i.state !== 'posted') return;
-    if (!window.AppState._salesInvoicesByPhase[ph]) window.AppState._salesInvoicesByPhase[ph] = {};
-    window.AppState._salesInvoicesByPhase[ph][mk] = window.AppState._salesInvoicesByPhase[ph][mk] || {month:0,cumulative:0};
-    window.AppState._salesInvoicesByPhase[ph][mk].month += i.amount_untaxed;
+    if (!mk) return;
+    if (!newByPhase[ph]) newByPhase[ph] = {};
+    newByPhase[ph][mk] = (newByPhase[ph][mk] || 0) + i.amount_untaxed;
   });
-  // Build cumulatives
-  Object.keys(window.AppState._salesInvoicesByPhase).forEach(ph => {
+  // Build cumulative structure matching API format: {YYYY-MM: {month, cumulative}}
+  const byPhaseCum = {};
+  Object.keys(newByPhase).forEach(ph => {
     let running = 0;
-    Object.keys(window.AppState._salesInvoicesByPhase[ph]).sort().forEach(mk => {
-      running += window.AppState._salesInvoicesByPhase[ph][mk].month;
-      window.AppState._salesInvoicesByPhase[ph][mk].cumulative = running;
+    byPhaseCum[ph] = {};
+    Object.keys(newByPhase[ph]).sort().forEach(mk => {
+      running += newByPhase[ph][mk];
+      byPhaseCum[ph][mk] = {month: newByPhase[ph][mk], cumulative: running};
     });
   });
+  window.AppState._salesInvoicesByPhase = byPhaseCum;
   // Clear invoice cumulative cache
   if (window.AppState._invoiceCumulative) window.AppState._invoiceCumulative = {};
   // Re-render
