@@ -362,6 +362,10 @@ function renderBudget(data, phaseKey) {
 
         <div style="display:flex; flex-direction:column; gap:14px;">
           <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:10px; border-bottom:1px solid var(--border-light);">
+            <span style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Total Mandays</span>
+            <span style="font-size:16px; font-weight:700; color:var(--navy);" id="fin-mds-${phaseKey}">—</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:10px; border-bottom:1px solid var(--border-light);">
             <span style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Total Cost (SAR)</span>
             <span style="font-size:16px; font-weight:700; color:var(--navy);" id="fin-cost-sar-${phaseKey}">—</span>
           </div>
@@ -670,6 +674,7 @@ function budgetAutoCalc(phaseKey) {
   setEl(`bud-profit-pct-${phaseKey}`, approvedRevSAR > 0 ? fmt.decimal(appProfitPct) + '%' : '—', profColor(appProfitPct));
 
   // Final section — show only what changed, compute from approved + delta
+  setEl(`fin-mds-${phaseKey}`,       finMDs > 0 ? fmt.num(Math.round(finMDs)) : (mds > 0 ? fmt.num(Math.round(mds)) : '—'));
   setEl(`fin-cost-sar-${phaseKey}`,   fmt.money(Math.round(finCostSAR)) + ' SAR');
   setEl(`fin-rev-sar-${phaseKey}`,    fmt.money(Math.round(finRevSAR))  + ' SAR');
 
@@ -719,7 +724,7 @@ function budgetAutoCalc(phaseKey) {
   }
   const deltaMDsTotal = changes.reduce((s,c) => s + (parseFloat(c.delta_mds)||0), 0);
   const finMDs = mds + deltaMDsTotal;
-  setEl(`kpi-mds-${phaseKey}`, finMDs > 0 ? fmt.num(Math.round(finMDs)) : (mds > 0 ? fmt.num(Math.round(mds)) : '—'));
+  setEl(`kpi-mds-${phaseKey}`, finMDs > 0 ? fmt.num(Math.round(finMDs)) : (mds > 0 ? fmt.num(Math.round(mds)) : '—')); // Final MDs in KPI
   setEl(`kpi-rev-${phaseKey}`,       finRevSAR > 0 ? fmt.money(Math.round(finRevSAR)) : '—');
   setEl(`kpi-cost-${phaseKey}`,      finCostSAR > 0 ? fmt.money(Math.round(finCostSAR)) : (costSAR > 0 ? fmt.money(Math.round(costSAR)) : '—'));
   setEl(`kpi-final-pct-${phaseKey}`, finRevSAR > 0 ? fmt.decimal(finProfitPct)+'%' : '—', profColor(finProfitPct));
