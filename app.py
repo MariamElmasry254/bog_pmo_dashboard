@@ -2761,7 +2761,7 @@ def api_overview_tags_analysis():
             'tags': result,
             'connected': True,
             'phases_active': phase_names,
-            'phases_available': list(phase_id_to_name.values()),
+            'phases_available': [v for v in phase_id_to_name.values() if v],
             'phase_group': phase_group,
             'summary': {
                 'total_tags': len(result),
@@ -2836,7 +2836,8 @@ def api_overview_analysis(phase_group):
     if not phase_names and not _is_bog:
         return jsonify({'tasks': [], 'connected': True, 'phases_active': [],
                         'phases_available': [], 'employees_available': [], 'stages_used': [],
-                        'note': f'No {phase_group} phases found for this project'})
+                        'no_phases': True,
+                        'note': f'No {phase_group} phases found — tasks in this project are not assigned to a phase named with {phase_group} keywords'})
 
     if not phase_names:
         return jsonify({'tasks': [], 'error': f'No phases for {phase_group}'})
@@ -3094,7 +3095,7 @@ def api_overview_analysis(phase_group):
                 stage_id = t['stage_id'][0]
                 stage = t['stage_id'][1]
 
-            phase_label = phase_id_to_name.get(t.get('phase_id', [None, ''])[0]) if t.get('phase_id') else ''
+            phase_label = (phase_id_to_name.get(t.get('phase_id', [None, ''])[0]) or '') if t.get('phase_id') else ''
 
             parent_id = None
             parent_name = ''
@@ -3259,7 +3260,7 @@ def api_overview_analysis(phase_group):
         return jsonify({
             'tasks': ordered,
             'connected': True,
-            'phases_available': phase_names,  # Non-BOG: show actual project phases
+            'phases_available': [p for p in phase_names if p],  # Non-BOG: show actual project phases (filter None)
             'phases_active': phase_names,
             'employees_available': sorted(all_employees_set),
             'employees_filter': employees_filter,
@@ -4709,7 +4710,7 @@ def get_phase_mapping():
     return {'services': [], 'support': []}
 
 
-SUPPORT_KWS = ['support', 'operation', 'maintenance', 'hypercare']
+SUPPORT_KWS = ['support', 'operation', 'maintenance', 'hypercare', 'دعم', 'الدعم', 'دعم فني', 'تشغيل']
 
 def auto_detect_phases_for_project(project_id, phase_key):
     """For non-BOG projects: tasks have no phase_id, only stage_id (Kanban).
