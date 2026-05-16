@@ -1,9 +1,20 @@
 /* Sales Orders & Invoices Tab */
 
 window.loadSalesOrders = async function() {
-  const cont = document.getElementById('salesContent');
+  // salesContent is inside the sales tab panel
+  let cont = document.getElementById('salesContent');
+  if (!cont) {
+    // Panel might not be rendered yet — wait a tick
+    await new Promise(r => setTimeout(r, 100));
+    cont = document.getElementById('salesContent');
+  }
+  if (!cont) {
+    const panel = document.getElementById('sales');
+    if (panel) panel.innerHTML = '<div style="padding:24px;"><div class="loading">Loading…</div></div>';
+    cont = panel;
+  }
   if (!cont) return;
-  cont.innerHTML = '<div class="loading">Loading Sales Orders from Odoo…</div>';
+  cont.innerHTML = '<div class="loading" style="padding:40px;text-align:center;">Loading Sales Orders from Odoo…</div>';
 
   try {
     const res = await fetch('/api/sales-orders');
