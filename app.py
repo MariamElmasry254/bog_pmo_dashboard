@@ -7738,63 +7738,44 @@ def api_sales_orders():
 
         project_ids = [p['id'] for p in projects]
 
-        # Get sale orders — try multiple methods
-        sos = []
+        # Step 1: Get the analytic account linked to this project
+        analytic_account_id = None
+        analytic_account_name = ''
+        try:
+            proj_data = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.project', 'read',
+                [project_ids],
+                {'fields': ['id', 'name', 'analytic_account_id']}
+            )
+            for p in proj_data:
+                aa = p.get('analytic_account_id')
+                if aa and isinstance(aa, list):
+                    analytic_account_id = aa[0]
+                    analytic_account_name = aa[1]
+                    break
+            logger.info(f"Project analytic account: {analytic_account_name} (id={analytic_account_id})")
+        except Exception as e:
+            logger.warning(f"analytic account fetch failed: {e}")
 
-        # Method 1: by project_ids
+        if not analytic_account_id:
+            return jsonify({'ok': True, 'orders': [], 'summary': {},
+                           'note': 'No analytic account linked to this project'})
+
+        # Step 2: Get SOs linked to this analytic account
+        sos = []
         try:
             sos = odoo.models.execute_kw(
                 ODOO_DB, odoo.uid, ODOO_PASSWORD,
                 'sale.order', 'search_read',
-                [[('project_ids', 'in', project_ids)]],
+                [[('analytic_account_id', '=', analytic_account_id)]],
                 {'fields': ['id', 'name', 'partner_id', 'date_order', 'state',
                             'amount_untaxed', 'amount_tax', 'amount_total',
-                            'invoice_status', 'currency_id', 'order_line'], 'limit': 200}
+                            'invoice_status', 'currency_id', 'order_line'], 'limit': 500}
             )
-            logger.info(f"SOs by project_ids: {len(sos)}")
+            logger.info(f"SOs by analytic account {analytic_account_name}: {len(sos)}")
         except Exception as e:
-            logger.warning(f"SO by project_ids failed: {e}")
-
-        # Method 2: by analytic account (contains project name)
-        if not sos:
-            try:
-                sos = odoo.models.execute_kw(
-                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                    'sale.order', 'search_read',
-                    [[('analytic_account_id.name', 'ilike', _proj_name)]],
-                    {'fields': ['id', 'name', 'partner_id', 'date_order', 'state',
-                                'amount_untaxed', 'amount_tax', 'amount_total',
-                                'invoice_status', 'currency_id', 'order_line'], 'limit': 200}
-                )
-                logger.info(f"SOs by analytic account (ilike): {len(sos)}")
-            except Exception as e2:
-                logger.warning(f"SO by analytic ilike failed: {e2}")
-
-        # Method 3: find analytic account by project then search SOs
-        if not sos:
-            try:
-                # Get analytic accounts linked to these projects
-                analytic_accounts = odoo.models.execute_kw(
-                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                    'project.project', 'read',
-                    [project_ids],
-                    {'fields': ['id', 'name', 'analytic_account_id']}
-                )
-                aa_ids = [p['analytic_account_id'][0]
-                          for p in analytic_accounts
-                          if p.get('analytic_account_id') and isinstance(p['analytic_account_id'], list)]
-                if aa_ids:
-                    sos = odoo.models.execute_kw(
-                        ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                        'sale.order', 'search_read',
-                        [[('analytic_account_id', 'in', aa_ids)]],
-                        {'fields': ['id', 'name', 'partner_id', 'date_order', 'state',
-                                    'amount_untaxed', 'amount_tax', 'amount_total',
-                                    'invoice_status', 'currency_id', 'order_line'], 'limit': 200}
-                    )
-                    logger.info(f"SOs by analytic account id: {len(sos)}")
-            except Exception as e3:
-                logger.warning(f"SO by analytic id failed: {e3}")
+            logger.warning(f"SO by analytic_account_id failed: {e}")
 
         if not sos:
             return jsonify({'ok': True, 'orders': [], 'summary': {}})
