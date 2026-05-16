@@ -26,6 +26,19 @@ window.loadSalesOrders = async function() {
   if (!cont) { console.error('No sales panel found'); return; }
   cont.innerHTML = '<div class="loading" style="padding:40px;text-align:center;">Loading Sales Orders from Odoo…</div>';
 
+  // Load saved SO line → variance tab mapping from DB
+  try {
+    const mapRes = await fetch('/api/plan-overrides');
+    if (mapRes.ok) {
+      const mapData = await mapRes.json();
+      const soMap = mapData.plan_overrides?.so_line_map || {};
+      if (!window.AppState._soLineVarMap) window.AppState._soLineVarMap = {};
+      for (const [lineId, fields] of Object.entries(soMap)) {
+        if (fields.var_tab) window.AppState._soLineVarMap[lineId] = fields.var_tab;
+      }
+    }
+  } catch(e) {}
+
   try {
     const res = await fetch('/api/sales-orders');
     const d   = await res.json();
@@ -209,7 +222,7 @@ function renderSOLines(lines) {
       ? ['development','consultation','support']
       : ['services','support'];
     const linePhaseKey = phaseOf(Array.isArray(l.product_id) ? l.product_id[1] : (l.name||''));
-    const savedVarTab = (window.AppState?._soLineVarMap || {})[l.id] || linePhaseKey;
+    const savedVarTab = (window.AppState?._soLineVarMap || {})[String(l.id)] || linePhaseKey;
 
     // License/3rd party: show badge only, no variance tab
     const varSelector = !isVarPhase(linePhaseKey)
@@ -352,7 +365,7 @@ window.setSalesPhase = function(phase, btn) {
 
 window.setSoLineVarTab = function(lineId, varTab) {
   if (!window.AppState._soLineVarMap) window.AppState._soLineVarMap = {};
-  window.AppState._soLineVarMap[lineId] = varTab;
+  window.AppState._soLineVarMap[String(lineId)] = varTab;
   // Save to DB
   fetch('/api/plan-overrides', {
     method: 'POST',
