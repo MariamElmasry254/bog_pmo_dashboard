@@ -488,7 +488,7 @@ function renderBudgetChanges(phaseKey) {
               value="${safeR}"
               oninput="_budgetChanges['${phaseKey}'][${i}].reason=this.value;budgetSaveChanges('${phaseKey}')">
           </div>
-          <div style="display:grid;grid-template-columns:1fr 100px 130px 130px 100px;gap:8px;align-items:end;">
+          <div style="display:grid;grid-template-columns:1fr 100px 130px 130px 80px;gap:8px;align-items:end;">
             <div>
               <label style="${LBL}">Plan / CR ID</label>
               <input type="text" class="svc-input" style="font-size:12px;width:100%;"
@@ -521,7 +521,7 @@ function renderBudgetChanges(phaseKey) {
                          this.style.color=parseFloat(this.value)<0?'var(--red)':parseFloat(this.value)>0?'var(--green)':''">
             </div>
             <div>
-              <label style="${LBL}">Δ MDs (Presales)</label>
+              <label style="${LBL}">Δ MDs</label>
               <input type="number" step="0.1" class="svc-input"
                 style="font-size:12px;width:100%;text-align:right;"
                 placeholder="0" value="${c.delta_mds||''}"
@@ -723,15 +723,11 @@ function budgetAutoCalc(phaseKey) {
   setEl(`kpi-final-pct-${phaseKey}`, finRevSAR > 0 ? fmt.decimal(finProfitPct)+'%' : '—', profColor(finProfitPct));
   setEl(`kpi-final-sar-${phaseKey}`, finRevSAR > 0 ? fmt.money(Math.round(finProfit)) + ' SAR' : '—', profColor(finProfitPct));
 
-  // Save Final Cost + Presales MDs to AppState for profitability to use
-  if (!AppState._budgetFinalCost)    AppState._budgetFinalCost    = {};
-  if (!AppState._budgetPresalesMDs)  AppState._budgetPresalesMDs  = {};
+  // Save to AppState for profitability to use
+  if (!AppState._budgetFinalCost)   AppState._budgetFinalCost   = {};
+  if (!AppState._budgetPresalesMDs) AppState._budgetPresalesMDs = {};
   AppState._budgetFinalCost[phaseKey]   = finCostSAR || costSAR;
   AppState._budgetPresalesMDs[phaseKey] = mds;
-  // Save total delta MDs for profitability base calc
-  const totalDeltaMDs = changes.reduce((s,c) => s + (parseFloat(c.delta_mds)||0), 0);
-  if (!AppState._budgetDeltaMDs) AppState._budgetDeltaMDs = {};
-  AppState._budgetDeltaMDs[phaseKey] = totalDeltaMDs;
 }
 
 // Wire up auto-save for budget inputs
@@ -1012,82 +1008,53 @@ async function profRecomputeAll(phaseKey) {
   const budgChanges = _budgetChanges[phaseKey] || [];
   totalRevSAR += budgChanges.reduce((s,c) => s + (parseFloat(c.delta_rev)||0), 0);
 
-  // Per-month helpers: apply only changes effective by that month's date
-  // Approved revenue = saved revenue (before any changes)
+  // Approved bases (before any changes)
   const approvedRevBase = AppState._savedRevenue?.[phaseKey] || 0;
-
-  const _getMonthlyRev = (mk) => {
-    // Start from approved base, add only changes effective by this month
-    let rev = approvedRevBase;
-    budgChanges.forEach(c => {
-      const cd = (c.change_date||'').slice(0,7);
-      if (!cd || cd <= mk) rev += parseFloat(c.delta_rev)||0;
-    });
-    return rev;
-  };
-  // Approved cost = Final Budget cost MINUS all changes (base before any changes)
   const totalDeltaCostAll = budgChanges.reduce((s,c) => s + (parseFloat(c.delta_cost)||0), 0);
-  const approvedCostSARBase = (AppState._budgetFinalCost?.[phaseKey] || totalEstCostSAR) - totalDeltaCostAll;
+  const totalDeltaMDsAll  = budgChanges.reduce((s,c) => s + (parseFloat(c.delta_mds)||0), 0);
 
+  // Per-month helpers: apply only changes whose change_date ≤ monthKey
+  const _getMonthlyRev = (mk) => {
+    let v = approvedRevBase;
+    budgChanges.forEach(c => { const cd=(c.change_date||'').slice(0,7); if(!cd||cd<=mk) v+=parseFloat(c.delta_rev)||0; });
+    return v;
+  };
   const _getMonthlyEstCost = (mk) => {
-    // Start from approved base, add only changes effective by this month
-    let cost = approvedCostSARBase;
-    budgChanges.forEach(c => {
-      const cd = (c.change_date||'').slice(0,7);
-      if (!cd || cd <= mk) cost += parseFloat(c.delta_cost)||0;
-    });
-    return cost;
+    const approvedBase = (AppState._budgetFinalCost?.[phaseKey] || totalEstCostSAR) - totalDeltaCostAll;
+    let v = approvedBase;
+    budgChanges.forEach(c => { const cd=(c.change_date||'').slice(0,7); if(!cd||cd<=mk) v+=parseFloat(c.delta_cost)||0; });
+    return v;
   };
-
-  // Approved MDs base (before any changes)
-  const totalDeltaMDsAll = budgChanges.reduce((s,c) => s + (parseFloat(c.delta_mds)||0), 0);
-  const approvedMDsBase = (AppState._budgetPresalesMDs?.[phaseKey] || totalEstMDs) - totalDeltaMDsAll;
-
   const _getMonthlyEstMDs = (mk) => {
-    let mds = approvedMDsBase;
-    budgChanges.forEach(c => {
-      const cd = (c.change_date||'').slice(0,7);
-      if (!cd || cd <= mk) mds += parseFloat(c.delta_mds)||0;
-    });
-    return mds;
+    const approvedBase = (AppState._budgetPresalesMDs?.[phaseKey] || totalEstMDs) - totalDeltaMDsAll;
+    let v = approvedBase;
+    budgChanges.forEach(c => { const cd=(c.change_date||'').slice(0,7); if(!cd||cd<=mk) v+=parseFloat(c.delta_mds)||0; });
+    return v;
   };
 
-  // ── 2. Estimated Cost + MDs ──
-  // Priority: Final Budget cost (from budgetAutoCalc) → estimated rows → API
-  // Presales MDs: Budget KPI value (bud-mds element) → estimated rows
-
-  // Try Final Budget cost from AppState (set by budgetAutoCalc)
-  const budgetFinalCost = AppState._budgetFinalCost?.[phaseKey];
-  const budgetPresalesMDs = AppState._budgetPresalesMDs?.[phaseKey];
-
-  if (budgetFinalCost) {
-    totalEstCostSAR = budgetFinalCost;
-    totalEstMDs = budgetPresalesMDs || totalEstMDs;
+  // ── 2. Estimated rows: cache → DB ──
+  const estRows = (_estPhase === phaseKey && _estRows?.length) ? _estRows : null;
+  if (estRows) {
+    let costUSD = 0;
+    estRows.forEach(r => {
+      const hr=parseFloat(r.hourRate)||0, at=parseFloat(r.actualTime)||0, em=parseFloat(r.estMonths)||0;
+      costUSD += hr*at*em; totalEstMDs += at*em/8;
+    });
+    totalEstCostSAR = costUSD * 3.75;
   } else {
-    // Fallback: compute from estimated rows
-    const estRows = (_estPhase === phaseKey && _estRows?.length) ? _estRows : null;
-    if (estRows) {
-      let costUSD = 0;
-      estRows.forEach(r => {
-        const hr=parseFloat(r.hourRate)||0, at=parseFloat(r.actualTime)||0, em=parseFloat(r.estMonths)||0;
-        costUSD += hr*at*em; totalEstMDs += at*em/8;
-      });
-      totalEstCostSAR = costUSD * 3.75;
-    } else {
-      try {
-        const r = await fetch(`/api/estimated-rows?phase=${phaseKey}`);
-        if (r.ok) {
-          const d = await r.json();
-          let costUSD = 0;
-          (d.rows||[]).forEach(r => {
-            const hr=parseFloat(r.hourRate)||0, at=parseFloat(r.actualTime)||0, em=parseFloat(r.estMonths)||0;
-            costUSD += hr*at*em; totalEstMDs += at*em/8;
-          });
-          totalEstCostSAR = costUSD * 3.75;
-          if (!_estRows?.length) { _estRows = d.rows||[]; _estPhase = phaseKey; }
-        }
-      } catch(e) {}
-    }
+    try {
+      const r = await fetch(`/api/estimated-rows?phase=${phaseKey}`);
+      if (r.ok) {
+        const d = await r.json();
+        let costUSD = 0;
+        (d.rows||[]).forEach(r => {
+          const hr=parseFloat(r.hourRate)||0, at=parseFloat(r.actualTime)||0, em=parseFloat(r.estMonths)||0;
+          costUSD += hr*at*em; totalEstMDs += at*em/8;
+        });
+        totalEstCostSAR = costUSD * 3.75;
+        if (!_estRows?.length) { _estRows = d.rows||[]; _estPhase = phaseKey; }
+      }
+    } catch(e) {}
   }
 
   // ── 3. Effort MDs + Costs: AppState → API ──
@@ -1202,8 +1169,8 @@ async function profRecomputeAll(phaseKey) {
     const eacMDs = actualMDs + remainingMDs;
 
     // Expected Overrun = (Actual/EstMDs) / (%Comp/100) - 1
-    const expectedOverrun = (completionPct > 0 && monthEstMDs > 0 && actualMDs > 0)
-      ? (actualMDs / monthEstMDs) / (completionPct / 100) - 1 : null;
+    const expectedOverrun = (completionPct > 0 && totalEstMDs > 0 && actualMDs > 0)
+      ? (actualMDs / totalEstMDs) / (completionPct / 100) - 1 : null;
 
     // Avg cost per MD for this month = Current Cost SAR / Actual MDs to Date (running)
     // This is the "current effort average" - changes each month as more data comes in
@@ -1212,18 +1179,18 @@ async function profRecomputeAll(phaseKey) {
     // Est Cost to Complete = Remaining MDs × this month's avg cost per MD
     const estCostToComplete = remainingMDs * thisMonthAvgCostPerMD;
     const estAtCompletion   = estCostToComplete + currentCostSAR;
-    const cpi               = estAtCompletion > 0 ? monthEstCostSAR / estAtCompletion : 0;
-    const costVarianceSAR   = monthEstCostSAR - estAtCompletion;
-    const costVariancePct   = monthRevSAR > 0 ? costVarianceSAR / monthRevSAR * 100 : 0;
-    const revToDate         = monthRevSAR * (completionPct / 100);
-    const profitAtComp      = monthRevSAR - estAtCompletion;
-    const profitAtCompPct   = monthRevSAR > 0 ? profitAtComp / monthRevSAR * 100 : 0;
+    const cpi               = estAtCompletion > 0 ? totalEstCostSAR / estAtCompletion : 0;
+    const costVarianceSAR   = totalEstCostSAR - estAtCompletion;
+    const costVariancePct   = totalRevSAR > 0 ? costVarianceSAR / totalRevSAR * 100 : 0;
+    const revToDate         = totalRevSAR * (completionPct / 100);
+    const profitAtComp      = totalRevSAR - estAtCompletion;
+    const profitAtCompPct   = totalRevSAR > 0 ? profitAtComp / totalRevSAR * 100 : 0;
 
     // Planned Profit - from Final Budget, per-month history
     // Use month-specific override if budget changed that month, else use latest
     const monthPlannedPct = (AppState._plannedProfitHistory?.[phaseKey]?.[monthKey]) 
-      ?? (AppState._finalProfitPct?.[phaseKey] ?? (monthRevSAR > 0 ? (monthRevSAR - monthEstCostSAR) / monthRevSAR : 0));
-    const plannedProfitMonthSAR = monthPlannedPct * monthRevSAR;
+      ?? (AppState._finalProfitPct?.[phaseKey] ?? (totalRevSAR > 0 ? (totalRevSAR - totalEstCostSAR) / totalRevSAR : 0));
+    const plannedProfitMonthSAR = monthPlannedPct * totalRevSAR;
 
     // Profitability Variance = Profit at Completion - Planned Profit SAR
     const profVar    = profitAtComp - plannedProfitMonthSAR;
@@ -1244,7 +1211,7 @@ async function profRecomputeAll(phaseKey) {
       if (el) { el.innerHTML = val; if (color) el.style.color = color; }
     };
 
-    // Presales: revenue/cost reflect changes effective by this month
+    // Presales display: Revenue / Cost / MDs reflect changes effective by this month
     const monthRevSAR     = _getMonthlyRev(monthKey);
     const monthEstCostSAR = _getMonthlyEstCost(monthKey);
     const monthEstMDs     = _getMonthlyEstMDs(monthKey);
@@ -1280,7 +1247,7 @@ async function profRecomputeAll(phaseKey) {
     setSpan(`pc-prof-var-${monthKey}`,      `<span style="color:${pvColor};">${fSAR(profVar)}</span>`);
     setSpan(`pc-prof-var-pct-${monthKey}`,  `<span style="color:${pvColor};">${fmt.decimal(profVarPct)}%</span>`);
 
-    const recognizedRev  = monthRevSAR * (completionPct / 100);  // = Revenue to Date
+    const recognizedRev  = totalRevSAR * (completionPct / 100);  // = Revenue to Date
     const progressPct2   = estAtCompletion > 0 ? currentCostSAR / estAtCompletion * 100 : 0;
 
     // Virtual Invoice
