@@ -7809,11 +7809,39 @@ def api_sales_orders():
                   ('invoice_line_ids.sale_line_ids.order_id', 'in', so_ids)]],
                 {'fields': ['id', 'name', 'invoice_date', 'invoice_date_due',
                             'amount_untaxed', 'amount_tax', 'amount_total',
-                            'state', 'invoice_origin', 'payment_state'],
+                            'state', 'invoice_origin', 'payment_state',
+                            'invoice_line_ids'],
                  'limit': 500, 'order': 'invoice_date asc'}
             )
         except Exception as e:
             logger.warning(f"Invoice fetch failed: {e}")
+
+        # Fetch invoice lines with sale_line_ids linkage
+        inv_line_map = {}  # invoice_line_id -> {sale_line_id, amount, name}
+        all_inv_line_ids = [lid for inv in invoices_raw for lid in (inv.get('invoice_line_ids') or [])]
+        if all_inv_line_ids:
+            try:
+                inv_lines = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'account.move.line', 'read',
+                    [all_inv_line_ids],
+                    {'fields': ['id', 'name', 'sale_line_ids', 'price_subtotal',
+                                'quantity', 'move_id', 'display_type']}
+                )
+                for il in inv_lines:
+                    if il.get('display_type') in ('line_section', 'line_note'):
+                        continue
+                    for slid in (il.get('sale_line_ids') or []):
+                        inv_line_map.setdefault(slid, []).append({
+                            'inv_line_id':   il['id'],
+                            'move_id':       il['move_id'][0] if isinstance(il['move_id'], list) else il['move_id'],
+                            'move_name':     il['move_id'][1] if isinstance(il['move_id'], list) else '',
+                            'name':          il.get('name') or '',
+                            'qty':           il.get('quantity') or 0,
+                            'amount':        il.get('price_subtotal') or 0,
+                        })
+            except Exception as e:
+                logger.warning(f"Invoice lines fetch failed: {e}")
 
         # Build invoice map by SO name
         inv_by_so = {}
@@ -7858,6 +7886,24 @@ def api_sales_orders():
             total_untaxed  += untaxed
             total_invoiced += invoiced_amt
 
+            # Add invoice links to each line
+            enriched_lines = []
+            for l in lines:
+                line_invoices = inv_line_map.get(l['id'], [])
+                # Calculate delivered/invoiced amounts from line price
+                unit = l.get('price_unit') or 0
+                disc = 1 - (l.get('discount') or 0) / 100
+                delivered_amt = round(l.get('qty_delivered', 0) * unit * disc, 2)
+                invoiced_amt_line = round(l.get('qty_invoiced', 0) * unit * disc, 2)
+                remaining_amt = round(l.get('price_subtotal', 0) - invoiced_amt_line, 2)
+                enriched_lines.append({
+                    **l,
+                    'delivered_amt':   delivered_amt,
+                    'invoiced_amt':    invoiced_amt_line,
+                    'remaining_amt':   remaining_amt,
+                    'line_invoices':   line_invoices,
+                })
+
             orders.append({
                 'id':            s['id'],
                 'name':          s['name'],
@@ -7872,7 +7918,7 @@ def api_sales_orders():
                 'remaining':     round(remaining, 2),
                 'delivered_pct': delivered_pct,
                 'invoiced_pct':  invoiced_pct,
-                'lines':         lines,
+                'lines':         enriched_lines,
                 'invoices':      so_invoices,
             })
 
