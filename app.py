@@ -2982,6 +2982,28 @@ def api_overview_analysis(phase_group):
         else:
             all_project_domain = []
 
+        # Check for unphased tasks
+        _unphased_domain = list(all_project_domain) + [('phase_id', '=', False)]
+        try:
+            _unphased_count = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.task', 'search_count', [_unphased_domain]
+            )
+            _has_unphased = _unphased_count > 0
+        except Exception:
+            _has_unphased = False
+
+        # If No Phase selected, add unphased tasks to parent_tasks
+        if _include_no_phase and _has_unphased:
+            _unphased_tasks = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.task', 'search_read',
+                [_unphased_domain],
+                {'fields': ['id', 'name', 'phase_id', 'project_id'], 'limit': 2000}
+            )
+            _parent_ids = {t['id'] for t in parent_tasks}
+            parent_tasks = parent_tasks + [t for t in _unphased_tasks if t['id'] not in _parent_ids]
+
         all_project_tasks = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'project.task', 'search_read',
