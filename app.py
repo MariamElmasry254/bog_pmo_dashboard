@@ -2088,6 +2088,117 @@ def api_get_project_config():
                     'has_services': True, 'has_support': False})
 
 
+@app.route('/api/effort/<phase_key>/unassigned-hours')
+def api_effort_unassigned_hours(phase_key):
+    """Find timesheets logged on this project but NOT in any known phase.
+    Returns total hours, employee breakdown, and sample tasks.
+    """
+    try:
+        if not odoo.uid: odoo.connect()
+        _proj_name = active_project_name()
+        _proj_id_ua = session.get('project_id')
+        _is_bog_ua  = not _proj_id_ua or str(_proj_id_ua) == '228'
+
+        # Find project
+        projects = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.project', 'search_read',
+            [[('name', 'ilike', _proj_name)]],
+            {'fields': ['id', 'name'], 'limit': 3}
+        )
+        if not projects:
+            return jsonify({'ok': True, 'total_hours': 0, 'employees': [], 'tasks': []})
+        project_id = projects[0]['id']
+
+        # Get ALL tasks in project
+        all_tasks = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [[('project_id', '=', project_id)]],
+            {'fields': ['id', 'name', 'phase_id', 'stage_id'], 'limit': 10000}
+        )
+
+        # Get tasks that ARE in known phases (already counted in effort tab)
+        phase_task_ids = set()
+        if _is_bog_ua:
+            phase_names = get_phase_mapping().get(phase_key, [])
+            if phase_names:
+                phases = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'project.phase', 'search_read',
+                    [[('name', 'in', phase_names), ('project_id', '=', project_id)]],
+                    {'fields': ['id'], 'limit': 50}
+                )
+                phase_ids = [p['id'] for p in phases]
+                for t in all_tasks:
+                    ph = t.get('phase_id')
+                    if ph and isinstance(ph, list) and ph[0] in phase_ids:
+                        phase_task_ids.add(t['id'])
+        else:
+            # Non-BOG: find tasks in ALL known phases
+            all_proj_phases = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.phase', 'search_read',
+                [[('project_id', '=', project_id)]],
+                {'fields': ['id', 'name'], 'limit': 100}
+            )
+            all_phase_ids = [p['id'] for p in all_proj_phases]
+            for t in all_tasks:
+                ph = t.get('phase_id')
+                if ph and isinstance(ph, list) and ph[0] in all_phase_ids:
+                    phase_task_ids.add(t['id'])
+
+        # Unassigned = tasks with NO phase_id
+        unassigned_task_ids = [t['id'] for t in all_tasks if not t.get('phase_id')]
+
+        if not unassigned_task_ids:
+            return jsonify({'ok': True, 'total_hours': 0, 'employees': [], 'tasks': [],
+                            'message': 'All hours are assigned to phases'})
+
+        # Get timesheets for unassigned tasks
+        timesheets = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'account.analytic.line', 'search_read',
+            [[('task_id', 'in', unassigned_task_ids)]],
+            {'fields': ['id', 'employee_id', 'unit_amount', 'date', 'task_id', 'name'],
+             'limit': 5000}
+        )
+
+        total_hours = sum(t.get('unit_amount', 0) for t in timesheets)
+
+        # Group by employee
+        emp_hours = {}
+        for ts in timesheets:
+            emp = ts.get('employee_id')
+            if emp and isinstance(emp, list):
+                eid, ename = emp[0], emp[1]
+                if eid not in emp_hours:
+                    emp_hours[eid] = {'name': ename, 'hours': 0}
+                emp_hours[eid]['hours'] += ts.get('unit_amount', 0)
+
+        # Sample tasks
+        task_map = {t['id']: t['name'] for t in all_tasks}
+        task_hours = {}
+        for ts in timesheets:
+            tid = ts.get('task_id')
+            if tid and isinstance(tid, list):
+                tid0 = tid[0]
+                if tid0 not in task_hours:
+                    task_hours[tid0] = {'name': task_map.get(tid0, '?'), 'hours': 0}
+                task_hours[tid0]['hours'] += ts.get('unit_amount', 0)
+
+        return jsonify({
+            'ok': True,
+            'total_hours': round(total_hours, 1),
+            'total_mds': round(total_hours / 8, 1),
+            'employees': sorted(emp_hours.values(), key=lambda x: -x['hours'])[:20],
+            'tasks': sorted(task_hours.values(), key=lambda x: -x['hours'])[:10],
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({'ok': False, 'error': str(e), 'trace': traceback.format_exc()}), 500
+
+
 @app.route('/debug/phases-for-project')
 def debug_phases_for_project():
     """Debug: show all phases and task.types for current project."""
