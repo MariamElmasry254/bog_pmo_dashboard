@@ -7728,16 +7728,22 @@ def api_sales_orders():
         pfx = active_db_prefix()
         plan_ns = f'{pfx}_plan' if pfx else 'plan'
         so_map_raw = db.get_namespace_overrides(plan_ns, 'so_line_map') or {}
-        for line_id_key, fields in so_map_raw.items():
-            if isinstance(fields, dict) and fields.get('var_tab'):
-                line_var_map[str(line_id_key)] = fields['var_tab']
-            elif isinstance(fields, str):
-                line_var_map[str(line_id_key)] = fields
+        for raw_key, val in so_map_raw.items():
+            # POST saves as key='12345.var_tab', value='support'
+            # Strip the '.var_tab' suffix to get the line id
+            if raw_key.endswith('.var_tab'):
+                line_id = raw_key[:-len('.var_tab')]
+                if isinstance(val, str) and val:
+                    line_var_map[line_id] = val
+            elif isinstance(val, dict) and val.get('var_tab'):
+                line_var_map[str(raw_key)] = val['var_tab']
+            elif isinstance(val, str) and val:
+                line_var_map[str(raw_key)] = val
     except Exception:
         pass
     try:
         if not odoo.uid: odoo.connect()
-        # Allow project_name override from query param (used by manage tab)
+        # Allow override from query param (used by manage tab)
         _proj_name_override = request.args.get('project_name', '').strip()
         _proj_name = _proj_name_override if _proj_name_override else active_project_name()
         _proj_id   = session.get('project_id')
