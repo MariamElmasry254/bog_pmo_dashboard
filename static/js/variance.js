@@ -295,9 +295,9 @@ function renderBudget(data, phaseKey) {
   let html = `
     <div class="kpi-strip kpi-strip-small">
       <div class="kpi-card kpi-blue compact">
-        <div class="kpi-label">PRESALES MDs</div>
+        <div class="kpi-label">PRESALES MDs (FINAL)</div>
         <div class="kpi-value" id="kpi-mds-${phaseKey}">${fmt.num(a.total_mandays || 0)}</div>
-        <div class="kpi-foot">final after changes</div>
+        <div class="kpi-foot">from Estimated Cost</div>
       </div>
       <div class="kpi-card kpi-navy compact">
         <div class="kpi-label">REVENUE (FINAL)</div>
@@ -361,10 +361,6 @@ function renderBudget(data, phaseKey) {
         <h3 class="card-title" style="margin-bottom:20px;">Final Budget <span class="badge badge-amber">After Changes</span></h3>
 
         <div style="display:flex; flex-direction:column; gap:14px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:10px; border-bottom:1px solid var(--border-light);">
-            <span style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Total Mandays</span>
-            <span style="font-size:16px; font-weight:700; color:var(--navy);" id="fin-mds-${phaseKey}">—</span>
-          </div>
           <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:10px; border-bottom:1px solid var(--border-light);">
             <span style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Total Cost (SAR)</span>
             <span style="font-size:16px; font-weight:700; color:var(--navy);" id="fin-cost-sar-${phaseKey}">—</span>
@@ -674,7 +670,6 @@ function budgetAutoCalc(phaseKey) {
   setEl(`bud-profit-pct-${phaseKey}`, approvedRevSAR > 0 ? fmt.decimal(appProfitPct) + '%' : '—', profColor(appProfitPct));
 
   // Final section — show only what changed, compute from approved + delta
-  setEl(`fin-mds-${phaseKey}`,       finMDs > 0 ? fmt.num(Math.round(finMDs)) : (mds > 0 ? fmt.num(Math.round(mds)) : '—'));
   setEl(`fin-cost-sar-${phaseKey}`,   fmt.money(Math.round(finCostSAR)) + ' SAR');
   setEl(`fin-rev-sar-${phaseKey}`,    fmt.money(Math.round(finRevSAR))  + ' SAR');
 
@@ -722,21 +717,21 @@ function budgetAutoCalc(phaseKey) {
       }).catch(()=>{});
     }
   }
+  // Final MDs = approved mds + Σ delta_mds from all changes
   const deltaMDsTotal = changes.reduce((s,c) => s + (parseFloat(c.delta_mds)||0), 0);
   const finMDs = mds + deltaMDsTotal;
-  setEl(`kpi-mds-${phaseKey}`, finMDs > 0 ? fmt.num(Math.round(finMDs)) : (mds > 0 ? fmt.num(Math.round(mds)) : '—')); // Final MDs in KPI
+
+  setEl(`kpi-mds-${phaseKey}`,       finMDs > 0 ? fmt.num(Math.round(finMDs)) : (mds > 0 ? fmt.num(Math.round(mds)) : '—'));
   setEl(`kpi-rev-${phaseKey}`,       finRevSAR > 0 ? fmt.money(Math.round(finRevSAR)) : '—');
   setEl(`kpi-cost-${phaseKey}`,      finCostSAR > 0 ? fmt.money(Math.round(finCostSAR)) : (costSAR > 0 ? fmt.money(Math.round(costSAR)) : '—'));
   setEl(`kpi-final-pct-${phaseKey}`, finRevSAR > 0 ? fmt.decimal(finProfitPct)+'%' : '—', profColor(finProfitPct));
   setEl(`kpi-final-sar-${phaseKey}`, finRevSAR > 0 ? fmt.money(Math.round(finProfit)) + ' SAR' : '—', profColor(finProfitPct));
 
-  // Save to AppState for profitability to use
+  // Save to AppState for profitability
+  if (!AppState._budgetApprovedMDs) AppState._budgetApprovedMDs = {};
   if (!AppState._budgetFinalCost)   AppState._budgetFinalCost   = {};
-  if (!AppState._budgetPresalesMDs) AppState._budgetPresalesMDs = {};
+  AppState._budgetApprovedMDs[phaseKey] = mds;          // from estimated rows = approved
   AppState._budgetFinalCost[phaseKey]   = finCostSAR || costSAR;
-  AppState._budgetPresalesMDs[phaseKey] = mds;       // approved MDs
-  if (!AppState._budgetFinalMDs) AppState._budgetFinalMDs = {};
-  AppState._budgetFinalMDs[phaseKey] = finMDs;       // final MDs after all changes
 }
 
 // Wire up auto-save for budget inputs
@@ -1017,70 +1012,54 @@ async function profRecomputeAll(phaseKey) {
   const budgChanges = _budgetChanges[phaseKey] || [];
   totalRevSAR += budgChanges.reduce((s,c) => s + (parseFloat(c.delta_rev)||0), 0);
 
-  // Approved bases (before any changes)
-  const approvedRevBase = AppState._savedRevenue?.[phaseKey] || 0;
-  const totalDeltaCostAll = budgChanges.reduce((s,c) => s + (parseFloat(c.delta_cost)||0), 0);
-  const totalDeltaMDsAll  = budgChanges.reduce((s,c) => s + (parseFloat(c.delta_mds)||0), 0);
+  // Approved bases (from estimated rows, before any changes)
+  const approvedRevBase     = AppState._savedRevenue?.[phaseKey] || 0;
+  const approvedMDsBase     = AppState._budgetApprovedMDs?.[phaseKey] || totalEstMDs || 0;
+  const totalDeltaCostAll   = budgChanges.reduce((s,c) => s + (parseFloat(c.delta_cost)||0), 0);
+  const totalDeltaMDsAll    = budgChanges.reduce((s,c) => s + (parseFloat(c.delta_mds)||0), 0);
+  const approvedCostBase    = (AppState._budgetFinalCost?.[phaseKey] || totalEstCostSAR) - totalDeltaCostAll;
 
-  // Per-month helpers: apply only changes whose change_date ≤ monthKey
+  // Per-month: apply only changes whose change_date ≤ monthKey
   const _getMonthlyRev = (mk) => {
     let v = approvedRevBase;
     budgChanges.forEach(c => { const cd=(c.change_date||'').slice(0,7); if(!cd||cd<=mk) v+=parseFloat(c.delta_rev)||0; });
     return v;
   };
   const _getMonthlyEstCost = (mk) => {
-    const approvedBase = (AppState._budgetFinalCost?.[phaseKey] || totalEstCostSAR) - totalDeltaCostAll;
-    let v = approvedBase;
+    let v = approvedCostBase;
     budgChanges.forEach(c => { const cd=(c.change_date||'').slice(0,7); if(!cd||cd<=mk) v+=parseFloat(c.delta_cost)||0; });
     return v;
   };
   const _getMonthlyEstMDs = (mk) => {
-    // Base = approved MDs (Presales from Budget) BEFORE any changes
-    // If no delta_mds changes exist, just return presalesMDs for all months
-    const presalesMDs = AppState._budgetPresalesMDs?.[phaseKey] || totalEstMDs || 0;
-    if (totalDeltaMDsAll === 0) return presalesMDs; // no MDs changes — same every month
-    const approvedBase = presalesMDs - totalDeltaMDsAll;
-    let v = approvedBase;
-    budgChanges.forEach(c => {
-      const cd = (c.change_date||'').slice(0,7);
-      if (!cd || cd <= mk) v += parseFloat(c.delta_mds)||0;
-    });
+    if (totalDeltaMDsAll === 0) return approvedMDsBase;
+    let v = approvedMDsBase;
+    budgChanges.forEach(c => { const cd=(c.change_date||'').slice(0,7); if(!cd||cd<=mk) v+=parseFloat(c.delta_mds)||0; });
     return v;
   };
 
-  // ── 2. Estimated MDs + Cost ──
-  // MDs: from Budget Presales MDs (AppState) → estimated rows → API
-  if (AppState._budgetPresalesMDs?.[phaseKey]) {
-    totalEstMDs = AppState._budgetPresalesMDs[phaseKey];
-  }
-  if (AppState._budgetFinalCost?.[phaseKey]) {
-    totalEstCostSAR = AppState._budgetFinalCost[phaseKey];
-  }
-  // Fallback: compute from rows if not in AppState
-  if (!totalEstCostSAR || !totalEstMDs) {
-    const estRows = (_estPhase === phaseKey && _estRows?.length) ? _estRows : null;
-    if (estRows) {
-      let costUSD = 0;
-      estRows.forEach(r => {
-        const hr=parseFloat(r.hourRate)||0, at=parseFloat(r.actualTime)||0, em=parseFloat(r.estMonths)||0;
-        costUSD += hr*at*em; if(!totalEstMDs) totalEstMDs += at*em/8;
-      });
-      if(!totalEstCostSAR) totalEstCostSAR = costUSD * 3.75;
-    } else {
-      try {
-        const r = await fetch(`/api/estimated-rows?phase=${phaseKey}`);
-        if (r.ok) {
-          const d = await r.json();
-          let costUSD = 0;
-          (d.rows||[]).forEach(r => {
-            const hr=parseFloat(r.hourRate)||0, at=parseFloat(r.actualTime)||0, em=parseFloat(r.estMonths)||0;
-            costUSD += hr*at*em; if(!totalEstMDs) totalEstMDs += at*em/8;
-          });
-          if(!totalEstCostSAR) totalEstCostSAR = costUSD * 3.75;
-          if (!_estRows?.length) { _estRows = d.rows||[]; _estPhase = phaseKey; }
-        }
-      } catch(e) {}
-    }
+  // ── 2. Estimated rows: cache → DB ──
+  const estRows = (_estPhase === phaseKey && _estRows?.length) ? _estRows : null;
+  if (estRows) {
+    let costUSD = 0;
+    estRows.forEach(r => {
+      const hr=parseFloat(r.hourRate)||0, at=parseFloat(r.actualTime)||0, em=parseFloat(r.estMonths)||0;
+      costUSD += hr*at*em; totalEstMDs += at*em/8;
+    });
+    totalEstCostSAR = costUSD * 3.75;
+  } else {
+    try {
+      const r = await fetch(`/api/estimated-rows?phase=${phaseKey}`);
+      if (r.ok) {
+        const d = await r.json();
+        let costUSD = 0;
+        (d.rows||[]).forEach(r => {
+          const hr=parseFloat(r.hourRate)||0, at=parseFloat(r.actualTime)||0, em=parseFloat(r.estMonths)||0;
+          costUSD += hr*at*em; totalEstMDs += at*em/8;
+        });
+        totalEstCostSAR = costUSD * 3.75;
+        if (!_estRows?.length) { _estRows = d.rows||[]; _estPhase = phaseKey; }
+      }
+    } catch(e) {}
   }
 
   // ── 3. Effort MDs + Costs: AppState → API ──
@@ -1237,13 +1216,13 @@ async function profRecomputeAll(phaseKey) {
       if (el) { el.innerHTML = val; if (color) el.style.color = color; }
     };
 
-    // Presales display: Revenue / Cost / MDs reflect changes effective by this month
-    const monthRevSAR     = _getMonthlyRev(monthKey);
-    const monthEstCostSAR = _getMonthlyEstCost(monthKey);
-    const monthEstMDs     = _getMonthlyEstMDs(monthKey);
-    tr.querySelectorAll(`.prof-rev-${phaseKey}`).forEach(el => el.textContent = monthRevSAR > 0 ? fSAR(monthRevSAR) : '—');
-    tr.querySelectorAll(`.prof-estcost-${phaseKey}`).forEach(el => el.textContent = monthEstCostSAR > 0 ? fSAR(monthEstCostSAR) : '—');
-    tr.querySelectorAll(`.prof-estmds-${phaseKey}`).forEach(el => el.textContent = monthEstMDs > 0 ? fNum(monthEstMDs) : '—');
+    // Presales display: each month shows values effective by that month's date
+    const mRev  = _getMonthlyRev(monthKey);
+    const mCost = _getMonthlyEstCost(monthKey);
+    const mMDs  = _getMonthlyEstMDs(monthKey);
+    tr.querySelectorAll(`.prof-rev-${phaseKey}`).forEach(el => el.textContent = mRev  > 0 ? fSAR(mRev)  : '—');
+    tr.querySelectorAll(`.prof-estcost-${phaseKey}`).forEach(el => el.textContent = mCost > 0 ? fSAR(mCost) : '—');
+    tr.querySelectorAll(`.prof-estmds-${phaseKey}`).forEach(el => el.textContent = mMDs  > 0 ? fNum(mMDs)  : '—');
     // Current effort columns
     tr.querySelectorAll(`.prof-thismonth-${phaseKey}`).forEach(el => el.textContent = thisMonthMDs > 0 ? fNum(thisMonthMDs) : '—');
     tr.querySelectorAll(`.prof-actual-${phaseKey}`).forEach(el => el.textContent = actualMDs > 0 ? fNum(actualMDs) : '—');
