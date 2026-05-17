@@ -810,7 +810,6 @@ function renderProfitability(data, phaseKey) {
             title="Fill Remaining MDs from Tasks Analysis tab"
             onclick="profFillFromTasks('${phaseKey}')">📋 Fill from Tasks</button>
           <button class="btn-primary" style="font-size:12px;padding:6px 16px;" onclick="profBuildTable('${phaseKey}')">↻ Recalculate</button>
-          <button class="btn-ghost" style="font-size:12px;padding:6px 14px;" onclick="exportProjectVariance()">⬇ Export Excel</button>
         </div>
       </div>
       <div id="prof-table-wrap-${phaseKey}">
@@ -1152,54 +1151,100 @@ async function profRecomputeAll(phaseKey) {
 
   // ── 4. Issued Invoices: load monthly_cumulative per phase (once, cached) ──
   if (!AppState._invoiceCumulative) AppState._invoiceCumulative = {};
-  if (!AppState._invoiceCumulative[phaseKey]) {
-    // Load invoices from sales API grouped by variance tab
-    try {
-      if (!AppState._salesInvoicesByPhase) {
-        const salesRes = await fetch('/api/sales-orders');
-        if (salesRes.ok) {
-          const salesData = await salesRes.json();
-          if (salesData.invoices_by_phase) {
-            AppState._salesInvoicesByPhase = salesData.invoices_by_phase;
+
+  // Always reload fresh — don't use stale cache
+  try {
+    const salesRes = await fetch('/api/sales-orders');
+    if (salesRes.ok) {
+      const salesData = await salesRes.json();
+      console.log('[Variance] sales-orders invoices_by_phase:', JSON.stringify(salesData.invoices_by_phase));
+
+      // Build byPhase from all available sources
+      const byPhase = {};
+      const addAmt = (ph, mk, amt) => {
+        if (!byPhase[ph]) byPhase[ph] = {};
+        byPhase[ph][mk] = (byPhase[ph][mk] || 0) + amt;
+      };
+
+      // Source 1: backend invoices_by_phase (SO invoices classified server-side)
+      if (salesData.invoices_by_phase) {
+        for (const [ph, months] of Object.entries(salesData.invoices_by_phase)) {
+          if (ph === 'license') continue;
+          for (const [mk, v] of Object.entries(months)) {
+            addAmt(ph, mk, typeof v === 'object' ? (v.month || 0) : (v || 0));
           }
         }
       }
-      if (AppState._salesInvoicesByPhase) {
-        // Map variance tab → sales phase keys
-        // BOG: development & consultation → 'development', support → 'support', license excluded
-        // Non-BOG: services → 'development', support → 'support'
-        const phaseMapping = {
-          development:  ['development'],
-          consultation: ['consultation'],
-          services:     ['development', 'consultation'],  // non-BOG: services gets dev+consult
-          support:      ['support'],
-        };
-        const matchPhases = phaseMapping[phaseKey] || [phaseKey];
 
-        const monthly = {};
-        for (const [srcPhase, phaseData] of Object.entries(AppState._salesInvoicesByPhase)) {
-          // Skip license — not part of variance profitability
-          if (srcPhase === 'license') continue;
-          if (!matchPhases.includes(srcPhase)) continue;
-          for (const [mk, v] of Object.entries(phaseData)) {
-            monthly[mk] = (monthly[mk] || 0) + (v.month || 0);
-          }
-        }
-        // Build cumulative
-        let running = 0;
-        const cum = {};
-        for (const mk of Object.keys(monthly).sort()) {
-          running += monthly[mk];
-          cum[mk] = running;
-        }
-        if (Object.keys(cum).length) {
-          AppState._invoiceCumulative[phaseKey] = cum;
+      // Source 2: direct invoices (non-SO projects) - classified by user or auto-detect
+      if (salesData.direct_invoices) {
+        for (const inv of salesData.direct_invoices) {
+          if (inv.state !== 'posted' || inv.phase === 'license') continue;
+          const mk = (inv.date || '').substring(0, 7);
+          if (mk) addAmt(inv.phase || 'services', mk, inv.amount_untaxed || 0);
         }
       }
-    } catch(e) { console.warn('Sales invoice load error:', e); }
 
-    if (!AppState._invoiceCumulative[phaseKey]) AppState._invoiceCumulative[phaseKey] = {};
+      // Source 3: SO orders with their invoices (build from frontend if backend didn't classify)
+      if (salesData.orders && salesData.orders.length && !salesData.invoices_by_phase) {
+        const SUPP = ['support','operation','maintenance','hypercare','production','دعم','تشغيل'];
+        for (const o of salesData.orders) {
+          for (const inv of (o.invoices || [])) {
+            if (inv.state !== 'posted') continue;
+            const mk = (inv.date || '').substring(0, 7);
+            if (!mk) continue;
+            // Determine phase from SO lines or user override
+            let ph = 'services';
+            for (const l of (o.lines || [])) {
+              const prod = (Array.isArray(l.product_id) ? l.product_id[1] : (l.name||'')).toLowerCase();
+              const saved = (AppState._soLineVarMap||{})[String(l.id)];
+              if (saved) { ph = saved; break; }
+              if (SUPP.some(k => prod.includes(k))) { ph = 'support'; break; }
+            }
+            addAmt(ph, mk, inv.amount_untaxed || 0);
+          }
+        }
+      }
+
+      console.log('[Variance] byPhase built:', JSON.stringify(byPhase));
+
+      // Build cumulative per phase and store
+      if (Object.keys(byPhase).length) {
+        if (!AppState._salesInvoicesByPhase) AppState._salesInvoicesByPhase = {};
+        for (const [ph, months] of Object.entries(byPhase)) {
+          let r = 0;
+          AppState._salesInvoicesByPhase[ph] = {};
+          for (const mk of Object.keys(months).sort()) {
+            r += months[mk];
+            AppState._salesInvoicesByPhase[ph][mk] = { month: months[mk], cumulative: r };
+          }
+        }
+      }
+    }
+  } catch(e) { console.warn('[Variance] invoice load error:', e); }
+
+  // Map phaseKey → which source phases to sum
+  const phaseMapping = {
+    development:  ['development'],
+    consultation: ['consultation'],
+    services:     ['services', 'development', 'consultation'],
+    support:      ['support'],
+  };
+  const matchPhases = phaseMapping[phaseKey] || [phaseKey];
+  const monthly = {};
+  if (AppState._salesInvoicesByPhase) {
+    for (const [srcPh, phData] of Object.entries(AppState._salesInvoicesByPhase)) {
+      if (!matchPhases.includes(srcPh)) continue;
+      for (const [mk, v] of Object.entries(phData)) {
+        monthly[mk] = (monthly[mk] || 0) + (typeof v === 'object' ? (v.month || 0) : (v || 0));
+      }
+    }
   }
+  let running = 0;
+  const cum = {};
+  for (const mk of Object.keys(monthly).sort()) { running += monthly[mk]; cum[mk] = running; }
+  console.log('[Variance] invoiceCumulative for', phaseKey, ':', JSON.stringify(cum));
+  AppState._invoiceCumulative[phaseKey] = Object.keys(cum).length ? cum : {};
 
   const table = document.getElementById(`profit-table-${phaseKey}`);
   if (!table) return;
@@ -2317,110 +2362,4 @@ async function deletePromo(id) {
   renderPromotionsSubTab();
 }
 
-}
-
-// ══════════════════════════════════════════════════════════════════════════
-// VARIANCE EXCEL EXPORT — sends data to Python backend for styled Excel
-// ══════════════════════════════════════════════════════════════════════════
-async function exportProjectVariance() {
-  const btn = document.querySelector('[onclick="exportProjectVariance()"]');
-  if (btn) { btn.textContent = '⏳ Generating…'; btn.disabled = true; }
-
-  try {
-    const isBog    = AppState._overviewData?.is_bog !== false;
-    const projName = document.querySelector('.project-title,.hdr h1,h1')?.textContent?.trim() || 'Project';
-    const allPhases = isBog ? ['development','consultation','support'] : ['services','support'];
-    const phaseLabels = {development:'Development', consultation:'Consultation',
-                         support:'Support', services:'Services'};
-
-    const availPhases = allPhases.filter(pk => !!document.getElementById(`profit-table-${pk}`));
-    if (!availPhases.length) {
-      alert('No data loaded. Please open each phase tab first.');
-      return;
-    }
-
-    const spanNum = (tr, cls) => {
-      const el = tr ? tr.querySelector(`.${cls}`) : null;
-      if (!el) return null;
-      const t = el.textContent.replace(/,/g,'').replace(/[^\d.+-]/g,'').trim();
-      return (!t || t === '—') ? null : parseFloat(t);
-    };
-
-    // ── Collect data for each phase ──────────────────────────────────────
-    const phases = [];
-    for (const pk of availPhases) {
-      const table = document.getElementById(`profit-table-${pk}`);
-      if (!table) continue;
-      const dataRows = [...table.querySelectorAll('tr[data-month-key]')];
-
-      const rows = dataRows.map(tr => {
-        const mk      = tr.dataset.monthKey;
-        const compInp = tr.querySelector('.completion-input');
-        const remInp  = tr.querySelector('.remaining-input');
-        return {
-          month:      mk,
-          comp_pct:   parseFloat(compInp?.value) || 0,
-          rem_mds:    parseFloat(remInp?.value)  || 0,
-          this_mds:   spanNum(tr, `prof-thismonth-${pk}`),
-          act_mds:    spanNum(tr, `prof-actual-${pk}`),
-          curr_cost:  spanNum(tr, `pc-currcost-${mk}`),
-          prof_comp:  spanNum(tr, `pc-profit-comp-${mk}`),
-          issued:     spanNum(tr, `pc-issued-${mk}`),
-          recog_rev:  spanNum(tr, `pc-rev-todate-${mk}`),
-          production: spanNum(tr, `pc-production-${mk}`),
-          acc_vi:     spanNum(tr, `pc-vi-acc-${mk}`),
-          this_mo_vi: spanNum(tr, `pc-vi-month-${mk}`),
-        };
-      });
-
-      phases.push({
-        key:     pk,
-        label:   phaseLabels[pk] || pk,
-        budget: {
-          rev:  AppState._savedRevenue?.[pk]      || 0,
-          cost: AppState._budgetFinalCost?.[pk]   || 0,
-          mds:  AppState._budgetFinalMDs?.[pk]    || 0,
-        },
-        rows,
-        changes: (_budgetChanges[pk] || []).filter(ch =>
-          ch.delta_rev || ch.delta_cost || ch.delta_mds
-        ).map(ch => ({
-          date:  ch.change_date || '',
-          desc:  ch.reason || '',
-          plan:  ch.plan_id || '',
-          d_rev: parseFloat(ch.delta_rev)  || 0,
-          d_cost:parseFloat(ch.delta_cost) || 0,
-          d_mds: parseFloat(ch.delta_mds)  || 0,
-        })),
-      });
-    }
-
-    // ── POST to backend, receive file ────────────────────────────────────
-    const res = await fetch('/api/variance/export-pmo', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ project: projName, phases }),
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({error: res.statusText}));
-      throw new Error(err.error || 'Server error');
-    }
-
-    // ── Trigger download ─────────────────────────────────────────────────
-    const blob = await res.blob();
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
-    a.href     = url;
-    a.download = `variance_${projName.replace(/[^a-zA-Z0-9]/g,'_')}_${new Date().toISOString().slice(0,10)}.xlsx`;
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
-
-  } catch(e) {
-    alert('Export failed: ' + e.message);
-    console.error(e);
-  } finally {
-    if (btn) { btn.textContent = '⬇ Export Excel'; btn.disabled = false; }
-  }
 }
