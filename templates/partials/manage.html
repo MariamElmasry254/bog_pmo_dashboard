@@ -1506,22 +1506,22 @@ loadTravel();
 
   <!-- Form -->
   <div id="userFormWrap" style="display:none;background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:16px;">
-    <h4 id="userFormTitle" style="margin:0 0 14px;font-size:14px;font-weight:600;">Add New User</h4>
+    <h4 id="userFormTitle" style="margin:0 0 16px;font-size:14px;font-weight:600;color:var(--navy);">+ Add New User</h4>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
       <div>
         <label class="filter-label">USERNAME</label>
-        <input id="uUsername" placeholder="e.g. esraa.pmo"
-          style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
+        <input id="uUsername" placeholder="esraa.pmo"
+          style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;box-sizing:border-box;">
       </div>
       <div>
         <label class="filter-label">PASSWORD</label>
         <input id="uPassword" type="password" placeholder="••••••••"
-          style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
+          style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;box-sizing:border-box;">
       </div>
       <div>
         <label class="filter-label">DISPLAY NAME</label>
-        <input id="uDisplayName" placeholder="Esraa Mohamed"
-          style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
+        <input id="uDisplayName" placeholder="Esraa Ahmed"
+          style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;box-sizing:border-box;">
       </div>
       <div>
         <label class="filter-label">ROLE</label>
@@ -1533,53 +1533,59 @@ loadTravel();
         </select>
       </div>
 
-      <!-- Odoo name picker — PMO only -->
-      <div id="odooNameRow" style="grid-column:span 2;">
-        <label class="filter-label">ODOO EMPLOYEE
-          <span style="font-weight:400;color:var(--muted);text-transform:none;">
-            — select to auto-match coordinator projects
+      <!-- Coordinator picker (PMO only) -->
+      <div id="coordPickerRow" style="grid-column:span 2;">
+        <label class="filter-label">ODOO COORDINATOR
+          <span style="font-weight:400;color:var(--muted);text-transform:none;font-size:10px;">
+            — select from Odoo to auto-match projects
           </span>
         </label>
-        <div style="display:flex;gap:8px;align-items:center;">
-          <div style="position:relative;flex:1;">
-            <input id="uOdooSearch" placeholder="🔍 Type to search Odoo employees…" autocomplete="off"
-              oninput="filterOdooList()"
-              style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
-            <div id="odooDropdown" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:999;
-              background:white;border:1px solid var(--border);border-radius:6px;
-              box-shadow:0 4px 16px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;margin-top:2px;">
-            </div>
-          </div>
-          <div id="uOdooNameDisplay" style="font-size:12px;color:var(--muted);min-width:120px;"></div>
-          <input type="hidden" id="uOdooName">
-        </div>
-        <div style="margin-top:6px;">
-          <button type="button" onclick="loadOdooEmployees()"
-            style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;">
-            ↺ Load from Odoo
+
+        <div id="coordLoading" style="color:var(--muted);font-size:12px;padding:4px 0;">
+          <button type="button" onclick="loadCoordinators()"
+            style="font-size:12px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;">
+            ↺ Load coordinators from Odoo
           </button>
+        </div>
+
+        <!-- Coordinator cards -->
+        <div id="coordList" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;max-height:240px;overflow-y:auto;"></div>
+
+        <!-- Selected display -->
+        <input type="hidden" id="uOdooName">
+        <div id="selectedCoordInfo" style="display:none;margin-top:10px;padding:10px 14px;
+          background:#EFF6FF;border:1px solid #BFDBFE;border-radius:8px;">
+          <div style="font-size:12px;font-weight:700;color:#1E40AF;" id="selCoordName"></div>
+          <div style="font-size:11px;color:#3B82F6;margin-top:2px;" id="selCoordJob"></div>
+          <div style="margin-top:8px;">
+            <div style="font-size:10px;font-weight:700;color:#64748B;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px;">
+              Projects as Coordinator:
+            </div>
+            <div id="selCoordProjects" style="font-size:12px;color:#1E40AF;"></div>
+          </div>
         </div>
       </div>
     </div>
 
-    <div style="display:flex;gap:8px;margin-top:14px;align-items:center;">
+    <div style="display:flex;gap:8px;margin-top:16px;align-items:center;">
       <button class="btn btn-primary" onclick="saveUser()">Save</button>
       <button class="btn btn-ghost" onclick="cancelUserForm()">Cancel</button>
       <span id="userFormMsg" style="font-size:12px;"></span>
     </div>
   </div>
 
-  <!-- Table -->
+  <!-- Users table -->
   <div class="tbl-wrap">
     <table style="width:100%;border-collapse:collapse;">
       <thead><tr style="background:var(--navy);color:white;">
         <th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:600;letter-spacing:.4px;">USER</th>
         <th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:600;letter-spacing:.4px;">ROLE</th>
-        <th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:600;letter-spacing:.4px;">ODOO NAME</th>
+        <th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:600;letter-spacing:.4px;">COORDINATOR IN ODOO</th>
+        <th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:600;letter-spacing:.4px;">PROJECTS</th>
         <th style="text-align:center;padding:10px 14px;font-size:11px;font-weight:600;letter-spacing:.4px;">ACTIONS</th>
       </tr></thead>
       <tbody id="usersTableBody">
-        <tr><td colspan="4" style="padding:20px;text-align:center;color:var(--muted);">Click "👥 Users" to load</td></tr>
+        <tr><td colspan="5" style="padding:20px;text-align:center;color:var(--muted);">Loading…</td></tr>
       </tbody>
     </table>
   </div>
@@ -1591,109 +1597,128 @@ const ROLE_STYLE = {
   management:'background:#DBEAFE;color:#1E40AF;',
   pmo:'background:#D1FAE5;color:#065F46;'
 };
-const ROLE_LABEL = {admin:'Admin',management:'Management',pmo:'PMO Coordinator'};
+const ROLE_LABEL = {admin:'Admin', management:'Management', pmo:'PMO Coordinator'};
 
 let _editingUser = null;
-let _odooEmployees = [];
+let _coordinators = [];
+let _selectedCoord = null;
 
 // ── Init ─────────────────────────────────────────────────────────────
 async function initUsersTab() {
   document.getElementById('tabBtnUsers').style.display = '';
   await loadUsers();
-  // Load employees in background
-  loadOdooEmployees();
 }
 
-// ── Odoo employees ────────────────────────────────────────────────────
-async function loadOdooEmployees() {
+// ── Load coordinators from Odoo ───────────────────────────────────────
+async function loadCoordinators() {
+  const loadingEl = document.getElementById('coordLoading');
+  loadingEl.innerHTML = '<span style="color:var(--muted);font-size:12px;">⏳ Loading from Odoo…</span>';
   try {
-    const res = await fetch('/api/odoo/pmo-employees');
+    const res = await fetch('/api/odoo/coordinators');
     const d   = await res.json();
-    if (d.ok) {
-      _odooEmployees = d.employees || [];
-      console.log(`[Users] Loaded ${_odooEmployees.length} Odoo employees`);
-    }
-  } catch(e) { console.warn('Could not load Odoo employees:', e); }
+    if (!d.ok) throw new Error(d.error);
+    _coordinators = d.employees || [];
+    renderCoordCards(_coordinators);
+    loadingEl.innerHTML = `<span style="font-size:11px;color:var(--muted);">${_coordinators.length} coordinators loaded — click to select</span>`;
+  } catch(e) {
+    loadingEl.innerHTML = `<span style="color:red;font-size:12px;">⚠️ ${e.message}</span>
+      <button onclick="loadCoordinators()" style="margin-left:8px;font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer;">Retry</button>`;
+  }
 }
 
-function filterOdooList() {
-  const q   = (document.getElementById('uOdooSearch').value || '').toLowerCase();
-  const dd  = document.getElementById('odooDropdown');
-  if (!q || !_odooEmployees.length) { dd.style.display = 'none'; return; }
-  const matches = _odooEmployees.filter(e =>
-    e.name.toLowerCase().includes(q) ||
-    (e.job||'').toLowerCase().includes(q)
-  ).slice(0, 20);
-  if (!matches.length) { dd.style.display = 'none'; return; }
-  dd.innerHTML = matches.map(e => `
-    <div onclick="selectOdooEmployee('${e.name.replace(/'/g,"\\'")}','${e.job.replace(/'/g,"\\'")||''}')"
-      style="padding:8px 12px;cursor:pointer;font-size:12px;border-bottom:1px solid #F3F4F6;"
-      onmouseover="this.style.background='#EFF6FF'" onmouseout="this.style.background=''">
-      <span style="font-weight:600;">${esc(e.name)}</span>
-      ${e.job ? `<span style="color:var(--muted);margin-left:6px;">${esc(e.job)}</span>` : ''}
-    </div>`).join('');
-  dd.style.display = 'block';
+function renderCoordCards(list) {
+  const cont = document.getElementById('coordList');
+  if (!list.length) {
+    cont.innerHTML = '<span style="font-size:12px;color:var(--muted);">No coordinators found in Odoo</span>';
+    return;
+  }
+  const selName = document.getElementById('uOdooName').value;
+  cont.innerHTML = list.map(e => {
+    const isSel = selName === e.name;
+    return `<div onclick="selectCoord(${JSON.stringify(e.name)},${JSON.stringify(e.job)},${JSON.stringify(e.projects||[])})"
+      style="padding:8px 14px;border:2px solid ${isSel?'#3B82F6':'var(--border)'};border-radius:8px;
+             background:${isSel?'#EFF6FF':'white'};cursor:pointer;transition:all .15s;
+             font-size:12px;font-weight:${isSel?'700':'500'};"
+      onmouseover="if(!${isSel})this.style.borderColor='#93C5FD'"
+      onmouseout="if(!${isSel})this.style.borderColor='var(--border)'">
+      <div style="color:${isSel?'#1E40AF':'var(--navy)'};">${esc(e.name)}</div>
+      ${e.job?`<div style="font-size:10px;color:var(--muted);margin-top:1px;">${esc(e.job)}</div>`:''}
+      <div style="font-size:10px;color:#3B82F6;margin-top:2px;">${e.projects.length} project${e.projects.length!==1?'s':''}</div>
+    </div>`;
+  }).join('');
 }
 
-function selectOdooEmployee(name, job) {
-  document.getElementById('uOdooName').value         = name;
-  document.getElementById('uOdooSearch').value       = name;
-  document.getElementById('uOdooNameDisplay').textContent = job ? `(${job})` : '';
-  document.getElementById('odooDropdown').style.display  = 'none';
-  // Auto-fill display name if empty
+function selectCoord(name, job, projects) {
+  _selectedCoord = {name, job, projects};
+  document.getElementById('uOdooName').value = name;
+  // Auto-fill display name
   if (!document.getElementById('uDisplayName').value)
     document.getElementById('uDisplayName').value = name;
+  // Show info panel
+  document.getElementById('selCoordName').textContent = name;
+  document.getElementById('selCoordJob').textContent  = job || '';
+  document.getElementById('selCoordProjects').innerHTML = projects.length
+    ? projects.map(p=>`<span style="display:inline-block;margin:2px 4px 2px 0;padding:1px 8px;
+        background:#DBEAFE;border-radius:10px;font-size:11px;">${esc(p.name)}</span>`).join('')
+    : '<span style="color:var(--muted);">No projects assigned as coordinator</span>';
+  document.getElementById('selectedCoordInfo').style.display = '';
+  // Re-render cards to show selection
+  renderCoordCards(_coordinators);
 }
-
-// Close dropdown on outside click
-document.addEventListener('click', (e) => {
-  if (!document.getElementById('odooNameRow')?.contains(e.target))
-    document.getElementById('odooDropdown').style.display = 'none';
-});
 
 // ── Form ──────────────────────────────────────────────────────────────
 function onRoleChange() {
   const role = document.getElementById('uRole').value;
-  document.getElementById('odooNameRow').style.display = role === 'pmo' ? '' : 'none';
+  document.getElementById('coordPickerRow').style.display = role === 'pmo' ? '' : 'none';
 }
 
 function showAddUser() {
-  _editingUser = null;
+  _editingUser = null; _selectedCoord = null;
   document.getElementById('userFormTitle').textContent = '+ Add New User';
-  ['uUsername','uPassword','uDisplayName','uOdooName','uOdooSearch'].forEach(id => {
+  ['uUsername','uPassword','uDisplayName','uOdooName'].forEach(id => {
     const el = document.getElementById(id);
-    if (el) { el.value = ''; el.disabled = false; }
+    if (el) { el.value=''; el.disabled=false; }
   });
   document.getElementById('uRole').value = 'pmo';
-  document.getElementById('uOdooNameDisplay').textContent = '';
-  document.getElementById('odooDropdown').style.display = 'none';
+  document.getElementById('selectedCoordInfo').style.display = 'none';
+  document.getElementById('coordList').innerHTML = '';
   document.getElementById('userFormMsg').textContent = '';
+  document.getElementById('coordLoading').innerHTML =
+    '<button type="button" onclick="loadCoordinators()" style="font-size:12px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;">↺ Load coordinators from Odoo</button>';
   onRoleChange();
   document.getElementById('userFormWrap').style.display = '';
 }
 
 function editUser(uname) {
-  fetch('/api/users').then(r=>r.json()).then(d => {
+  fetch('/api/users').then(r=>r.json()).then(async d => {
     const u = d.users?.[uname]; if (!u) return;
-    _editingUser = uname;
+    _editingUser = uname; _selectedCoord = null;
     document.getElementById('userFormTitle').textContent = `✏️ Edit — ${uname}`;
-    document.getElementById('uUsername').value    = uname;
-    document.getElementById('uUsername').disabled = true;
-    document.getElementById('uPassword').value    = '';
+    document.getElementById('uUsername').value = uname; document.getElementById('uUsername').disabled = true;
+    document.getElementById('uPassword').value = '';
     document.getElementById('uDisplayName').value = u.display_name || '';
-    document.getElementById('uRole').value        = u.role || 'pmo';
-    document.getElementById('uOdooName').value    = u.odoo_name || '';
-    document.getElementById('uOdooSearch').value  = u.odoo_name || '';
-    document.getElementById('uOdooNameDisplay').textContent = '';
+    document.getElementById('uRole').value = u.role || 'pmo';
+    document.getElementById('uOdooName').value = u.odoo_name || '';
+    document.getElementById('selectedCoordInfo').style.display = 'none';
     document.getElementById('userFormMsg').textContent = '';
+    document.getElementById('coordLoading').innerHTML =
+      '<button type="button" onclick="loadCoordinators()" style="font-size:12px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;">↺ Load coordinators from Odoo</button>';
     onRoleChange();
     document.getElementById('userFormWrap').style.display = '';
+    // Auto-load if PMO
+    if (u.role === 'pmo') {
+      await loadCoordinators();
+      if (u.odoo_name) {
+        const found = _coordinators.find(e => e.name === u.odoo_name);
+        if (found) selectCoord(found.name, found.job, found.projects);
+      }
+    }
   });
 }
 
 function cancelUserForm() {
   document.getElementById('userFormWrap').style.display = 'none';
-  _editingUser = null;
+  _editingUser = null; _selectedCoord = null;
 }
 
 async function saveUser() {
@@ -1706,16 +1731,16 @@ async function saveUser() {
 
   if (!username) { msg.textContent='⚠️ Username required'; msg.style.color='red'; return; }
   if (!_editingUser && !password) { msg.textContent='⚠️ Password required'; msg.style.color='red'; return; }
+  if (role === 'pmo' && !odooName) { msg.textContent='⚠️ Please select coordinator from Odoo'; msg.style.color='orange'; return; }
 
-  const body = {username, role, display_name: dispName, odoo_name: odooName};
+  const body = {username, role, display_name: dispName||username, odoo_name: odooName};
   if (password) body.password = password;
 
-  const url    = _editingUser ? `/api/users/${_editingUser}` : '/api/users';
-  const method = _editingUser ? 'PUT' : 'POST';
-
   try {
-    const res = await fetch(url, {method, headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-    const d   = await res.json();
+    const url = _editingUser ? `/api/users/${_editingUser}` : '/api/users';
+    const res = await fetch(url, {method: _editingUser?'PUT':'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    const d = await res.json();
     if (d.error) { msg.textContent='⚠️ '+d.error; msg.style.color='red'; return; }
     msg.textContent='✅ Saved!'; msg.style.color='green';
     setTimeout(()=>{ cancelUserForm(); loadUsers(); }, 700);
@@ -1723,7 +1748,7 @@ async function saveUser() {
 }
 
 async function deleteUser(uname) {
-  if (!confirm(`Delete "${uname}"? Cannot be undone.`)) return;
+  if (!confirm(`Delete "${uname}"?`)) return;
   const d = await fetch(`/api/users/${uname}`,{method:'DELETE'}).then(r=>r.json());
   if (d.ok) loadUsers(); else alert('Error: '+d.error);
 }
@@ -1731,16 +1756,27 @@ async function deleteUser(uname) {
 // ── Users table ───────────────────────────────────────────────────────
 async function loadUsers() {
   const tbody = document.getElementById('usersTableBody');
-  tbody.innerHTML = '<tr><td colspan="4" style="padding:20px;text-align:center;color:var(--muted);">Loading…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="5" style="padding:20px;text-align:center;color:var(--muted);">Loading…</td></tr>';
   try {
     const d = await fetch('/api/users').then(r=>r.json());
     const users = d.users || {};
     if (!Object.keys(users).length) {
-      tbody.innerHTML = '<tr><td colspan="4" style="padding:20px;text-align:center;color:var(--muted);">No users yet</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="5" style="padding:20px;text-align:center;color:var(--muted);">No users yet — add one above</td></tr>';
       return;
     }
-    tbody.innerHTML = Object.entries(users).map(([uname,u]) => `
-      <tr style="border-bottom:1px solid var(--border);">
+    // Also fetch coordinator projects for PMO users
+    let coordData = {};
+    try {
+      const cr = await fetch('/api/odoo/coordinators').then(r=>r.json());
+      if (cr.ok) cr.employees.forEach(e => { coordData[e.name] = e.projects; });
+    } catch(e) {}
+
+    tbody.innerHTML = Object.entries(users).map(([uname,u]) => {
+      const projs = u.odoo_name && coordData[u.odoo_name] ? coordData[u.odoo_name] : [];
+      const projHtml = projs.length
+        ? projs.map(p=>`<span style="display:inline-block;margin:1px 3px 1px 0;padding:1px 7px;background:#DBEAFE;border-radius:10px;font-size:10px;color:#1E40AF;">${esc(p.name)}</span>`).join('')
+        : (u.role==='pmo' ? `<span style="font-size:11px;color:var(--muted);">No projects matched</span>` : '—');
+      return `<tr style="border-bottom:1px solid var(--border);">
         <td style="padding:10px 14px;">
           <div style="font-weight:600;font-size:13px;">${esc(u.display_name||uname)}</div>
           <div style="font-size:11px;color:var(--muted);">${esc(uname)}</div>
@@ -1751,30 +1787,26 @@ async function loadUsers() {
           </span>
         </td>
         <td style="padding:10px 14px;font-size:12px;color:var(--muted);">${esc(u.odoo_name||'—')}</td>
-        <td style="padding:10px 14px;text-align:center;">
+        <td style="padding:10px 14px;">${projHtml}</td>
+        <td style="padding:10px 14px;text-align:center;white-space:nowrap;">
           <button onclick="editUser('${esc(uname)}')"
-            style="padding:4px 12px;border:1px solid var(--border);border-radius:5px;background:white;cursor:pointer;font-size:12px;margin-right:6px;">
-            ✏️ Edit
-          </button>
+            style="padding:4px 12px;border:1px solid var(--border);border-radius:5px;background:white;cursor:pointer;font-size:12px;margin-right:6px;">✏️ Edit</button>
           <button onclick="deleteUser('${esc(uname)}')"
-            style="padding:4px 12px;border:1px solid #FCA5A5;border-radius:5px;background:#FEF2F2;cursor:pointer;font-size:12px;color:#DC2626;">
-            🗑 Delete
-          </button>
+            style="padding:4px 12px;border:1px solid #FCA5A5;border-radius:5px;background:#FEF2F2;cursor:pointer;font-size:12px;color:#DC2626;">🗑 Delete</button>
         </td>
-      </tr>`).join('');
+      </tr>`;
+    }).join('');
   } catch(e) {
-    tbody.innerHTML = `<tr><td colspan="4" style="padding:20px;text-align:center;color:red;">${e.message}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="5" style="padding:20px;text-align:center;color:red;">${e.message}</td></tr>`;
   }
 }
 
-// ── Show Users tab for admin only ─────────────────────────────────────
+// ── Show admin tab ────────────────────────────────────────────────────
 (async function() {
   try {
     const d = await fetch('/api/me').then(r=>r.json());
     window._currentRole = d.role;
-    if (d.role === 'admin') {
-      document.getElementById('tabBtnUsers').style.display = '';
-    }
+    if (d.role === 'admin') document.getElementById('tabBtnUsers').style.display = '';
   } catch(e) {}
 })();
 </script>
