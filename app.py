@@ -2445,12 +2445,57 @@ def api_projects_list():
         if not odoo.uid:
             if not odoo.connect():
                 return jsonify({'error': 'Odoo not connected', 'projects': []}), 503
-        # Fetch projects — use minimal safe fields first, then try optional ones
-        safe_fields = ['id', 'name', 'user_id', 'date_start', 'end_date', 'stage_id']
+        # Fetch projects — include coordinator_id in main query
+        safe_fields = ['id', 'name', 'user_id', 'date_start', 'end_date',
+                       'stage_id', 'coordinator_id']
+        _role    = session.get('user_role', 'admin')
+        _odoo_nm = (session.get('odoo_name') or '').strip()
+
+        # For PMO: query Odoo directly for coordinator's projects
+        pmo_proj_ids = None
+        if _role == 'pmo' and _odoo_nm:
+            try:
+                # Find coordinator by name in res.users
+                users_found = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'res.users', 'search_read',
+                    [[('name', 'ilike', _odoo_nm)]],
+                    {'fields': ['id', 'name'], 'limit': 5}
+                )
+                if not users_found:
+                    # Try hr.employee
+                    emps = odoo.models.execute_kw(
+                        ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                        'hr.employee', 'search_read',
+                        [[('name', 'ilike', _odoo_nm), ('active', '=', True)]],
+                        {'fields': ['id', 'name', 'user_id'], 'limit': 5}
+                    )
+                    user_ids = [e['user_id'][0] for e in emps if isinstance(e.get('user_id'), list)]
+                    if user_ids:
+                        coord_projs = odoo.models.execute_kw(
+                            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                            'project.project', 'search_read',
+                            [[('coordinator_id', 'in', user_ids)]],
+                            {'fields': ['id'], 'limit': 200}
+                        )
+                        pmo_proj_ids = [p['id'] for p in coord_projs]
+                else:
+                    uid_list = [u['id'] for u in users_found]
+                    coord_projs = odoo.models.execute_kw(
+                        ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                        'project.project', 'search_read',
+                        [[('coordinator_id', 'in', uid_list)]],
+                        {'fields': ['id'], 'limit': 200}
+                    )
+                    pmo_proj_ids = [p['id'] for p in coord_projs]
+            except Exception as _pe:
+                logger.warning(f"PMO project filter failed: {_pe}")
+
+        domain = [('id', 'in', pmo_proj_ids)] if pmo_proj_ids is not None else []
         projects = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'project.project', 'search_read',
-            [[]],   # all projects (active filter may differ by Odoo version)
+            [domain],
             {'fields': safe_fields, 'limit': 300, 'order': 'name asc'}
         )
 
@@ -2471,7 +2516,7 @@ def api_projects_list():
         for p in projects:
             pm    = p.get('user_id')
             ex    = extra_map.get(p['id'], {})
-            coord = ex.get('coordinator_id') or []
+            coord = p.get('coordinator_id') or ex.get('coordinator_id') or []
             stage = p.get('stage_id')
             stage_name = (stage[1] if isinstance(stage, list) and len(stage) > 1 else '') or ''
 
@@ -2499,14 +2544,7 @@ def api_projects_list():
                 'stage_name':  stage_name,
                 'value':       float(ex.get('value') or 0),
             })
-        # PMO: only show projects where they are coordinator
-        _role    = session.get('user_role', 'admin')
-        _odoo_nm = (session.get('odoo_name') or '').strip().lower()
-        if _role == 'pmo' and _odoo_nm:
-            result = [p for p in result
-                      if _odoo_nm in (p.get('coordinator') or '').lower()
-                      or (p.get('coordinator') or '').lower() in _odoo_nm]
-        return jsonify({'projects': result, 'role': _role,
+        return jsonify({'projects': result, 'role': _role if '_role' in dir() else 'admin',
                         'display_name': session.get('display_name',''),
                         'total': len(result)})
     except Exception as e:
