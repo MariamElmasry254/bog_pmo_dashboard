@@ -102,15 +102,21 @@ window.loadVariance = async function() {
   if(AppState._overviewData&&AppState._overviewData.project_id)window._activeProjectId=AppState._overviewData.project_id;
   if (!AppState.loaded.variance) {
     AppState.loaded.variance = true;
+    // Pre-load all phases after current one renders
     setTimeout(async function(){
       var isBog2=!AppState._overviewData||AppState._overviewData.is_bog!==false;
       var all=isBog2?['development','consultation']:['services','support'];
+      var currentTab=document.querySelector('.sub-tab.active');
+      var currentKey=currentTab?currentTab.dataset.subtab:all[0];
       for(var i=0;i<all.length;i++){
-        if(!AppState._varianceMonthData||!AppState._varianceMonthData[all[i]]){
-          try{await switchSubTab(all[i]);}catch(e){}
+        var ph=all[i];
+        if(ph!==currentKey&&(!AppState._varianceMonthData||!AppState._varianceMonthData[ph])){
+          try{await switchSubTab(ph);}catch(e){console.warn('pre-load',ph,e);}
         }
       }
-    },1000);
+      // Restore original tab
+      try{await switchSubTab(currentKey);}catch(e){}
+    },2000);
     var _vBtn=document.getElementById('varianceExport');
     if(!_vBtn){_vBtn=document.createElement('button');_vBtn.id='varianceExport';_vBtn.textContent='⬇ Export Excel';_vBtn.style.cssText='position:fixed;bottom:24px;right:24px;z-index:999;padding:10px 20px;background:#1B2A4E;color:white;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.3)';document.body.appendChild(_vBtn);}
     _vBtn.style.display='block';
@@ -1434,8 +1440,9 @@ async function profRecomputeAll(phaseKey) {
       totalRevSAR:    latestData.totalRevSAR,
       monthKey:       latestData.monthKey,
     };
-    // Notify overview to refresh EAC KPI
-    if (window._overviewUpdateProfKPIs) window._overviewUpdateProfKPIs(phaseKey);
+    // Save snapshot + notify overview
+    try{sessionStorage.setItem('_kpi_'+phaseKey,JSON.stringify(AppState._latestProfData[phaseKey]));}catch(e){}
+    if(window._overviewUpdateProfKPIs)window._overviewUpdateProfKPIs(phaseKey);
     // Notify Overview to update its KPIs
     if (window._overviewUpdateProfKPIs) window._overviewUpdateProfKPIs(phaseKey);
   }
@@ -1576,6 +1583,7 @@ async function addUnassignedToPhase(currentPhase, targetPhase) {
 
 async function loadEffortLive(phaseKey, containerId) {
   const cont = document.getElementById(containerId);
+  if (!cont) { console.warn('loadEffortLive: container not found:', containerId); return; }
   cont.innerHTML = '<div class="loading">Loading from Odoo (this may take a moment)…</div>';
 
   try {
