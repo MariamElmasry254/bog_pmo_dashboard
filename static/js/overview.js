@@ -925,36 +925,24 @@ function renderPhaseFilters(phaseGroup, available) {
     return;
   }
   let html = '<label class="filter-label">PHASES (multi-select)</label>';
-  html += '<div id="ovPhaseDropdown" style="position:relative;display:inline-block;">';
-  html += `<button type="button" id="ovPhaseToggle"
-    style="display:flex;align-items:center;justify-content:space-between;gap:8px;
-           padding:7px 12px;border:1px solid var(--border);border-radius:6px;
-           background:var(--bg-subtle);cursor:pointer;font-size:12px;font-weight:500;
-           min-width:200px;max-width:320px;white-space:nowrap;">
-    <span id="ovPhaseLabel" style="overflow:hidden;text-overflow:ellipsis;">${phaseLabel(AppState.activePhases || [])}</span>
-    <span style="color:var(--text-muted);flex-shrink:0;">▼</span>
-  </button>`;
-  html += `<div id="ovPhaseMenu" style="display:none;position:absolute;z-index:200;
-    background:var(--bg-card);border:1px solid var(--border);border-radius:8px;
-    box-shadow:0 4px 16px rgba(0,0,0,.12);min-width:280px;max-width:400px;
-    max-height:320px;overflow-y:auto;margin-top:4px;">`;
+  html += '<div class="phase-dropdown" id="ovPhaseDropdown">';
+  html += '<button type="button" class="phase-toggle" id="ovPhaseToggle">';
+  html += `<span id="ovPhaseLabel">${phaseLabel(AppState.activePhases || [])}</span>`;
+  html += '<span style="margin-left:8px; color: var(--text-muted);">▼</span>';
+  html += '</button>';
+  html += '<div class="phase-menu" id="ovPhaseMenu" style="display:none;">';
+  html += '<div class="phase-menu-actions">';
+  html += '<a id="ovPhaseAll">Select all</a>';
+  html += '<a id="ovPhaseNone">Clear</a>';
+  html += '</div>';
   available.filter(p => p && p !== 'undefined' && p !== 'null').forEach(p => {
     const checked = (AppState.activePhases || []).includes(p);
     const label = p === 'No Phase' ? '📭 No Phase' : p;
-    const bg = checked ? '#EFF6FF' : 'transparent';
-    const fw = checked ? '600' : '400';
-    html += `<label data-phase="${encodeURIComponent(p)}"
-      style="display:flex;align-items:center;gap:8px;padding:7px 12px;cursor:pointer;
-             font-size:12px;font-weight:${fw};background:${bg};border-radius:4px;
-             white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:auto;">
-      <input type="checkbox" ${checked ? 'checked' : ''} style="flex-shrink:0;cursor:pointer;">
-      <span dir="auto" style="overflow:hidden;text-overflow:ellipsis;">${label}</span>
+    html += `<label class="phase-option ${checked ? 'selected' : ''}" data-phase="${encodeURIComponent(p)}">
+      <input type="checkbox" ${checked ? 'checked' : ''}>
+      <span dir="auto">${label}</span>
     </label>`;
   });
-  html += `<div style="padding:8px 12px;border-top:1px solid var(--border);display:flex;gap:8px;">
-    <a id="ovPhaseAll" style="font-size:11px;color:var(--blue);cursor:pointer;font-weight:600;">Select all</a>
-    <a id="ovPhaseNone" style="font-size:11px;color:var(--text-muted);cursor:pointer;margin-left:8px;">Clear</a>
-  </div>`;
   html += '</div></div>';
   cont.innerHTML = html;
 
@@ -974,7 +962,7 @@ function renderPhaseFilters(phaseGroup, available) {
   });
 
   // Wire checkboxes
-  menu.querySelectorAll('label[data-phase]').forEach(opt => {
+  menu.querySelectorAll('.phase-option').forEach(opt => {
     opt.addEventListener('click', (e) => {
       e.stopPropagation();
       const phase = decodeURIComponent(opt.dataset.phase);
@@ -983,12 +971,10 @@ function renderPhaseFilters(phaseGroup, available) {
       AppState.activePhases = AppState.activePhases || [];
       if (cb.checked) {
         if (!AppState.activePhases.includes(phase)) AppState.activePhases.push(phase);
-        opt.style.background = '#EFF6FF';
-        opt.style.fontWeight = '600';
+        opt.classList.add('selected');
       } else {
         AppState.activePhases = AppState.activePhases.filter(p => p !== phase);
-        opt.style.background = 'transparent';
-        opt.style.fontWeight = '400';
+        opt.classList.remove('selected');
       }
       document.getElementById('ovPhaseLabel').textContent = phaseLabel(AppState.activePhases);
       // Reload data with new filter
@@ -1216,6 +1202,7 @@ function renderTaskList(phaseGroup) {
   const data = AppState.ovAnalysisData;
   if (!data || !data.tasks) { cont.innerHTML = '<div class="loading">No data</div>'; return; }
   AppState._lastPhaseGroup = phaseGroup;
+  if (AppState._taskPage === undefined) AppState._taskPage = 0;
 
   const search = (document.getElementById('ovTaskSearch')?.value || '').toLowerCase().trim();
   const typeFilter = document.getElementById('ovTaskType')?.value || 'all';
@@ -1319,18 +1306,18 @@ function renderTaskList(phaseGroup) {
 
   rootTasks.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
-  // Pagination: show PAGE_SIZE root tasks at a time
-  const PAGE_SIZE = 50;
-  if (!AppState._taskPage) AppState._taskPage = 0;
-  // Reset page on new search/filter
-  if (AppState._lastTaskSearch !== search + typeFilter + statusFilter) {
-    AppState._taskPage = 0;
-    AppState._lastTaskSearch = search + typeFilter + statusFilter;
+  // Pagination: 10 when no filter active, 50 when filtered
+  const isFiltered = !!(search || (typeFilter && typeFilter !== 'all') ||
+    (statusFilter && statusFilter !== 'all') || empFilterActive);
+  const PAGE_SIZE = isFiltered ? 50 : 10;
+  const filterKey = search + '|' + typeFilter + '|' + statusFilter + '|' + (AppState.activeEmployees||[]).join(',');
+  if (AppState._lastFilterKey !== filterKey) {
+    AppState._taskPage   = 0;
+    AppState._lastFilterKey = filterKey;
   }
-  const pageStart = 0;
-  const pageEnd   = (AppState._taskPage + 1) * PAGE_SIZE;
-  const shownRoots  = rootTasks.slice(pageStart, pageEnd);
-  const hasMore     = rootTasks.length > pageEnd;
+  const pageEnd  = (AppState._taskPage + 1) * PAGE_SIZE;
+  const shownRoots = rootTasks.slice(0, pageEnd);
+  const hasMore    = rootTasks.length > pageEnd;
 
   let html = `<div class="card">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
@@ -1344,10 +1331,11 @@ function renderTaskList(phaseGroup) {
   });
 
   if (hasMore) {
-    html += `<div style="text-align:center;padding:16px;">
-      <button onclick="_ovLoadMore()" style="padding:8px 24px;border:1px solid var(--border);border-radius:6px;
-        background:var(--bg-subtle);cursor:pointer;font-size:13px;font-weight:600;color:var(--navy);">
-        Load more (${rootTasks.length - pageEnd} remaining)
+    html += `<div style="text-align:center;padding:16px 0 8px;">
+      <button onclick="_ovLoadMore()" style="padding:7px 22px;border:1px solid var(--border);
+        border-radius:6px;background:var(--bg-subtle);cursor:pointer;font-size:13px;
+        font-weight:600;color:var(--navy);">
+        Show more (${rootTasks.length - pageEnd} remaining)
       </button>
     </div>`;
   }
@@ -1367,10 +1355,9 @@ function renderTaskList(phaseGroup) {
 }
 
 window._ovLoadMore = function() {
-  if (!AppState._taskPage) AppState._taskPage = 0;
+  if (AppState._taskPage === undefined) AppState._taskPage = 0;
   AppState._taskPage += 1;
-  // Re-render with same phaseGroup stored in AppState
-  if (AppState._lastPhaseGroup !== undefined) renderTaskList(AppState._lastPhaseGroup);
+  renderTaskList(AppState._lastPhaseGroup);
 };
 
 function renderTaskCard(t, childCount, depth, isMatched) {
