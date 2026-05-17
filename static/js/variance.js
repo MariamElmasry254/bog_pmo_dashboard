@@ -28,7 +28,8 @@
   setTimeout(doHide, 500); // fallback
 })();
 
-
+// ─── PMO Variance Export ─────────────────────────────────────────────
+if (!window.exportVariancePMO) {
 window.exportVariancePMO = async function() {
   var btn=document.getElementById('varianceExport');
   var orig=btn?btn.textContent:'';
@@ -37,17 +38,22 @@ window.exportVariancePMO = async function() {
     var isBog=!AppState._overviewData||AppState._overviewData.is_bog!==false;
     var phaseKeys=isBog?['development','consultation']:['services','support'];
     var phases=phaseKeys.map(function(k){
-      var ld=AppState._latestProfData&&AppState._latestProfData[k]||{};
+      var ld=(AppState._latestProfData&&AppState._latestProfData[k])||{};
       return{phase:k,latestData:Object.assign({},ld,{
-        totalRevSAR:AppState._savedRevenue&&AppState._savedRevenue[k]||ld.totalRevSAR||0,
-        totalEstCostSAR:AppState._budgetFinalCost&&AppState._budgetFinalCost[k]||0,
-        totalEstMDs:AppState._budgetFinalMDs&&AppState._budgetFinalMDs[k]||0,
+        totalRevSAR:(AppState._savedRevenue&&AppState._savedRevenue[k])||ld.totalRevSAR||0,
+        totalEstCostSAR:(AppState._budgetFinalCost&&AppState._budgetFinalCost[k])||0,
+        totalEstMDs:(AppState._budgetFinalMDs&&AppState._budgetFinalMDs[k])||0,
       }),months:(AppState._varianceMonthData&&AppState._varianceMonthData[k])||[]};
     });
-    var body={project_name:(AppState._overviewData&&AppState._overviewData.project_name)||document.title||'Project',generated:new Date().toISOString().slice(0,10),phases:phases};
+    var body={
+      project_name:(AppState._overviewData&&AppState._overviewData.project_name)||document.title||'Project',
+      generated:new Date().toISOString().slice(0,10),
+      phases:phases
+    };
     var res=await fetch('/api/variance/export-pmo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     if(!res.ok){var err=await res.text();throw new Error('Server error '+res.status+': '+err.slice(0,200));}
-    var blob=await res.blob();var url=URL.createObjectURL(blob);
+    var blob=await res.blob();
+    var url=URL.createObjectURL(blob);
     var a=document.createElement('a');a.href=url;
     var cd=res.headers.get('Content-Disposition')||'';
     a.download=(cd.match(/filename="?([^"]+)"?/)||[])[1]||'variance_report.xlsx';
@@ -55,6 +61,7 @@ window.exportVariancePMO = async function() {
   }catch(e){alert('Export failed: '+e.message);}
   finally{if(btn){btn.textContent=orig||'⬇ Export Excel';btn.disabled=false;}}
 };
+}
 
 function profFillFromTasks(phaseKey) {
   const remMD = AppState._taskRemainingMDs && AppState._taskRemainingMDs[phaseKey];
@@ -88,6 +95,7 @@ function profFillFromTasks(phaseKey) {
 /* Variance tab — mirrors variance.xlsx with sub-tabs */
 
 
+// ─── Cached effort fetch ─────────────────────────────────────────────
 async function fetchEffortCached(phaseKey) {
   var ckey='_eff_'+phaseKey+'_'+(window._activeProjectId||'');
   try{var hit=sessionStorage.getItem(ckey);if(hit){var d=JSON.parse(hit);if(d&&d.months&&d.months.length)return d;}}catch(e){}
@@ -102,20 +110,18 @@ window.loadVariance = async function() {
   if(AppState._overviewData&&AppState._overviewData.project_id)window._activeProjectId=AppState._overviewData.project_id;
   if (!AppState.loaded.variance) {
     AppState.loaded.variance = true;
-    // Pre-load all phases after current one renders
     setTimeout(async function(){
       var isBog2=!AppState._overviewData||AppState._overviewData.is_bog!==false;
       var all=isBog2?['development','consultation']:['services','support'];
-      var currentTab=document.querySelector('.sub-tab.active');
-      var currentKey=currentTab?currentTab.dataset.subtab:all[0];
+      var curTab=document.querySelector('.sub-tab.active');
+      var curKey=curTab?curTab.dataset.subtab:all[0];
       for(var i=0;i<all.length;i++){
         var ph=all[i];
-        if(ph!==currentKey&&(!AppState._varianceMonthData||!AppState._varianceMonthData[ph])){
+        if(ph!==curKey&&(!AppState._varianceMonthData||!AppState._varianceMonthData[ph])){
           try{await switchSubTab(ph);}catch(e){console.warn('pre-load',ph,e);}
         }
       }
-      // Restore original tab
-      try{await switchSubTab(currentKey);}catch(e){}
+      try{await switchSubTab(curKey);}catch(e){}
     },2000);
     var _vBtn=document.getElementById('varianceExport');
     if(!_vBtn){_vBtn=document.createElement('button');_vBtn.id='varianceExport';_vBtn.textContent='⬇ Export Excel';_vBtn.style.cssText='position:fixed;bottom:24px;right:24px;z-index:999;padding:10px 20px;background:#1B2A4E;color:white;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.3)';document.body.appendChild(_vBtn);}
@@ -1440,7 +1446,6 @@ async function profRecomputeAll(phaseKey) {
       totalRevSAR:    latestData.totalRevSAR,
       monthKey:       latestData.monthKey,
     };
-    // Save snapshot + notify overview
     try{sessionStorage.setItem('_kpi_'+phaseKey,JSON.stringify(AppState._latestProfData[phaseKey]));}catch(e){}
     if(window._overviewUpdateProfKPIs)window._overviewUpdateProfKPIs(phaseKey);
     // Notify Overview to update its KPIs
@@ -1583,7 +1588,7 @@ async function addUnassignedToPhase(currentPhase, targetPhase) {
 
 async function loadEffortLive(phaseKey, containerId) {
   const cont = document.getElementById(containerId);
-  if (!cont) { console.warn('loadEffortLive: container not found:', containerId); return; }
+  if (!cont) { console.warn('[loadEffortLive] container not found:', containerId); return; }
   cont.innerHTML = '<div class="loading">Loading from Odoo (this may take a moment)…</div>';
 
   try {
