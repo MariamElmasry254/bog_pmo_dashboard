@@ -1,12 +1,11 @@
-// Fix nav tabs instantly
 (function(){
-  var _isBog=null;
-  function _apply(bog){['services','missing','risks','roadmap'].forEach(function(t){var el=document.querySelector('.exec-tab[data-tab="'+t+'"]');if(el)el.style.display=bog?'':'none';});}
-  async function _fetch(){try{var d=await fetch('/api/project-info').then(function(r){return r.json();});_isBog=d.is_bog!==false;if(window.AppState){if(!AppState._overviewData)AppState._overviewData={};AppState._overviewData.is_bog=_isBog;}_apply(_isBog);}catch(e){}}
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',_fetch);else _fetch();
-  var obs=new MutationObserver(function(){if(_isBog===false)_apply(false);});
-  function startObs(){obs.observe(document.body||document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['style']});}
-  if(document.body)startObs();else document.addEventListener('DOMContentLoaded',startObs);
+  var _b=null;
+  function _a(b){['services','missing','risks','roadmap'].forEach(function(t){var e=document.querySelector('.exec-tab[data-tab="'+t+'"]');if(e)e.style.display=b?'':'none';});}
+  async function _f(){try{var d=await fetch('/api/project-info').then(function(r){return r.json();});_b=d.is_bog!==false;if(window.AppState){if(!AppState._overviewData)AppState._overviewData={};AppState._overviewData.is_bog=_b;}_a(_b);}catch(e){}}
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',_f);else _f();
+  var o=new MutationObserver(function(){if(_b===false)_a(false);});
+  function s(){o.observe(document.body||document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['style']});}
+  if(document.body)s();else document.addEventListener('DOMContentLoaded',s);
 })();
 
 /* Overview tab — Roadmap KPIs + Tasks Analysis with multi-phase + employee filter */
@@ -932,93 +931,66 @@ function renderPhaseFilters(phaseGroup, available) {
   const cont = document.getElementById('ovPhaseFilters');
   if (!cont) return;
   if (!available.length) { cont.innerHTML = ''; return; }
-  const total = available.length;
+  const total  = available.length;
   const active = AppState.activePhases || [];
-
-  // Label
-  const lbl = active.length === 0 || active.length === total
+  const lbl    = active.length === 0 || active.length === total
     ? `All phases (${total})`
     : active.length === 1 ? active[0]
     : `${active.length} phases selected`;
 
-  // Build with full inline styles — no CSS class dependency
-  cont.innerHTML = `
-    <div style="font-size:10px;font-weight:700;color:var(--text-muted,#6B7280);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px;">Phases (multi-select)</div>
-    <div id="ovPhaseDropdown" style="position:relative;display:inline-block;">
-      <button id="ovPhaseToggle" type="button"
-        style="display:flex;align-items:center;justify-content:space-between;gap:8px;
-               padding:7px 12px;min-width:200px;max-width:320px;
-               border:1px solid var(--border,#E5E7EB);border-radius:6px;
-               background:white;cursor:pointer;font-size:13px;font-weight:500;
-               font-family:inherit;text-align:left;">
-        <span id="ovPhaseLabel" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${lbl}</span>
-        <span style="color:#9CA3AF;flex-shrink:0;font-size:11px;">▼</span>
-      </button>
-      <div id="ovPhaseMenu"
-        style="display:none;position:absolute;top:calc(100% + 2px);left:0;z-index:9999;
-               min-width:280px;max-width:420px;max-height:360px;overflow-y:auto;
-               background:white;border:1px solid var(--border,#E5E7EB);
-               border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,0.15);
-               padding:4px 0;">
-        <div style="display:flex;gap:12px;padding:7px 12px;border-bottom:1px solid #F3F4F6;">
-          <a id="ovPhaseAll" style="font-size:12px;font-weight:600;color:#3B82F6;cursor:pointer;">Select all</a>
-          <a id="ovPhaseNone" style="font-size:12px;color:#9CA3AF;cursor:pointer;">Clear</a>
-        </div>
-        ${available.filter(p => p && p !== 'undefined' && p !== 'null').map(p => {
-          const checked = active.includes(p);
-          const label = p === 'No Phase' ? '📭 No Phase' : p;
-          return `<label data-phase="${encodeURIComponent(p)}"
-            style="display:flex;align-items:center;gap:8px;padding:6px 12px;cursor:pointer;
-                   background:${checked ? '#EFF6FF' : 'transparent'};
-                   font-size:12px;${checked ? 'font-weight:600;color:#1D4ED8;' : ''}">
-            <input type="checkbox" ${checked ? 'checked' : ''}
-              style="cursor:pointer;accent-color:#3B82F6;width:14px;height:14px;flex-shrink:0;">
-            <span dir="auto" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${label}</span>
-          </label>`;
-        }).join('')}
-      </div>
-    </div>`;
+  let html = '<label class="filter-label">PHASES (multi-select)</label>';
+  html += '<div class="phase-dropdown" id="ovPhaseDropdown">';
+  html += '<button type="button" class="phase-toggle" id="ovPhaseToggle">';
+  html += `<span id="ovPhaseLabel">${lbl}</span>`;
+  html += '<span style="margin-left:8px;color:var(--text-muted);">▼</span>';
+  html += '</button>';
+  html += '<div class="phase-menu" id="ovPhaseMenu" style="display:none;max-height:360px;">';
+  html += '<div class="phase-menu-actions"><a id="ovPhaseAll">Select all</a><a id="ovPhaseNone">Clear</a></div>';
+  available.filter(p => p && p !== 'undefined' && p !== 'null').forEach(p => {
+    const checked = active.includes(p);
+    const label   = p === 'No Phase' ? '📭 No Phase' : p;
+    html += `<label class="phase-option ${checked ? 'selected' : ''}" data-phase="${encodeURIComponent(p)}">
+      <input type="checkbox" ${checked ? 'checked' : ''}><span dir="auto">${label}</span>
+    </label>`;
+  });
+  html += '</div></div>';
+  cont.innerHTML = html;
 
   const toggle = document.getElementById('ovPhaseToggle');
   const menu   = document.getElementById('ovPhaseMenu');
-
   toggle.addEventListener('click', (e) => {
     e.stopPropagation();
-    const open = menu.style.display === 'none';
-    menu.style.display = open ? 'block' : 'none';
+    menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+    toggle.classList.toggle('open', menu.style.display === 'block');
   });
   document.addEventListener('click', (e) => {
     if (!document.getElementById('ovPhaseDropdown')?.contains(e.target)) {
       menu.style.display = 'none';
+      toggle.classList.remove('open');
     }
-  }, { capture: false });
-
-  menu.querySelectorAll('label[data-phase]').forEach(lbl => {
-    lbl.addEventListener('click', (e) => {
+  });
+  menu.querySelectorAll('.phase-option').forEach(opt => {
+    opt.addEventListener('click', (e) => {
       e.stopPropagation();
-      const phase = decodeURIComponent(lbl.dataset.phase);
-      const cb = lbl.querySelector('input');
+      const phase = decodeURIComponent(opt.dataset.phase);
+      const cb = opt.querySelector('input');
       if (e.target !== cb) cb.checked = !cb.checked;
       AppState.activePhases = AppState.activePhases || [];
       if (cb.checked) {
         if (!AppState.activePhases.includes(phase)) AppState.activePhases.push(phase);
-        lbl.style.background = '#EFF6FF';
-        lbl.style.fontWeight = '600';
-        lbl.style.color = '#1D4ED8';
+        opt.classList.add('selected');
       } else {
         AppState.activePhases = AppState.activePhases.filter(p => p !== phase);
-        lbl.style.background = 'transparent';
-        lbl.style.fontWeight = '';
-        lbl.style.color = '';
+        opt.classList.remove('selected');
       }
-      const a = AppState.activePhases;
       document.getElementById('ovPhaseLabel').textContent =
-        a.length === 0 || a.length === total ? `All phases (${total})`
-        : a.length === 1 ? a[0] : `${a.length} phases selected`;
+        AppState.activePhases.length === 0 || AppState.activePhases.length === total
+          ? `All phases (${total})`
+          : AppState.activePhases.length === 1 ? AppState.activePhases[0]
+          : `${AppState.activePhases.length} phases selected`;
       loadTaskAnalysis(phaseGroup);
     });
   });
-
   document.getElementById('ovPhaseAll').addEventListener('click', (e) => {
     e.stopPropagation();
     AppState.activePhases = [...available];
@@ -1343,25 +1315,15 @@ function renderTaskList(phaseGroup) {
   }
 
   rootTasks.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-
   const fKey=[search,typeFilter,statusFilter,(AppState.activeEmployees||[]).join(','),(AppState.activePhases||[]).join(',')].join('|');
   if(AppState._taskFilterKey!==fKey){AppState._taskFilterKey=fKey;AppState._taskPage=0;}
   if(!AppState._taskPage)AppState._taskPage=0;
   AppState._lastPhaseGroup=phaseGroup;
-  const showN=(AppState._taskPage+1)*10;
-  const shown=rootTasks.slice(0,showN);
-  const rem=Math.max(0,rootTasks.length-showN);
-
-  let html = `<div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-      <h3 class="card-title" style="margin:0;">Tasks <span class="muted-text">— ${matchedIds.size} match${matchedIds.size!==1?'es':''}${matchedIds.size<tasks.length?` · ${tasks.length-matchedIds.size} parent context`:''}</span></h3>
-      <span class="muted-text" style="font-size:11px;">Click parent to expand · Live from Odoo</span>
-    </div>
-    <div class="task-analysis-list">`;
-
+  const showN=(AppState._taskPage+1)*10, shown=rootTasks.slice(0,showN), rem=Math.max(0,rootTasks.length-showN);
+  let html = `<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;"><h3 class="card-title" style="margin:0;">Tasks <span class="muted-text">— ${matchedIds.size} match${matchedIds.size!==1?'es':''}${matchedIds.size<tasks.length?` · ${tasks.length-matchedIds.size} parent context`:''}</span></h3><span class="muted-text" style="font-size:11px;">Click parent to expand · Live from Odoo</span></div><div class="task-analysis-list">`;
   shown.forEach(t=>{html+=renderTaskBranch(t,0);});
   if(rem>0||AppState._taskPage>0){
-    html+=`<div style="display:flex;gap:8px;justify-content:center;padding:14px 0 4px;">`;
+    html+=`<div style="display:flex;gap:8px;justify-content:center;padding:14px 0;">`;
     if(rem>0)html+=`<button onclick="_ovLoadMore()" style="padding:6px 20px;border:1px solid var(--border);border-radius:6px;background:var(--bg-subtle);cursor:pointer;font-size:13px;font-weight:600;color:var(--navy);">Show 10 more <span style="color:var(--muted);font-size:12px;">(${rem} remaining)</span></button>`;
     if(AppState._taskPage>0)html+=`<button onclick="_ovCollapse()" style="padding:6px 16px;border:1px solid var(--border);border-radius:6px;background:transparent;cursor:pointer;font-size:12px;color:var(--muted);">↑ Collapse to 10</button>`;
     html+=`</div>`;
@@ -1381,7 +1343,6 @@ function renderTaskList(phaseGroup) {
 }
 window._ovLoadMore=()=>{AppState._taskPage=(AppState._taskPage||0)+1;renderTaskList(AppState._lastPhaseGroup);};
 window._ovCollapse=()=>{AppState._taskPage=0;renderTaskList(AppState._lastPhaseGroup);};
-
 function renderTaskCard(t, childCount, depth, isMatched) {
   const hasChildren = childCount > 0;
   const stageLower = (t.stage || '').toLowerCase().trim();
