@@ -80,7 +80,7 @@ function profFillFromTasks(phaseKey) {
 /* Variance tab — mirrors variance.xlsx with sub-tabs */
 
 
-function fetchEffortCached(phaseKey) {
+function fetchEffortCached(phaseKey){
   var ckey='_eff_'+phaseKey+'_'+(window._activeProjectId||'');
   try{var hit=sessionStorage.getItem(ckey);if(hit){var d=JSON.parse(hit);if(d&&d.months&&d.months.length)return Promise.resolve(d);}}catch(e){}
   return fetch('/api/effort/'+phaseKey+'/all-months')
@@ -1204,7 +1204,7 @@ async function profRecomputeAll(phaseKey) {
         const phaseMapping = {
           development:  ['development'],
           consultation: ['consultation'],
-          services:     ['development', 'consultation'],  // non-BOG: services gets dev+consult
+          services:     ['services', 'development', 'consultation'],  // services tab gets all non-support phases
           support:      ['support'],
         };
         const matchPhases = phaseMapping[phaseKey] || [phaseKey];
@@ -1410,10 +1410,11 @@ async function profRecomputeAll(phaseKey) {
   if (latestData.monthKey) {
     if (!AppState._latestProfData) AppState._latestProfData = {};
     AppState._latestProfData[phaseKey] = {
-      completionPct:  latestData.completionPct,remainingMDs:latestData.remainingMDs,
-      eacMDs:         latestData.eacMDs,eacCostSAR:latestData.eacCostSAR,
-      currentCostSAR: latestData.currentCostSAR,cpi:latestData.cpi,
-      profitAtComp:   latestData.profitAtComp,totalRevSAR:latestData.totalRevSAR,monthKey:latestData.monthKey,
+      completionPct:  latestData.completionPct, remainingMDs: latestData.remainingMDs,
+      eacMDs:         latestData.eacMDs, eacCostSAR: latestData.eacCostSAR,
+      currentCostSAR: latestData.currentCostSAR, cpi: latestData.cpi,
+      profitAtComp:   latestData.profitAtComp, totalRevSAR: latestData.totalRevSAR,
+      monthKey:       latestData.monthKey,
     };
     try{sessionStorage.setItem('_kpi_'+phaseKey,JSON.stringify(AppState._latestProfData[phaseKey]));}catch(_e){}
     if(window._overviewUpdateProfKPIs)window._overviewUpdateProfKPIs(phaseKey);
