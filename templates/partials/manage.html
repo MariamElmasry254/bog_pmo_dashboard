@@ -90,9 +90,6 @@ tr:hover td{background:#FAFAFA;}
 </style>
 </head>
 <body>
-<style id="mgmt-style">
-/* injected - management read-only */
-</style>
 
 <div class="hdr">
   <a href="/projects">← Projects</a>
@@ -113,6 +110,7 @@ tr:hover td{background:#FAFAFA;}
     <button class="tab-btn" onclick="switchTab('promotions')">
       🏆 Promotions <span class="cnt-badge" id="promoCount">…</span>
     </button>
+
     <button class="tab-btn" id="tabBtnUsers" onclick="switchTab('users')" style="display:none;">
       Users
     </button>
@@ -1497,68 +1495,73 @@ loadTravel();
 
 
 <script>
-// Immediate role enforcement
-(function enforceRole() {
-  // Read cookie synchronously
+(function enforceManagement() {
   var m = document.cookie.match(/(?:^|;)\s*pmo_role=([^;]+)/);
   var role = m ? decodeURIComponent(m[1].trim()) : '';
   window._currentRole = role;
   window._mgmtReadOnly = (role === 'management');
-  
-  if (role !== 'management') {
-    // Also check via API for admin tab
-    fetch('/api/me').then(function(r){return r.json();}).then(function(d){
-      window._currentRole = d.role;
-      window._mgmtReadOnly = (d.role === 'management');
-      if (d.role === 'admin') { var b=document.getElementById('tabBtnUsers'); if(b)b.style.display=''; }
-      if (d.role === 'management') applyMgmtRestrictions();
-    }).catch(function(){});
-    return;
-  }
-  
-  // Apply immediately for management
-  applyMgmtRestrictions();
-  
-  // Also watch for DOM changes (dynamic renders)
-  if (typeof MutationObserver !== 'undefined') {
-    var obs = new MutationObserver(function() { applyMgmtRestrictions(); });
-    document.addEventListener('DOMContentLoaded', function() {
-      obs.observe(document.body, {childList: true, subtree: true});
-    });
-  }
-})();
 
-function applyMgmtRestrictions() {
-  // Hide all edit/add/delete buttons
-  var sel = '.btn-ghost.btn-sm, .btn-danger.btn-sm, #ticketSection, ' +
-            '.btn-primary:not(#_keep), [onclick*="openEdit"], [onclick*="delTravel"], ' +
-            '[onclick*="delPromo"], [onclick*="Add Manually"], [onclick*="confirmTicket"]';
-  try {
+  function hideForMgmt() {
+    if (!window._mgmtReadOnly) return;
+    // IDs to hide completely
+    var hideIds = ['travelDrop','travelForm','promoDrop','promoForm','ticketPreview'];
+    hideIds.forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.style.setProperty('display','none','important');
+    });
+    // CSS classes to hide
+    document.querySelectorAll('.pdf-zone').forEach(function(el){ el.style.setProperty('display','none','important'); });
     document.querySelectorAll('.btn-ghost.btn-sm').forEach(function(el){ el.style.setProperty('display','none','important'); });
     document.querySelectorAll('.btn-danger.btn-sm').forEach(function(el){ el.style.setProperty('display','none','important'); });
-    document.querySelectorAll('.btn-primary').forEach(function(el){ el.style.setProperty('display','none','important'); });
-    var ts = document.getElementById('ticketSection'); if(ts) ts.style.setProperty('display','none','important');
-    var pf = document.getElementById('promoFormWrap'); if(pf) pf.style.setProperty('display','none','important');
-    var am = document.querySelector('[onclick*="openAddManual"]'); if(am) am.style.setProperty('display','none','important');
-    // Hide upload areas
-    document.querySelectorAll('.drop-zone, .upload-zone, .dropzone').forEach(function(el){ el.style.setProperty('display','none','important'); });
-    // Add Manually button
-    document.querySelectorAll('[onclick]').forEach(function(el){
+    // Hide "Add Manually" buttons (btn-ghost that toggles form)
+    document.querySelectorAll('.btn-ghost').forEach(function(el){
       var oc = el.getAttribute('onclick') || '';
-      if (oc.indexOf('openEdit') > -1 || oc.indexOf('delTravel') > -1 || 
-          oc.indexOf('delPromo') > -1 || oc.indexOf('Manually') > -1) {
+      if (oc.indexOf('toggleForm') > -1 || oc.indexOf('Manually') > -1) {
         el.style.setProperty('display','none','important');
       }
     });
-  } catch(e) {}
-}
+    // Hide upload excel drop zones
+    document.querySelectorAll('.upload-box').forEach(function(el){ el.style.setProperty('display','none','important'); });
+    // Hide ticket PDF label button
+    document.querySelectorAll('label.btn-ghost').forEach(function(el){ el.style.setProperty('display','none','important'); });
+  }
 
-// Block openEdit for management
-var _origOpenEdit = window.openEdit;
-window.openEdit = function(r, type) {
-  if (window._mgmtReadOnly) return;
-  if (_origOpenEdit) _origOpenEdit(r, type);
-};
+  // Run immediately
+  hideForMgmt();
+
+  // Run after DOM ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', hideForMgmt);
+  }
+
+  // Run after any dynamic render via MutationObserver
+  if (typeof MutationObserver !== 'undefined' && window._mgmtReadOnly) {
+    var obs = new MutationObserver(hideForMgmt);
+    function startObs() {
+      obs.observe(document.body, {childList: true, subtree: true});
+    }
+    if (document.body) startObs();
+    else document.addEventListener('DOMContentLoaded', startObs);
+  }
+
+  // Block openEdit and delTravel/delPromo functions
+  var _origOpenEdit = window.openEdit;
+  window.openEdit = function(r, type) {
+    if (window._mgmtReadOnly) return;
+    if (_origOpenEdit) return _origOpenEdit.apply(this, arguments);
+  };
+
+  // Also fetch to confirm role and show Users tab for admin
+  fetch('/api/me').then(function(r){return r.json();}).then(function(d){
+    window._currentRole = d.role;
+    window._mgmtReadOnly = (d.role === 'management');
+    if (d.role === 'management') hideForMgmt();
+    if (d.role === 'admin') {
+      var b = document.getElementById('tabBtnUsers');
+      if (b) b.style.display = '';
+    }
+  }).catch(function(){});
+})();
 </script>
 
 <div id="tab-users" class="tab-panel">
