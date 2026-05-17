@@ -6419,8 +6419,13 @@ def api_plan_overrides_get():
         value     = body.get('value')
         if not phase or not month_key or not field:
             return jsonify({'error': 'phase, month_key, field required'}), 400
-        # Save: namespace=plan, subkey=phase, key=month_key.field
-        proj_set_override('plan', phase, f'{month_key}.{field}', value)
+        # For so_line_map and direct_inv_phase: save as key=month_key, value=value directly
+        # so classify_direct_inv can read: dir_inv_overrides.get('INV_2025_0057') = 'support'
+        # and so_line_map can read: so_map_raw.get('12345') = 'support'
+        if phase in ('so_line_map', 'direct_inv_phase'):
+            proj_set_override('plan', phase, month_key, value)
+        else:
+            proj_set_override('plan', phase, f'{month_key}.{field}', value)
         return jsonify({'ok': True, 'phase': phase, 'month_key': month_key, 'field': field})
     return jsonify(load_plan_overrides())
 
@@ -7729,15 +7734,16 @@ def api_sales_orders():
         plan_ns = f'{pfx}_plan' if pfx else 'plan'
         so_map_raw = db.get_namespace_overrides(plan_ns, 'so_line_map') or {}
         for raw_key, val in so_map_raw.items():
-            # Saved as key='12345.var_tab', value='support'
-            if raw_key.endswith('.var_tab'):
+            # New format: key='12345', value='support'
+            if isinstance(val, str) and val and not raw_key.endswith('.var_tab'):
+                line_var_map[raw_key] = val
+            # Old format: key='12345.var_tab', value='support'
+            elif raw_key.endswith('.var_tab'):
                 line_id = raw_key[:-len('.var_tab')]
                 if isinstance(val, str) and val:
                     line_var_map[line_id] = val
             elif isinstance(val, dict) and val.get('var_tab'):
                 line_var_map[str(raw_key)] = val['var_tab']
-            elif isinstance(val, str) and val:
-                line_var_map[str(raw_key)] = val
     except Exception:
         pass
     try:
@@ -7850,11 +7856,15 @@ def api_sales_orders():
             # Classify each direct invoice by saved override or auto-detection
             def classify_direct_inv(inv_id, inv_name=''):
                 key = (inv_name or '').replace('/', '_')
-                # Saved as key='INV_2025_0057.phase', value='support'
-                phase_val = dir_inv_overrides.get(f'{key}.phase')
-                if phase_val and isinstance(phase_val, str):
-                    return phase_val
-                # Legacy dict format fallback
+                # New format: key='INV_2025_0057', value='support'
+                val = dir_inv_overrides.get(key)
+                if val and isinstance(val, str):
+                    return val
+                # Old format: key='INV_2025_0057.phase', value='support'
+                val2 = dir_inv_overrides.get(f'{key}.phase')
+                if val2 and isinstance(val2, str):
+                    return val2
+                # Legacy dict format
                 override = dir_inv_overrides.get(key, {})
                 if isinstance(override, dict) and override.get('phase'):
                     return override['phase']
