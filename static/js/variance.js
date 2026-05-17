@@ -28,28 +28,18 @@
   setTimeout(doHide, 500); // fallback
 })();
 
-// ─── PMO Export ──────────────────────────────────────────────────────
 if (typeof window.exportVariancePMO === 'undefined') {
   window.exportVariancePMO = async function exportVariancePMO() {
-    var btn=document.getElementById('varianceExport');
-    var orig=btn?btn.textContent:'';
+    var btn=document.getElementById('varianceExport');var orig=btn?btn.textContent:'';
     if(btn){btn.textContent='⏳ Generating...';btn.disabled=true;}
     try{
       var isBog=!AppState._overviewData||AppState._overviewData.is_bog!==false;
       var phaseKeys=isBog?['development','consultation']:['services','support'];
-      var phases=phaseKeys.map(function(k){
-        var ld=(AppState._latestProfData&&AppState._latestProfData[k])||{};
-        return{phase:k,latestData:Object.assign({},ld,{
-          totalRevSAR:(AppState._savedRevenue&&AppState._savedRevenue[k])||ld.totalRevSAR||0,
-          totalEstCostSAR:(AppState._budgetFinalCost&&AppState._budgetFinalCost[k])||0,
-          totalEstMDs:(AppState._budgetFinalMDs&&AppState._budgetFinalMDs[k])||0}),
-          months:(AppState._varianceMonthData&&AppState._varianceMonthData[k])||[]};
-      });
+      var phases=phaseKeys.map(function(k){var ld=(AppState._latestProfData&&AppState._latestProfData[k])||{};return{phase:k,latestData:Object.assign({},ld,{totalRevSAR:(AppState._savedRevenue&&AppState._savedRevenue[k])||ld.totalRevSAR||0,totalEstCostSAR:(AppState._budgetFinalCost&&AppState._budgetFinalCost[k])||0,totalEstMDs:(AppState._budgetFinalMDs&&AppState._budgetFinalMDs[k])||0}),months:(AppState._varianceMonthData&&AppState._varianceMonthData[k])||[]};});
       var body={project_name:(AppState._overviewData&&AppState._overviewData.project_name)||document.title||'Project',generated:new Date().toISOString().slice(0,10),phases:phases};
       var res=await fetch('/api/variance/export-pmo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       if(!res.ok){var errTxt=await res.text();throw new Error('Server error '+res.status+': '+errTxt.slice(0,200));}
-      var blob=await res.blob();var url=URL.createObjectURL(blob);
-      var a=document.createElement('a');a.href=url;
+      var blob=await res.blob();var url=URL.createObjectURL(blob);var a=document.createElement('a');a.href=url;
       var cd=res.headers.get('Content-Disposition')||'';
       a.download=(cd.match(/filename="?([^"]+)"?/)||[])[1]||'variance_report.xlsx';
       document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
@@ -105,13 +95,8 @@ window.loadVariance = async function() {
     setTimeout(async function(){
       var _isBog2=!AppState._overviewData||AppState._overviewData.is_bog!==false;
       var _all2=_isBog2?['development','consultation']:['services','support'];
-      var _curTab=document.querySelector('.sub-tab.active');
-      var _curKey=_curTab?_curTab.dataset.subtab:_all2[0];
-      for(var _ii=0;_ii<_all2.length;_ii++){
-        if(_all2[_ii]!==_curKey&&(!AppState._varianceMonthData||!AppState._varianceMonthData[_all2[_ii]])){
-          try{await switchSubTab(_all2[_ii]);}catch(_e){}
-        }
-      }
+      var _curTab=document.querySelector('.sub-tab.active');var _curKey=_curTab?_curTab.dataset.subtab:_all2[0];
+      for(var _ii=0;_ii<_all2.length;_ii++){if(_all2[_ii]!==_curKey&&(!AppState._varianceMonthData||!AppState._varianceMonthData[_all2[_ii]])){try{await switchSubTab(_all2[_ii]);}catch(_e){}}}
       try{await switchSubTab(_curKey);}catch(_e){}
     },2000);
     var _vBtn=document.getElementById('varianceExport');
@@ -1425,15 +1410,10 @@ async function profRecomputeAll(phaseKey) {
   if (latestData.monthKey) {
     if (!AppState._latestProfData) AppState._latestProfData = {};
     AppState._latestProfData[phaseKey] = {
-      completionPct:  latestData.completionPct,
-      remainingMDs:   latestData.remainingMDs,
-      eacMDs:         latestData.eacMDs,
-      eacCostSAR:     latestData.eacCostSAR,
-      currentCostSAR: latestData.currentCostSAR,
-      cpi:            latestData.cpi,
-      profitAtComp:   latestData.profitAtComp,
-      totalRevSAR:    latestData.totalRevSAR,
-      monthKey:       latestData.monthKey,
+      completionPct:  latestData.completionPct,remainingMDs:latestData.remainingMDs,
+      eacMDs:         latestData.eacMDs,eacCostSAR:latestData.eacCostSAR,
+      currentCostSAR: latestData.currentCostSAR,cpi:latestData.cpi,
+      profitAtComp:   latestData.profitAtComp,totalRevSAR:latestData.totalRevSAR,monthKey:latestData.monthKey,
     };
     try{sessionStorage.setItem('_kpi_'+phaseKey,JSON.stringify(AppState._latestProfData[phaseKey]));}catch(_e){}
     if(window._overviewUpdateProfKPIs)window._overviewUpdateProfKPIs(phaseKey);
