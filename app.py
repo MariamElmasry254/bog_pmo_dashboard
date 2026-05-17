@@ -593,7 +593,10 @@ def projects_list():
     # Try both locations
     import os
     tmpl_dir = app.template_folder
-    return render_template('partials/projects.html')
+    display_name = session.get('display_name', '')
+    role         = session.get('user_role', 'admin')
+    return render_template('partials/projects.html',
+                           display_name=display_name, role=role)
 
 
 @app.route('/project/select', methods=['POST'])
@@ -1844,7 +1847,7 @@ def api_odoo_coordinators():
         for p in projs:
             coord=p.get('coordinator_id')
             if coord and isinstance(coord,list) and len(coord)>1:
-                cn=coord[1]
+                cn=coord[1]; 
                 if cn not in cp: cp[cn]=[]
                 cp[cn].append({'id':p['id'],'name':p['name']})
         result=[]
@@ -2445,53 +2448,35 @@ def api_projects_list():
         if not odoo.uid:
             if not odoo.connect():
                 return jsonify({'error': 'Odoo not connected', 'projects': []}), 503
-        # Fetch projects — include coordinator_id in main query
         safe_fields = ['id', 'name', 'user_id', 'date_start', 'end_date',
                        'stage_id', 'coordinator_id']
         _role    = session.get('user_role', 'admin')
         _odoo_nm = (session.get('odoo_name') or '').strip()
-
-        # For PMO: query Odoo directly for coordinator's projects
         pmo_proj_ids = None
         if _role == 'pmo' and _odoo_nm:
             try:
-                # Find coordinator by name in res.users
-                users_found = odoo.models.execute_kw(
-                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                    'res.users', 'search_read',
-                    [[('name', 'ilike', _odoo_nm)]],
-                    {'fields': ['id', 'name'], 'limit': 5}
-                )
+                users_found = odoo.models.execute_kw(ODOO_DB,odoo.uid,ODOO_PASSWORD,
+                    'res.users','search_read',[[('name','ilike',_odoo_nm)]],
+                    {'fields':['id','name'],'limit':5})
                 if not users_found:
-                    # Try hr.employee
-                    emps = odoo.models.execute_kw(
-                        ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                        'hr.employee', 'search_read',
-                        [[('name', 'ilike', _odoo_nm), ('active', '=', True)]],
-                        {'fields': ['id', 'name', 'user_id'], 'limit': 5}
-                    )
-                    user_ids = [e['user_id'][0] for e in emps if isinstance(e.get('user_id'), list)]
-                    if user_ids:
-                        coord_projs = odoo.models.execute_kw(
-                            ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                            'project.project', 'search_read',
-                            [[('coordinator_id', 'in', user_ids)]],
-                            {'fields': ['id'], 'limit': 200}
-                        )
-                        pmo_proj_ids = [p['id'] for p in coord_projs]
+                    emps = odoo.models.execute_kw(ODOO_DB,odoo.uid,ODOO_PASSWORD,
+                        'hr.employee','search_read',
+                        [[('name','ilike',_odoo_nm),('active','=',True)]],
+                        {'fields':['id','name','user_id'],'limit':5})
+                    uid_list = [e['user_id'][0] for e in emps if isinstance(e.get('user_id'),list)]
                 else:
                     uid_list = [u['id'] for u in users_found]
-                    coord_projs = odoo.models.execute_kw(
-                        ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                        'project.project', 'search_read',
-                        [[('coordinator_id', 'in', uid_list)]],
-                        {'fields': ['id'], 'limit': 200}
-                    )
-                    pmo_proj_ids = [p['id'] for p in coord_projs]
+                if uid_list:
+                    cp = odoo.models.execute_kw(ODOO_DB,odoo.uid,ODOO_PASSWORD,
+                        'project.project','search_read',
+                        [[('coordinator_id','in',uid_list)]],
+                        {'fields':['id'],'limit':200})
+                    pmo_proj_ids = [p['id'] for p in cp]
+                else:
+                    pmo_proj_ids = []
             except Exception as _pe:
-                logger.warning(f"PMO project filter failed: {_pe}")
-
-        domain = [('id', 'in', pmo_proj_ids)] if pmo_proj_ids is not None else []
+                logger.warning(f"PMO filter error: {_pe}")
+        domain = [('id','in',pmo_proj_ids)] if pmo_proj_ids is not None else []
         projects = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'project.project', 'search_read',
@@ -2544,9 +2529,7 @@ def api_projects_list():
                 'stage_name':  stage_name,
                 'value':       float(ex.get('value') or 0),
             })
-        return jsonify({'projects': result, 'role': _role if '_role' in dir() else 'admin',
-                        'display_name': session.get('display_name',''),
-                        'total': len(result)})
+        return jsonify({'projects': result, 'role': _role if '_role' in dir() else 'admin', 'display_name': session.get('display_name',''), 'total': len(result)})
     except Exception as e:
         logger.error(f"Projects list error: {e}", exc_info=True)
         return jsonify({'error': str(e), 'projects': []}), 500
