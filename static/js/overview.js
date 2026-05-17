@@ -318,6 +318,8 @@ async function loadOverviewKPIs() {
     window._overviewUpdateProfKPIs = function(phaseKey) {
       const d = AppState._latestProfData?.[phaseKey];
       if (!d) return;
+      // Refresh cost KPIs with real EAC from variance
+      _loadPhaseCostKPIs();
       const fmtN = n => n ? new Intl.NumberFormat('en-US',{maximumFractionDigits:1}).format(n) : '—';
       const setOv = (id, val) => { const el=document.getElementById(id); if(el) el.textContent=val; };
       // services/consultation → Con prefix, support/development → Dev prefix
@@ -682,14 +684,10 @@ async function _loadPhaseCostKPIs() {
   const fSAR = v => fmt.money(Math.round(v));
   const set  = (id, v) => { const el=document.getElementById(id); if(el) el.textContent=v||'—'; };
 
-  let totalCostSAR = 0;
-  let totalEACSAR  = 0;
-
   const isBogCost = AppState._overviewData?.is_bog !== false;
-  const phases = isBogCost ? ['consultation', 'development'] : ['services', 'support'];
+  const phases    = isBogCost ? ['consultation','development'] : ['services','support'];
 
-  // Step 1: Get variance month_key, % completion, remaining from phase-progress
-  // This is the AUTHORITATIVE source - cost cards use same month
+  // Get phase progress (month_key, %, remaining) from variance plan overrides
   let phaseProgress = {};
   try {
     const pr = await fetch('/api/overview/phase-progress');
@@ -698,14 +696,14 @@ async function _loadPhaseCostKPIs() {
     AppState._phaseProgressData = pd;
   } catch(e) {}
 
-  // Find the latest month across all phases (from variance)
+  // Latest month = max month_key across phases (from variance)
   let latestMonth = '';
   for (const ph of phases) {
     const mk = phaseProgress[ph]?.month_key || '';
     if (mk && mk > latestMonth) latestMonth = mk;
   }
 
-  // Weighted % completion across phases
+  // Weighted % completion
   let totalComp = 0, compCount = 0;
   for (const ph of phases) {
     const pct = phaseProgress[ph]?.completion || 0;
@@ -713,7 +711,10 @@ async function _loadPhaseCostKPIs() {
   }
   const avgComp = compCount > 0 ? Math.round(totalComp / compCount) : 0;
 
-  // Step 2: Load cost data - cumulate up to latest variance month
+  // Cost: cumulate effort up to variance month
+  let totalCostSAR = 0;
+  let totalEACSAR  = 0;
+
   for (const phase of phases) {
     try {
       let months = AppState._effortMonths?.[phase]     || [];
@@ -734,24 +735,19 @@ async function _loadPhaseCostKPIs() {
         AppState._effortMonthMDs[phase]   = mMDs;
       }
 
-      // Cumulate cost up to (and including) latestMonth from variance
-      let cumCostUSD = 0;
+      // Current cost = effort up to variance month
       const cutoff = phaseProgress[phase]?.month_key || latestMonth;
-      months.forEach(m => {
-        if (!cutoff || m.key <= cutoff) cumCostUSD += mCosts[m.key] || 0;
-      });
+      let cumCostUSD = 0;
+      months.forEach(m => { if (!cutoff || m.key <= cutoff) cumCostUSD += mCosts[m.key] || 0; });
       const cumCostSAR = cumCostUSD * 3.75;
       totalCostSAR += cumCostSAR;
 
-      const totalMDs = Object.values(mMDs).reduce((s,v)=>s+v, 0);
-      const avgCPMD  = totalMDs > 0 ? cumCostSAR / totalMDs : 0;
-      const profData = AppState._latestProfData?.[phase];
-      const eacCostSAR = profData?.eacMDs ? cumCostSAR + profData.eacMDs * avgCPMD : cumCostSAR;
+      // EAC SAR = from variance AppState (estAtCompletion = currentCost + costToComplete)
+      const profData   = AppState._latestProfData?.[phase];
+      const eacCostSAR = profData?.eacCostSAR || cumCostSAR;
       totalEACSAR += eacCostSAR;
 
-      let pre = 'Con';
-      if (phase === 'support') pre = 'Sup';
-      else if (phase === 'development') pre = 'Dev';
+      let pre = phase === 'support' ? 'Sup' : phase === 'development' ? 'Dev' : 'Con';
       set(`kpi${pre}Cost`, fSAR(cumCostSAR));
       set(`kpi${pre}EAC`,  fSAR(eacCostSAR));
     } catch(e) {
@@ -759,23 +755,17 @@ async function _loadPhaseCostKPIs() {
     }
   }
 
-  // Step 3: Update totals + "as of" + "% complete" — all from same month
+  // Totals
   const tcEl = document.getElementById('kpiTotalCost');
   if (tcEl) tcEl.textContent = totalCostSAR ? fSAR(totalCostSAR) : '—';
   const teEl = document.getElementById('kpiTotalEAC');
   if (teEl) teEl.textContent = totalEACSAR  ? fSAR(totalEACSAR)  : '—';
 
-  // "as of YYYY-MM" — same month as variance % and remaining
+  // "as of" + "% complete" from same variance month
   const asOfText = latestMonth ? `as of ${latestMonth}` : '';
-  ['kpiCostAsOf','kpiEACAsOf'].forEach(id => {
-    const el = document.getElementById(id); if(el) el.textContent = asOfText;
-  });
-
-  // "XX% complete" from variance
-  const pctText = avgComp > 0 ? `${avgComp}% complete` : '';
-  ['kpiCostPct','kpiEACPct'].forEach(id => {
-    const el = document.getElementById(id); if(el) el.textContent = pctText;
-  });
+  const pctText  = avgComp > 0 ? `${avgComp}% complete` : '';
+  ['kpiCostAsOf','kpiEACAsOf'].forEach(id => { const el=document.getElementById(id); if(el) el.textContent=asOfText; });
+  ['kpiCostPct', 'kpiEACPct' ].forEach(id => { const el=document.getElementById(id); if(el) el.textContent=pctText; });
 }
 
 
