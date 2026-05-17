@@ -8305,14 +8305,14 @@ def api_sales_orders():
         # This correctly splits invoices that span multiple phases
         invoices_by_phase = {}  # { phase_key: { 'YYYY-MM': amount } }
 
-        # Build inv_date lookup from invoices_raw
+        # Build inv_phase_map: for each invoice, track amounts per phase
+        # by iterating SO lines and their linked invoice lines
+        inv_phase_amounts = {}  # {move_id: {phase: amount}}
         inv_date_map = {inv['id']: (inv.get('invoice_date') or '')[:7]
                         for inv in invoices_raw if inv.get('state') == 'posted'}
 
-        # Accumulate per SO line → get phase + line invoice amounts
         for order in orders:
             for line in order.get('lines', []):
-                # Determine phase for this SO line
                 prod_name = ''
                 if isinstance(line.get('product_id'), list):
                     prod_name = line['product_id'][1] if len(line['product_id']) > 1 else ''
@@ -8325,34 +8325,76 @@ def api_sales_orders():
                     lp = 'license'
                 else:
                     lp = 'development'
-                # User override wins
                 line_id_str = str(line.get('id', ''))
                 user_override = line_var_map.get(line_id_str)
                 if user_override:
                     lp = user_override
 
-                # Accumulate each invoice LINE amount for this phase
                 for li in line.get('line_invoices', []):
                     mid = li.get('move_id')
-                    if not mid:
+                    if not mid or mid not in inv_date_map:
                         continue
-                    month = inv_date_map.get(mid, '')
-                    if not month:
-                        continue
-                    # Use the line amount (price_subtotal) not full invoice
                     amt = float(li.get('amount', 0) or 0)
-                    if amt == 0:
-                        # Fallback: use invoiced_amt from SO line proportionally
-                        amt = float(li.get('qty', 0) or 0) * float(line.get('price_unit', 0) or 0)
-                        disc = 1 - (float(line.get('discount', 0) or 0)) / 100
-                        amt = round(amt * disc, 2)
-                    if amt == 0:
+                    if amt <= 0:
                         continue
-                    if lp not in invoices_by_phase:
-                        invoices_by_phase[lp] = {}
-                    invoices_by_phase[lp][month] = (
-                        invoices_by_phase[lp].get(month, 0) + amt
-                    )
+                    if mid not in inv_phase_amounts:
+                        inv_phase_amounts[mid] = {}
+                    inv_phase_amounts[mid][lp] = inv_phase_amounts[mid].get(lp, 0) + amt
+
+        # Now build invoices_by_phase from the per-invoice phase amounts
+        for mid, phase_amts in inv_phase_amounts.items():
+            month = inv_date_map.get(mid, '')
+            if not month:
+                continue
+            for lp, amt in phase_amts.items():
+                if amt <= 0:
+                    continue
+                if lp not in invoices_by_phase:
+                    invoices_by_phase[lp] = {}
+                invoices_by_phase[lp][month] = (
+                    invoices_by_phase[lp].get(month, 0) + amt
+                )
+
+        # FALLBACK: if line_invoices gave us nothing, use the old full-invoice method
+        if not invoices_by_phase:
+            logger.info("Invoice phase split: no line amounts found, using full invoice method")
+            inv_phase_map = {}
+            for order in orders:
+                for line in order.get('lines', []):
+                    prod_name = ''
+                    if isinstance(line.get('product_id'), list):
+                        prod_name = line['product_id'][1] if len(line['product_id']) > 1 else ''
+                    elif line.get('name'):
+                        prod_name = line['name']
+                    prod_lower = prod_name.lower()
+                    if any(kw in prod_lower for kw in SUPPORT_KWS):
+                        lp = 'support'
+                    elif 'license' in prod_lower or '3rd party' in prod_lower or 'third party' in prod_lower:
+                        lp = 'license'
+                    else:
+                        lp = 'development'
+                    user_override = line_var_map.get(str(line.get('id', '')))
+                    if user_override:
+                        lp = user_override
+                    for li in line.get('line_invoices', []):
+                        mid = li.get('move_id')
+                        if mid and mid not in inv_phase_map:
+                            inv_phase_map[mid] = lp
+            processed_invs = set()
+            for inv in invoices_raw:
+                if inv['id'] in processed_invs or inv.get('state') != 'posted':
+                    continue
+                processed_invs.add(inv['id'])
+                month = (inv.get('invoice_date') or '')[:7]
+                if not month:
+                    continue
+                lp = inv_phase_map.get(inv['id'], 'development')
+                if lp not in invoices_by_phase:
+                    invoices_by_phase[lp] = {}
+                invoices_by_phase[lp][month] = (
+                    invoices_by_phase[lp].get(month, 0) + (inv.get('amount_untaxed') or 0)
+                )
+        logger.info(f"invoices_by_phase phases: {list(invoices_by_phase.keys())}, months: { {k:len(v) for k,v in invoices_by_phase.items()} }")
 
         # Build cumulative per phase
         invoices_by_phase_cumulative = {}
@@ -8364,8 +8406,11 @@ def api_sales_orders():
                 cumulative[month] = {'month': monthly[month], 'cumulative': round(running, 2)}
             invoices_by_phase_cumulative[phase_key] = cumulative
 
+        logger.info(f"invoices_by_phase keys: {list(invoices_by_phase_cumulative.keys())}")
+        logger.info(f"invoices_by_phase sample: { {k: list(v.keys())[:3] for k,v in invoices_by_phase_cumulative.items()} }")
         return jsonify({'ok': True, 'orders': orders, 'summary': summary,
-                        'invoices_by_phase': invoices_by_phase_cumulative})
+                        'invoices_by_phase': invoices_by_phase_cumulative,
+                        '_debug_inv_count': len(invoices_by_phase)})
 
     except Exception as e:
         import traceback
