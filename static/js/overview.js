@@ -1,6 +1,27 @@
 /* Overview tab — Roadmap KPIs + Tasks Analysis with multi-phase + employee filter */
 
 window.loadOverview = async function() {
+  // ── Fetch project type immediately (fast, no Odoo call) ──────────────
+  // This ensures all tabs show correct nav before slow APIs respond
+  try {
+    const info = await fetch('/api/project-info').then(r=>r.json());
+    if (!AppState._overviewData) AppState._overviewData = {};
+    AppState._overviewData.is_bog      = info.is_bog;
+    AppState._overviewData.project_id  = info.project_id;
+    AppState._overviewData.project_name= info.project_name;
+    // Update exec tabs visibility immediately
+    const isBogFast = info.is_bog !== false;
+    ['services','missing','risks','roadmap'].forEach(tab => {
+      const btn = document.querySelector(`.exec-tab[data-tab="${tab}"]`);
+      if (btn) btn.style.display = isBogFast ? '' : 'none';
+    });
+    // Hide non-BOG tabs for BOG project
+    ['manage'].forEach(tab => {
+      const btn = document.querySelector(`.exec-tab[data-tab="${tab}"]`);
+      if (btn) btn.style.display = '';
+    });
+  } catch(e) {}
+
   if (!AppState.loaded.overview) {
     AppState.loaded.overview = true;
     AppState.currentOverviewPhase = 'development';
@@ -25,7 +46,7 @@ window.loadOverview = async function() {
       renderTaskList(AppState.currentOverviewPhase));
     document.getElementById('ovTaskStatus').addEventListener('change', () =>
       renderTaskList(AppState.currentOverviewPhase));
-  }
+  } // end if !loaded.overview
 
   await loadOverviewKPIs();
   await loadTaskAnalysis(AppState.currentOverviewPhase);
@@ -925,28 +946,22 @@ function renderPhaseFilters(phaseGroup, available) {
     return;
   }
   let html = '<label class="filter-label">PHASES (multi-select)</label>';
-  html += '<div class="phase-dropdown" id="ovPhaseDropdown" style="position:relative;display:inline-block;">';
-  html += `<button type="button" class="phase-toggle" id="ovPhaseToggle"
-    style="display:flex;align-items:center;gap:8px;padding:7px 12px;min-width:200px;
-           border:1px solid var(--border);border-radius:6px;background:var(--bg-card,white);
-           cursor:pointer;font-size:13px;font-weight:500;text-align:left;justify-content:space-between;">
-    <span id="ovPhaseLabel" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${phaseLabel(AppState.activePhases || [])}</span>
-    <span style="color:var(--text-muted);flex-shrink:0;">▼</span>
-  </button>`;
-  html += '<div class="phase-menu" id="ovPhaseMenu" style="display:none;position:absolute;z-index:999;top:100%;left:0;min-width:280px;max-width:420px;max-height:360px;overflow-y:auto;background:var(--bg-card,white);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);margin-top:2px;">';
-  html += '<div style="display:flex;gap:12px;padding:8px 12px;border-bottom:1px solid var(--border);background:var(--bg-subtle);">';
-  html += '<a id="ovPhaseAll" style="font-size:12px;font-weight:600;color:var(--blue,#3B82F6);cursor:pointer;text-decoration:none;">Select all</a>';
-  html += '<a id="ovPhaseNone" style="font-size:12px;color:var(--text-muted);cursor:pointer;text-decoration:none;">Clear</a>';
+  html += '<div class="phase-dropdown" id="ovPhaseDropdown">';
+  html += '<button type="button" class="phase-toggle" id="ovPhaseToggle">';
+  html += `<span id="ovPhaseLabel">${phaseLabel(AppState.activePhases || [])}</span>`;
+  html += '<span style="margin-left:8px; color: var(--text-muted);">▼</span>';
+  html += '</button>';
+  html += '<div class="phase-menu" id="ovPhaseMenu" style="display:none;">';
+  html += '<div class="phase-menu-actions">';
+  html += '<a id="ovPhaseAll">Select all</a>';
+  html += '<a id="ovPhaseNone">Clear</a>';
   html += '</div>';
   available.filter(p => p && p !== 'undefined' && p !== 'null').forEach(p => {
     const checked = (AppState.activePhases || []).includes(p);
     const label = p === 'No Phase' ? '📭 No Phase' : p;
-    html += `<label class="phase-option ${checked ? 'selected' : ''}" data-phase="${encodeURIComponent(p)}"
-      style="display:flex;align-items:center;gap:8px;padding:7px 12px;cursor:pointer;
-             background:${checked ? 'var(--bg-info,#EFF6FF)' : 'transparent'};
-             border-bottom:1px solid var(--border);font-size:13px;user-select:none;">
-      <input type="checkbox" ${checked ? 'checked' : ''} style="cursor:pointer;accent-color:var(--blue,#3B82F6);width:15px;height:15px;flex-shrink:0;">
-      <span dir="auto" style="color:${checked ? 'var(--blue,#1D4ED8)' : 'var(--text)'};font-weight:${checked ? '600' : '400'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${label}</span>
+    html += `<label class="phase-option ${checked ? 'selected' : ''}" data-phase="${encodeURIComponent(p)}">
+      <input type="checkbox" ${checked ? 'checked' : ''}>
+      <span dir="auto">${label}</span>
     </label>`;
   });
   html += '</div></div>';
@@ -978,15 +993,9 @@ function renderPhaseFilters(phaseGroup, available) {
       if (cb.checked) {
         if (!AppState.activePhases.includes(phase)) AppState.activePhases.push(phase);
         opt.classList.add('selected');
-        opt.style.background = 'var(--bg-info,#EFF6FF)';
-        opt.querySelector('span').style.color = 'var(--blue,#1D4ED8)';
-        opt.querySelector('span').style.fontWeight = '600';
       } else {
         AppState.activePhases = AppState.activePhases.filter(p => p !== phase);
         opt.classList.remove('selected');
-        opt.style.background = 'transparent';
-        opt.querySelector('span').style.color = 'var(--text)';
-        opt.querySelector('span').style.fontWeight = '400';
       }
       document.getElementById('ovPhaseLabel').textContent = phaseLabel(AppState.activePhases);
       // Reload data with new filter
@@ -1316,20 +1325,6 @@ function renderTaskList(phaseGroup) {
 
   rootTasks.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
-  // Pagination: 10 default, 50 when filtered
-  const isFiltered = !!(search || (typeFilter && typeFilter !== 'all') ||
-    (statusFilter && statusFilter !== 'all') || empFilterActive);
-  const PAGE_SIZE  = isFiltered ? 50 : 10;
-  const filterKey  = [search, typeFilter, statusFilter, (AppState.activeEmployees||[]).join(','), (AppState.activePhases||[]).join(',')].join('|');
-  if (AppState._lastFilterKey !== filterKey) {
-    AppState._taskPage = 0;
-    AppState._lastFilterKey = filterKey;
-  }
-  if (!AppState._taskPage) AppState._taskPage = 0;
-  const pageEnd    = (AppState._taskPage + 1) * PAGE_SIZE;
-  const shownRoots = rootTasks.slice(0, pageEnd);
-  const hasMore    = rootTasks.length > pageEnd;
-
   let html = `<div class="card">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
       <h3 class="card-title" style="margin:0;">Tasks <span class="muted-text">— ${matchedIds.size} match${matchedIds.size !== 1 ? 'es' : ''}${matchedIds.size < tasks.length ? ` · ${tasks.length - matchedIds.size} parent context` : ''}</span></h3>
@@ -1337,19 +1332,9 @@ function renderTaskList(phaseGroup) {
     </div>
     <div class="task-analysis-list">`;
 
-  shownRoots.forEach(t => {
+  rootTasks.forEach(t => {
     html += renderTaskBranch(t, 0);
   });
-
-  if (hasMore) {
-    html += `<div style="text-align:center;padding:16px 0 8px;">
-      <button onclick="_ovLoadMore()" style="padding:7px 22px;border:1px solid var(--border);
-        border-radius:6px;background:var(--bg-subtle);cursor:pointer;font-size:13px;
-        font-weight:600;color:var(--navy);">
-        Show more — ${rootTasks.length - pageEnd} remaining
-      </button>
-    </div>`;
-  }
 
   html += `</div></div>`;
   cont.innerHTML = html;
@@ -1363,14 +1348,7 @@ function renderTaskList(phaseGroup) {
       renderTaskList(phaseGroup);
     });
   });
-  AppState._lastPhaseGroup = phaseGroup;
 }
-
-window._ovLoadMore = function() {
-  if (!AppState._taskPage) AppState._taskPage = 0;
-  AppState._taskPage += 1;
-  renderTaskList(AppState._lastPhaseGroup);
-};
 
 function renderTaskCard(t, childCount, depth, isMatched) {
   const hasChildren = childCount > 0;
