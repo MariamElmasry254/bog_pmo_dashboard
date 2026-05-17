@@ -2354,5 +2354,5 @@ async function deletePromo(id) {
   await fetch(`/api/promotions/${id}`, { method: 'DELETE' });
   renderPromotionsSubTab();
 }
+                                   }
 
-}
