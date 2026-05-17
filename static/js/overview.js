@@ -1,17 +1,29 @@
+(function(){
+  var _b=null;
+  function _a(b){['services','missing','risks','roadmap'].forEach(function(t){
+    var e=document.querySelector('.exec-tab[data-tab="'+t+'"]');if(e)e.style.display=b?'':'none';
+  });}
+  async function _f(){try{
+    var d=await fetch('/api/project-info').then(function(r){return r.json();});
+    _b=d.is_bog!==false;
+    if(window.AppState){if(!AppState._overviewData)AppState._overviewData={};AppState._overviewData.is_bog=_b;}
+    _a(_b);
+  }catch(e){}}
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',_f);else _f();
+  var obs=new MutationObserver(function(){if(_b===false)_a(false);});
+  function s(){obs.observe(document.body||document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['style']});}
+  if(document.body)s();else document.addEventListener('DOMContentLoaded',s);
+})();
 /* Overview tab — Roadmap KPIs + Tasks Analysis with multi-phase + employee filter */
 
 
-// ─── Cached effort fetch (overview) ──────────────────────────────────
 async function _fetchEffortCached(phase) {
-  const key = '_eff_' + phase + '_' + (window._activeProjectId || AppState._overviewData?.project_id || '');
-  try {
-    const hit = sessionStorage.getItem(key);
-    if (hit) { const d=JSON.parse(hit); if(d&&d.months&&d.months.length) return d; }
-  } catch(e) {}
-  const res = await fetch('/api/effort/' + phase + '/all-months');
-  if (!res.ok) throw new Error('Effort API ' + res.status);
-  const d = await res.json();
-  try { sessionStorage.setItem(key, JSON.stringify(d)); } catch(e) {}
+  const key='_eff_'+phase+'_'+(window._activeProjectId||AppState._overviewData?.project_id||'');
+  try{const h=sessionStorage.getItem(key);if(h){const d=JSON.parse(h);if(d&&d.months&&d.months.length)return d;}}catch(e){}
+  const res=await fetch('/api/effort/'+phase+'/all-months');
+  if(!res.ok)throw new Error('Effort API '+res.status);
+  const d=await res.json();
+  try{sessionStorage.setItem(key,JSON.stringify(d));}catch(e){}
   return d;
 }
 
@@ -730,7 +742,6 @@ async function _loadPhaseCostKPIs() {
       totalCostSAR += cumCostSAR;
 
       const totalMDs = Object.values(mMDs).reduce((s,v)=>s+v, 0);
-      // EAC = use eacCostSAR stored by variance.js (same value as Est. at Completion SAR)
       const profData   = AppState._latestProfData?.[phase];
       const eacCostSAR = profData?.eacCostSAR || cumCostSAR;
       totalEACSAR += eacCostSAR;
@@ -753,25 +764,15 @@ async function _loadPhaseCostKPIs() {
   if (tcEl) tcEl.textContent = totalCostSAR ? fSAR(totalCostSAR) : '—';
   const teEl = document.getElementById('kpiTotalEAC');
   if (teEl) teEl.textContent = totalEACSAR  ? fSAR(totalEACSAR)  : '—';
-
-  // as-of + % complete from phase-progress (variance month)
   try {
-    const pr = await fetch('/api/overview/phase-progress');
-    const pd = await pr.json();
-    const isBogK = AppState._overviewData?.is_bog !== false;
-    const phsK   = isBogK ? ['consultation','development'] : ['services','support'];
-    let latestMk = ''; let totalComp=0, compCount=0;
-    for (const ph of phsK) {
-      const mk = pd.phases?.[ph]?.month_key || '';
-      if (mk && mk > latestMk) latestMk = mk;
-      const pct = pd.phases?.[ph]?.completion || 0;
-      if (pct>0){totalComp+=pct;compCount++;}
-    }
-    const avgComp = compCount>0 ? Math.round(totalComp/compCount) : 0;
-    const asOfTxt = latestMk ? 'as of '+latestMk : '';
-    const pctTxt  = avgComp>0 ? avgComp+'% complete' : '';
-    ['kpiCostAsOf','kpiEACAsOf'].forEach(id=>{ const el=document.getElementById(id); if(el) el.textContent=asOfTxt; });
-    ['kpiCostPct','kpiEACPct'].forEach(id=>{ const el=document.getElementById(id); if(el) el.textContent=pctTxt; });
+    const pr=await fetch('/api/overview/phase-progress');const pd=await pr.json();
+    const isBogK=AppState._overviewData?.is_bog!==false;
+    const phsK=isBogK?['consultation','development']:['services','support'];
+    let lmk='',tc=0,cc=0;
+    for(const ph of phsK){const mk=pd.phases?.[ph]?.month_key||'';if(mk&&mk>lmk)lmk=mk;const pct=pd.phases?.[ph]?.completion||0;if(pct>0){tc+=pct;cc++;}}
+    const avg=cc>0?Math.round(tc/cc):0;
+    ['kpiCostAsOf','kpiEACAsOf'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=lmk?'as of '+lmk:'';});
+    ['kpiCostPct','kpiEACPct'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=avg>0?avg+'% complete':'';});
   } catch(e) {}
 }
 
@@ -955,85 +956,71 @@ async function loadTaskAnalysis(phaseGroup) {
 function renderPhaseFilters(phaseGroup, available) {
   const cont = document.getElementById('ovPhaseFilters');
   if (!cont) return;
-  if (!available.length) {
-    cont.innerHTML = '';
-    return;
-  }
+  if (!available.length) { cont.innerHTML = ''; return; }
+  const total  = available.length;
+  const active = AppState.activePhases || [];
+  const lbl    = active.length===0||active.length===total ? `All phases (${total})`
+                 : active.length===1 ? active[0] : `${active.length} of ${total} phases`;
+
+  cont.style.cssText = 'position:relative;display:inline-flex;flex-direction:column;';
   let html = '<label class="filter-label">PHASES (multi-select)</label>';
-  html += '<div class="phase-dropdown" id="ovPhaseDropdown">';
-  html += '<button type="button" class="phase-toggle" id="ovPhaseToggle">';
-  html += `<span id="ovPhaseLabel">${phaseLabel(AppState.activePhases || [])}</span>`;
-  html += '<span style="margin-left:8px; color: var(--text-muted);">▼</span>';
-  html += '</button>';
-  html += '<div class="phase-menu" id="ovPhaseMenu" style="display:none;">';
-  html += '<div class="phase-menu-actions">';
-  html += '<a id="ovPhaseAll">Select all</a>';
-  html += '<a id="ovPhaseNone">Clear</a>';
-  html += '</div>';
-  available.filter(p => p && p !== 'undefined' && p !== 'null').forEach(p => {
-    const checked = (AppState.activePhases || []).includes(p);
-    const label = p === 'No Phase' ? '📭 No Phase' : p;
-    html += `<label class="phase-option ${checked ? 'selected' : ''}" data-phase="${encodeURIComponent(p)}">
-      <input type="checkbox" ${checked ? 'checked' : ''}>
-      <span dir="auto">${label}</span>
-    </label>`;
+  html += '<div style="position:relative;display:inline-block;" id="ovPhaseDropdown">';
+  html += `<button type="button" class="phase-toggle" id="ovPhaseToggle">`;
+  html += `<span id="ovPhaseLabel">${lbl}</span>`;
+  html += '<span style="margin-left:8px;color:var(--text-muted);">▼</span></button>';
+  html += '<div id="ovPhaseMenu" style="display:none;position:absolute;top:100%;left:0;z-index:9999;min-width:280px;max-width:420px;max-height:360px;overflow-y:auto;background:white;border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);margin-top:2px;">';
+  html += '<div class="phase-menu-actions"><a id="ovPhaseAll">Select all</a><a id="ovPhaseNone">Clear</a></div>';
+  available.filter(p=>p&&p!=='undefined'&&p!=='null').forEach(p => {
+    const checked = active.includes(p);
+    const label = p==='No Phase'?'📭 No Phase':p;
+    html += `<label class="phase-option ${checked?'selected':''}" data-phase="${encodeURIComponent(p)}" style="display:flex;align-items:center;gap:8px;padding:6px 12px;cursor:pointer;white-space:nowrap;">
+      <input type="checkbox" ${checked?'checked':''}><span dir="auto">${label}</span></label>`;
   });
   html += '</div></div>';
   cont.innerHTML = html;
 
-  // Wire dropdown toggle
   const toggle = document.getElementById('ovPhaseToggle');
-  const menu = document.getElementById('ovPhaseMenu');
-  toggle.addEventListener('click', (e) => {
+  const menu   = document.getElementById('ovPhaseMenu');
+  toggle.addEventListener('click', e => {
     e.stopPropagation();
-    menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
-    toggle.classList.toggle('open', menu.style.display === 'block');
+    menu.style.display = menu.style.display==='none'?'block':'none';
+    toggle.classList.toggle('open', menu.style.display==='block');
   });
-  document.addEventListener('click', (e) => {
+  document.addEventListener('click', e => {
     if (!document.getElementById('ovPhaseDropdown')?.contains(e.target)) {
-      menu.style.display = 'none';
-      toggle.classList.remove('open');
+      menu.style.display='none'; toggle.classList.remove('open');
     }
-  });
-
-  // Wire checkboxes
+  }, {capture:false});
   menu.querySelectorAll('.phase-option').forEach(opt => {
-    opt.addEventListener('click', (e) => {
+    opt.addEventListener('click', e => {
       e.stopPropagation();
       const phase = decodeURIComponent(opt.dataset.phase);
       const cb = opt.querySelector('input');
-      if (e.target !== cb) cb.checked = !cb.checked;
-      AppState.activePhases = AppState.activePhases || [];
-      if (cb.checked) {
-        if (!AppState.activePhases.includes(phase)) AppState.activePhases.push(phase);
-        opt.classList.add('selected');
-      } else {
-        AppState.activePhases = AppState.activePhases.filter(p => p !== phase);
-        opt.classList.remove('selected');
-      }
-      document.getElementById('ovPhaseLabel').textContent = phaseLabel(AppState.activePhases);
-      // Reload data with new filter
+      if (e.target!==cb) cb.checked=!cb.checked;
+      AppState.activePhases = AppState.activePhases||[];
+      if (cb.checked) { if(!AppState.activePhases.includes(phase)) AppState.activePhases.push(phase); opt.classList.add('selected'); }
+      else { AppState.activePhases=AppState.activePhases.filter(p=>p!==phase); opt.classList.remove('selected'); }
+      const a=AppState.activePhases;
+      document.getElementById('ovPhaseLabel').textContent = a.length===0||a.length===total?`All phases (${total})`:a.length===1?a[0]:`${a.length} of ${total} phases`;
       loadTaskAnalysis(phaseGroup);
     });
   });
-  menu.querySelector('#ovPhaseAll').addEventListener('click', (e) => {
-    e.stopPropagation();
-    AppState.activePhases = [...available];
-    loadTaskAnalysis(phaseGroup);
+  document.getElementById('ovPhaseAll').addEventListener('click', e => {
+    e.stopPropagation(); AppState.activePhases=[...available];
+    renderPhaseFilters(phaseGroup,available); loadTaskAnalysis(phaseGroup);
   });
-  menu.querySelector('#ovPhaseNone').addEventListener('click', (e) => {
-    e.stopPropagation();
-    AppState.activePhases = [];
-    loadTaskAnalysis(phaseGroup);
+  document.getElementById('ovPhaseNone').addEventListener('click', e => {
+    e.stopPropagation(); AppState.activePhases=[];
+    renderPhaseFilters(phaseGroup,available); loadTaskAnalysis(phaseGroup);
   });
 }
 
-function phaseLabel(phases) {
-  const total = (AppState.ovAnalysisData?.phases_available || []).length;
-  if (!phases || phases.length === 0) return 'No phase selected';
-  if (phases.length === 1) return phases[0];
-  if (phases.length === total) return `All phases (${total})`;
-  return `${phases.length} phases selected`;
+function phaseLabel(phases, total) {
+  const t=total||(AppState.ovAnalysisData?.phases_available||[]).length;
+  if(!phases||phases.length===0) return `All phases (${t})`;
+  if(phases.length===t) return `All phases (${t})`;
+  if(phases.length===1) return phases[0];
+  return `${phases.length} of ${t} phases`;
 }
 
 function renderEmployeeFilter(employees) {
@@ -1053,7 +1040,14 @@ function renderEmployeeFilter(employees) {
   html += '<a id="ovEmpAll">Select all</a>';
   html += '<a id="ovEmpNone">Clear</a>';
   html += '</div>';
-  employees.forEach(e => {
+  // Deduplicate employees (strip [EXX] prefix for comparison)
+  const empSeen = new Set();
+  const dedupedEmps = employees.filter(e => {
+    const key = e.replace(/^\[E\d+\]\s*/,'').toLowerCase().trim();
+    if (empSeen.has(key)) return false;
+    empSeen.add(key); return true;
+  });
+  dedupedEmps.forEach(e => {
     const checked = (AppState.activeEmployees || []).includes(e);
     html += `<label class="phase-option ${checked ? 'selected' : ''}" data-emp="${encodeURIComponent(e)}">
       <input type="checkbox" ${checked ? 'checked' : ''}>
@@ -1339,17 +1333,27 @@ function renderTaskList(phaseGroup) {
 
   rootTasks.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
+  const fKey=[search,typeFilter,statusFilter,(AppState.activeEmployees||[]).join(','),(AppState.activePhases||[]).join(',')].join('|');
+  if(AppState._taskFilterKey!==fKey){AppState._taskFilterKey=fKey;AppState._taskPage=0;}
+  if(!AppState._taskPage)AppState._taskPage=0;
+  AppState._lastPhaseGroup=phaseGroup;
+  const showN=(AppState._taskPage+1)*10, shown=rootTasks.slice(0,showN), rem=Math.max(0,rootTasks.length-showN);
+
   let html = `<div class="card">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-      <h3 class="card-title" style="margin:0;">Tasks <span class="muted-text">— ${matchedIds.size} match${matchedIds.size !== 1 ? 'es' : ''}${matchedIds.size < tasks.length ? ` · ${tasks.length - matchedIds.size} parent context` : ''}</span></h3>
-      <span class="muted-text" style="font-size: 11px;">Click parent to expand · Live from Odoo</span>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <h3 class="card-title" style="margin:0;">Tasks <span class="muted-text">— ${matchedIds.size} match${matchedIds.size!==1?'es':''}${matchedIds.size<tasks.length?` · ${tasks.length-matchedIds.size} parent context`:''}</span></h3>
+      <span class="muted-text" style="font-size:11px;">Click parent to expand · Live from Odoo</span>
     </div>
     <div class="task-analysis-list">`;
 
-  rootTasks.forEach(t => {
-    html += renderTaskBranch(t, 0);
-  });
+  shown.forEach(t=>{html+=renderTaskBranch(t,0);});
 
+  if(rem>0||AppState._taskPage>0){
+    html+=`<div style="display:flex;gap:8px;justify-content:center;padding:14px 0;">`;
+    if(rem>0)html+=`<button onclick="_ovLoadMore()" style="padding:6px 20px;border:1px solid var(--border);border-radius:6px;background:var(--bg-subtle);cursor:pointer;font-size:13px;font-weight:600;color:var(--navy);">Show 10 more <span style="color:var(--muted);font-size:12px;">(${rem} remaining)</span></button>`;
+    if(AppState._taskPage>0)html+=`<button onclick="_ovCollapse()" style="padding:6px 16px;border:1px solid var(--border);border-radius:6px;background:transparent;cursor:pointer;font-size:12px;color:var(--muted);">↑ Collapse to 10</button>`;
+    html+=`</div>`;
+  }
   html += `</div></div>`;
   cont.innerHTML = html;
 
@@ -1363,6 +1367,8 @@ function renderTaskList(phaseGroup) {
     });
   });
 }
+window._ovLoadMore=()=>{AppState._taskPage=(AppState._taskPage||0)+1;renderTaskList(AppState._lastPhaseGroup);};
+window._ovCollapse=()=>{AppState._taskPage=0;renderTaskList(AppState._lastPhaseGroup);};
 
 function renderTaskCard(t, childCount, depth, isMatched) {
   const hasChildren = childCount > 0;
