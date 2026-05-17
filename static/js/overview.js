@@ -1,2382 +1,1409 @@
-// variance.js v3.1 - unassigned hours check
-// Hide Travel & Promotions tabs from variance - they've moved to /manage
-(function hideLegacyTabs() {
-  const hidePhases = ['travel', 'promotions'];
-  function doHide() {
-    document.querySelectorAll('[data-phase]').forEach(el => {
-      if (hidePhases.includes(el.dataset.phase)) {
-        el.style.display = 'none';
-      }
-    });
-    // Also hide by text content
-    document.querySelectorAll('.phase-tab, .sub-tab, [data-phase]').forEach(el => {
-      const txt = (el.textContent || '').toLowerCase();
-      if (txt.includes('travel') || txt.includes('promotion')) {
-        el.style.display = 'none';
-      }
-    });
-  }
-  // Run on DOM ready and after any dynamic render
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', doHide);
-  } else {
-    doHide();
-  }
-  // Also observe for dynamic additions
-  const obs = new MutationObserver(doHide);
-  obs.observe(document.body, {childList: true, subtree: true});
-  setTimeout(doHide, 500); // fallback
+(function(){
+  var _b=null;
+  function _a(b){['services','missing','risks','roadmap'].forEach(function(t){var e=document.querySelector('.exec-tab[data-tab="'+t+'"]');if(e)e.style.display=b?'':'none';});}
+  async function _f(){try{var d=await fetch('/api/project-info').then(function(r){return r.json();});_b=d.is_bog!==false;if(window.AppState){if(!AppState._overviewData)AppState._overviewData={};AppState._overviewData.is_bog=_b;}_a(_b);}catch(e){}}
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',_f);else _f();
+  var obs=new MutationObserver(function(){if(_b===false)_a(false);});function s(){obs.observe(document.body||document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['style']});}
+  if(document.body)s();else document.addEventListener('DOMContentLoaded',s);
 })();
+/* Overview tab — Roadmap KPIs + Tasks Analysis with multi-phase + employee filter */
 
-
-window.exportVariancePMO = async function() {
-  var btn=document.getElementById('varianceExport');
-  var orig=btn?btn.textContent:'';
-  if(btn){btn.textContent='⏳ Generating...';btn.disabled=true;}
-  try{
-    var isBog=!AppState._overviewData||AppState._overviewData.is_bog!==false;
-    var phaseKeys=isBog?['development','consultation']:['services','support'];
-    var phases=phaseKeys.map(function(k){
-      var ld=AppState._latestProfData&&AppState._latestProfData[k]||{};
-      return{phase:k,latestData:Object.assign({},ld,{
-        totalRevSAR:AppState._savedRevenue&&AppState._savedRevenue[k]||ld.totalRevSAR||0,
-        totalEstCostSAR:AppState._budgetFinalCost&&AppState._budgetFinalCost[k]||0,
-        totalEstMDs:AppState._budgetFinalMDs&&AppState._budgetFinalMDs[k]||0,
-      }),months:(AppState._varianceMonthData&&AppState._varianceMonthData[k])||[]};
-    });
-    var body={project_name:(AppState._overviewData&&AppState._overviewData.project_name)||document.title||'Project',generated:new Date().toISOString().slice(0,10),phases:phases};
-    var res=await fetch('/api/variance/export-pmo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    if(!res.ok){var err=await res.text();throw new Error('Server error '+res.status+': '+err.slice(0,200));}
-    var blob=await res.blob();var url=URL.createObjectURL(blob);
-    var a=document.createElement('a');a.href=url;
-    var cd=res.headers.get('Content-Disposition')||'';
-    a.download=(cd.match(/filename="?([^"]+)"?/)||[])[1]||'variance_report.xlsx';
-    document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
-  }catch(e){alert('Export failed: '+e.message);}
-  finally{if(btn){btn.textContent=orig||'⬇ Export Excel';btn.disabled=false;}}
-};
-
-function profFillFromTasks(phaseKey) {
-  const remMD = AppState._taskRemainingMDs && AppState._taskRemainingMDs[phaseKey];
-  if (!remMD) {
-    alert('No Tasks Analysis data found — open the Overview tab first and let it load, then come back here.');
-    return;
-  }
-  // Set remaining in the LAST row that has actual effort (not 0)
-  const table = document.getElementById(`profit-table-${phaseKey}`);
-  if (!table) return;
-  const rows = Array.from(table.querySelectorAll('tr[data-month-key]'));
-  // Find last row with actual MDs
-  let targetRow = rows[rows.length - 1];
-  for (let i = rows.length - 1; i >= 0; i--) {
-    const effortMDs = (AppState._effortMonthMDs && AppState._effortMonthMDs[phaseKey]) || {};
-    const mk = rows[i].dataset.monthKey;
-    if ((effortMDs[mk] || 0) > 0) { targetRow = rows[i]; break; }
-  }
-  if (!targetRow) return;
-  const remInp = targetRow.querySelector('.remaining-input');
-  if (remInp) {
-    remInp.value = remMD.toFixed(2);
-    remInp.dispatchEvent(new Event('blur'));
-  }
-  profRecomputeAll(phaseKey);
-  // Flash feedback
-  const btn = document.querySelector(`[onclick="profFillFromTasks('${phaseKey}')"]`);
-  if (btn) { btn.textContent = '✓ Filled!'; btn.style.color='var(--green)'; setTimeout(()=>{btn.textContent='📋 Fill from Tasks';btn.style.color='';},2000); }
-}
-
-/* Variance tab — mirrors variance.xlsx with sub-tabs */
-
-
-async function fetchEffortCached(phaseKey) {
-  var ckey='_eff_'+phaseKey+'_'+(window._activeProjectId||'');
-  try{var hit=sessionStorage.getItem(ckey);if(hit){var d=JSON.parse(hit);if(d&&d.months&&d.months.length)return d;}}catch(e){}
-  var res=await fetch('/api/effort/'+phaseKey+'/all-months');
+// ─── Effort cache + KPI snapshot ─────────────────────────────────────
+async function _fetchEffortCached(phase) {
+  const key='_eff_'+phase+'_'+(AppState._overviewData?.project_id||window._activeProjectId||'');
+  try{const h=sessionStorage.getItem(key);if(h){const d=JSON.parse(h);if(d?.months?.length)return d;}}catch(e){}
+  const res=await fetch('/api/effort/'+phase+'/all-months');
   if(!res.ok)throw new Error('Effort API '+res.status);
-  var d=await res.json();
-  try{sessionStorage.setItem(ckey,JSON.stringify(d));}catch(e){}
+  const d=await res.json();
+  try{sessionStorage.setItem(key,JSON.stringify(d));}catch(e){}
   return d;
 }
+function _saveKPISnapshot(phase,data){try{sessionStorage.setItem('_kpi_'+phase,JSON.stringify(data));}catch(e){}}
+function _loadKPISnapshot(phase){try{const h=sessionStorage.getItem('_kpi_'+phase);return h?JSON.parse(h):null;}catch(e){return null;}}
 
-window.loadVariance = async function() {
-  if(AppState._overviewData&&AppState._overviewData.project_id)window._activeProjectId=AppState._overviewData.project_id;
-  if (!AppState.loaded.variance) {
-    AppState.loaded.variance = true;
-    // Pre-load all phases after current one renders
-    setTimeout(async function(){
-      var isBog2=!AppState._overviewData||AppState._overviewData.is_bog!==false;
-      var all=isBog2?['development','consultation']:['services','support'];
-      var currentTab=document.querySelector('.sub-tab.active');
-      var currentKey=currentTab?currentTab.dataset.subtab:all[0];
-      for(var i=0;i<all.length;i++){
-        var ph=all[i];
-        if(ph!==currentKey&&(!AppState._varianceMonthData||!AppState._varianceMonthData[ph])){
-          try{await switchSubTab(ph);}catch(e){console.warn('pre-load',ph,e);}
-        }
-      }
-      // Restore original tab
-      try{await switchSubTab(currentKey);}catch(e){}
-    },2000);
-    var _vBtn=document.getElementById('varianceExport');
-    if(!_vBtn){_vBtn=document.createElement('button');_vBtn.id='varianceExport';_vBtn.textContent='⬇ Export Excel';_vBtn.style.cssText='position:fixed;bottom:24px;right:24px;z-index:999;padding:10px 20px;background:#1B2A4E;color:white;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.3)';document.body.appendChild(_vBtn);}
-    _vBtn.style.display='block';
-    _vBtn.onclick=function(){window.exportVariancePMO();};
-    document.querySelectorAll('.sub-tab').forEach(b => {
-      b.addEventListener('click', () => switchSubTab(b.dataset.subtab));
-    });
-    // Pre-load positions list
-    try {
-      const pres = await fetch('/api/positions');
-      const pd = await pres.json();
-      AppState.positions = pd.positions || [];
-    } catch (e) {
-      AppState.positions = [];
-    }
-  }
+window.loadOverview = async function() {
+  if (!AppState.loaded.overview) {
+    AppState.loaded.overview = true;
+    AppState.currentOverviewPhase = 'development';
+    AppState.expandedTasks = new Set();
+    AppState.activePhases = null; // null = use defaults
 
-  const cont = document.getElementById('varianceContent');
-  cont.innerHTML = '<div class="loading">Loading variance data…</div>';
-
-  // Check if this is BOG project (has variance.xlsx) or another project
-  const isBog = AppState._overviewData?.is_bog !== false;
-
-  // Update sub-tab buttons based on project type
-  const subTabBar = document.querySelector('#variance .sub-tabs-bar');
-  if (subTabBar) {
-    if (isBog) {
-      // BOG: Development / Consultation / Support / Travel / Promotions
-      subTabBar.innerHTML = `
-        <button class="sub-tab active" data-subtab="development">Development</button>
-        <button class="sub-tab" data-subtab="consultation">Consultation</button>
-        <button class="sub-tab" data-subtab="support">Support</button>
-        <button class="sub-tab" data-subtab="travel">Travel &amp; Onsite</button>
-        <button class="sub-tab" data-subtab="promotions">🎯 Promotions</button>`;
-    } else {
-      // Non-BOG: Services / Support (support shown after phase check)
-      subTabBar.innerHTML = `
-        <button class="sub-tab active" data-subtab="services">Services</button>
-        <button class="sub-tab" data-subtab="support">Support</button>`;
-    }
-    // Re-wire tab click handlers
-    subTabBar.querySelectorAll('.sub-tab').forEach(b => {
+    document.querySelectorAll('#overviewSubTabs .sub-tab').forEach(b => {
       b.addEventListener('click', () => {
-        subTabBar.querySelectorAll('.sub-tab').forEach(x => x.classList.remove('active'));
-        b.classList.add('active');
-        switchSubTab(b.dataset.subtab);
+        const phase = b.dataset.ovphase;
+        AppState.currentOverviewPhase = phase;
+        AppState.activePhases = null; // reset to defaults
+        AppState.activeEmployees = [];
+        document.querySelectorAll('#overviewSubTabs .sub-tab').forEach(x =>
+          x.classList.toggle('active', x.dataset.ovphase === phase));
+        loadTaskAnalysis(phase);
       });
     });
+
+    document.getElementById('ovTaskSearch').addEventListener('input', () =>
+      renderTaskList(AppState.currentOverviewPhase));
+    document.getElementById('ovTaskType').addEventListener('change', () =>
+      renderTaskList(AppState.currentOverviewPhase));
+    document.getElementById('ovTaskStatus').addEventListener('change', () =>
+      renderTaskList(AppState.currentOverviewPhase));
   }
 
-  if (!isBog) {
-    // Non-BOG: fetch config FIRST, then build tabs
-    cont.innerHTML = '<div class="loading">Loading…</div>';
-    let hasSupport = false;
-    try {
-      const cfg = await fetch('/api/project-phases-available').then(r=>r.json());
-      hasSupport = !!cfg.has_support;
-    } catch(e) {}
+  await loadOverviewKPIs();
+  await loadTaskAnalysis(AppState.currentOverviewPhase);
 
-    const _sections = () => ([
-      {key:'budget',        label:'Budget',        data:{approved:{},final:{},changes:[]}},
-      {key:'profitability', label:'Profitability',  data:{months:[]}},
-      {key:'effort',        label:'Current Effort', data:{}},
-      {key:'estimated',     label:'Estimated Cost', data:{positions:[],columns:[]}},
-    ]);
-
-    const tabs = { services: { label:'Services', sections: _sections() } };
-    if (hasSupport) tabs.support = { label:'Support', sections: _sections() };
-    AppState.varianceData = { tabs };
-
-    // Rebuild sub-tab buttons based on actual config
-    const subTabBar = document.querySelector('#variance .sub-tabs-bar');
-    if (subTabBar) {
-      subTabBar.innerHTML = `
-        <button class="sub-tab active" data-subtab="services">Services</button>
-        ${hasSupport ? '<button class="sub-tab" data-subtab="support">Support</button>' : ''}`;
-      subTabBar.querySelectorAll('.sub-tab').forEach(b => {
-        b.addEventListener('click', () => {
-          subTabBar.querySelectorAll('.sub-tab').forEach(x => x.classList.remove('active'));
-          b.classList.add('active');
-          switchSubTab(b.dataset.subtab);
-        });
-      });
-    }
-
-    switchSubTab('services');
-    return;
-  }
-
-  try {
-    const res = await fetch('/api/variance');
-    const d = await res.json();
-    if (!d.available) {
-      cont.innerHTML = '<div class="banner banner-warn"><strong>Not configured:</strong> variance.xlsx not found in /data folder. Budget & Profitability still available below.</div>';
-      AppState.varianceData = { tabs: {
-        development: { label:'Development', sections:[
-          {key:'budget', label:'Budget', data:{approved:{},final:{},changes:[]}},
-          {key:'profitability', label:'Profitability', data:{months:[]}},
-          {key:'effort', label:'Current Effort', data:{}},
-          {key:'estimated', label:'Estimated Cost', data:{positions:[],columns:[]}},
-        ]},
-        consultation: { label:'Consultation', sections:[
-          {key:'budget', label:'Budget', data:{approved:{},final:{},changes:[]}},
-          {key:'profitability', label:'Profitability', data:{months:[]}},
-          {key:'effort', label:'Current Effort', data:{}},
-          {key:'estimated', label:'Estimated Cost', data:{positions:[],columns:[]}},
-        ]},
-        support: { label:'Support', sections:[
-          {key:'budget', label:'Budget', data:{approved:{},final:{},changes:[]}},
-          {key:'estimated', label:'Estimated Cost', data:{positions:[],columns:[]}},
-        ]},
-      }};
-      switchSubTab('development');
-      return;
-    }
-    AppState.varianceData = d;
-    switchSubTab('development');
-  } catch(e) {
-    cont.innerHTML = `<div class="banner banner-warn"><strong>Error loading variance:</strong> ${e.message}</div>`;
-  }
+  // Tags wiring
+  AppState.currentTagPhase = AppState.currentTagPhase || 'development';
+  AppState.activeTagPhases = null;
+  AppState.expandedTags = AppState.expandedTags || new Set();
+  document.querySelectorAll('#tagSubTabs .sub-tab').forEach(b => {
+    b.addEventListener('click', () => {
+      const ph = b.dataset.tagphase;
+      AppState.currentTagPhase = ph;
+      AppState.activeTagPhases = null;
+      document.querySelectorAll('#tagSubTabs .sub-tab').forEach(x =>
+        x.classList.toggle('active', x.dataset.tagphase === ph));
+      loadTagsAnalysis();
+    });
+  });
+  await loadTagsAnalysis();
 };
 
-function switchSubTab(key) {
-  document.querySelectorAll('.sub-tab').forEach(b => {
-    b.classList.toggle('active', b.dataset.subtab === key);
-  });
-  if (key === 'travel') {
-    renderTravelSubTab();
-  } else if (key === 'promotions') {
-    renderPromotionsSubTab();
-  } else {
-    renderVarianceSubTab(key);
+async function loadTagsAnalysis() {
+  const cont = document.getElementById('ovTagsContent');
+  const summary = document.getElementById('ovTagsSummary');
+  if (!cont) return;
+  cont.innerHTML = '<div class="loading">Loading tags from Odoo…</div>';
+
+  const phaseGroup = AppState.currentTagPhase || 'development';
+  const params = new URLSearchParams();
+  params.set('phase_group', phaseGroup);
+  if (AppState.activeTagPhases && AppState.activeTagPhases.length) {
+    params.set('phases', AppState.activeTagPhases.join(','));
+  }
+
+  try {
+    const res = await fetch('/api/overview/tags-analysis?' + params.toString());
+    const d = await res.json();
+
+    if (!d.connected) {
+      cont.innerHTML = `<div class="banner banner-warn"><strong>${d.error || 'Odoo unreachable'}</strong></div>`;
+      summary.innerHTML = '';
+      return;
+    }
+
+    // No phases found for this tab
+    if (d.no_phases) {
+      cont.innerHTML = `<div class="card" style="padding:24px;text-align:center;color:var(--text-muted);">
+        <div style="font-size:28px;margin-bottom:8px;">📭</div>
+        <div style="font-size:13px;font-weight:600;color:var(--text);">No ${phaseGroup} phases found</div>
+        <div style="font-size:11px;margin-top:6px;max-width:400px;margin-inline:auto;">${d.note || 'No tasks assigned to phases matching ' + phaseGroup + ' keywords'}</div>
+      </div>`;
+      summary.innerHTML = '';
+      return;
+    }
+
+    AppState.tagsData = d;
+    if (!AppState.activeTagPhases) AppState.activeTagPhases = d.phases_active || [];
+
+    const isBogTags = AppState._overviewData?.is_bog !== false;
+    renderTagPhaseFilters(phaseGroup, d.phases_available || []);
+    if (!isBogTags && (!d.phases_available || !d.phases_available.length)) {
+      AppState.activeTagPhases = null;
+    } else if (!isBogTags && d.phases_available?.length) {
+      if (!AppState.activeTagPhases || AppState.activeTagPhases.length === 0) {
+        AppState.activeTagPhases = [...d.phases_available];
+      }
+    }
+
+    if (!d.tags || !d.tags.length) {
+      cont.innerHTML = '<div class="card"><div class="loading">No tagged tasks found in this phase.</div></div>';
+      summary.innerHTML = '';
+      return;
+    }
+
+    const s = d.summary;
+    summary.innerHTML = `
+      <div class="kpi-strip kpi-strip-small" style="margin-bottom: 16px;">
+        <div class="kpi-card kpi-blue compact">
+          <div class="kpi-label">TOTAL TAGS</div>
+          <div class="kpi-value">${s.total_tags || 0}</div>
+        </div>
+        <div class="kpi-card kpi-navy compact">
+          <div class="kpi-label">PLANNED</div>
+          <div class="kpi-value">${fmt.num(s.total_planned || 0)}<span class="kpi-unit">h</span></div>
+        </div>
+        <div class="kpi-card kpi-green compact">
+          <div class="kpi-label">ACTUAL</div>
+          <div class="kpi-value">${fmt.num(s.total_actual || 0)}<span class="kpi-unit">h</span></div>
+        </div>
+        <div class="kpi-card kpi-amber compact">
+          <div class="kpi-label">REMAINING</div>
+          <div class="kpi-value">${fmt.num(s.total_remaining || 0)}<span class="kpi-unit">h</span></div>
+        </div>
+      </div>
+    `;
+
+    let html = `<div class="card"><h3 class="card-title" style="margin-bottom: 12px;">Tags Breakdown <span class="muted-text">— click a tag to see per-task breakdown</span></h3><div class="tags-grid">`;
+
+    d.tags.forEach(tag => {
+      const p = tag.progress_pct || 0;
+      let progressColor;
+      if (p === 0) progressColor = '#9CA3AF';
+      else if (p >= 100) progressColor = '#10B981';
+      else if (p >= 75) progressColor = '#10B981';
+      else if (p >= 40) progressColor = '#F59E0B';
+      else progressColor = '#3B82F6';
+
+      const widthBar = Math.min(100, p);
+      const tagColorClass = tag.color ? `tag-color-${tag.color}` : 'tag-color-default';
+      const empPills = (tag.top_employees || []).slice(0, 4).map(e =>
+        `<span class="alloc-pill-mini" title="${e.hours}h">${e.name} <small>${fmt.decimal(e.hours)}h</small></span>`
+      ).join('');
+      const moreEmpCount = Math.max(0, (tag.employees_count || 0) - 4);
+      const isExpanded = AppState.expandedTags.has(tag.tag_id);
+
+      html += `
+        <div class="tag-card ${isExpanded ? 'tag-card-expanded' : ''}">
+          <div class="tag-card-head" data-tag-toggle="${tag.tag_id}" style="cursor: pointer;">
+            <div class="tag-name-block">
+              <div class="tag-name-row">
+                <span class="tag-pill ${tagColorClass}">🏷️ ${tag.name}</span>
+                <span class="tag-task-count">${tag.tasks_count} task${tag.tasks_count !== 1 ? 's' : ''}</span>
+                <span class="tag-expand-arrow">${isExpanded ? '▼' : '▶'}</span>
+              </div>
+            </div>
+            <div class="tag-progress-num" style="color: ${progressColor};">
+              ${fmt.decimal(p)}<small>%</small>
+            </div>
+          </div>
+          <div class="tcc-progress-bar">
+            <div class="tcc-progress-fill" style="width: ${widthBar}%; background: ${progressColor};"></div>
+          </div>
+          <div class="tag-stats">
+            <div class="tag-stat">
+              <div class="tag-stat-lbl">PLANNED</div>
+              <div class="tag-stat-val">${fmt.decimal(tag.planned_hours)}<small>h</small></div>
+              <div class="tag-stat-sub">${fmt.decimal(tag.planned_days)}d</div>
+            </div>
+            <div class="tag-stat">
+              <div class="tag-stat-lbl">ACTUAL</div>
+              <div class="tag-stat-val" style="color: ${progressColor};">${fmt.decimal(tag.actual_hours)}<small>h</small></div>
+              <div class="tag-stat-sub">${fmt.decimal(tag.actual_days)}d</div>
+            </div>
+            <div class="tag-stat">
+              <div class="tag-stat-lbl">REMAINING</div>
+              <div class="tag-stat-val">${fmt.decimal(tag.remaining_hours)}<small>h</small></div>
+            </div>
+          </div>
+          ${empPills ? `
+            <div class="tag-employees">
+              <div class="tag-emp-label">Contributors (${tag.employees_count}):</div>
+              <div class="tag-emp-list">
+                ${empPills}
+                ${moreEmpCount ? `<span class="tcc-more">+${moreEmpCount}</span>` : ''}
+              </div>
+            </div>
+          ` : ''}
+          ${isExpanded && tag.tasks ? `
+            <div class="tag-tasks-list">
+              <div class="tag-tasks-header">📋 Tasks under this tag (${tag.tasks.length}):</div>
+              ${tag.tasks.map(t => {
+                const tp = t.planned_hours > 0 ? Math.min(100, t.actual_hours / t.planned_hours * 100) : 0;
+                const tc = tp >= 100 ? '#10B981' : tp >= 75 ? '#10B981' : tp >= 40 ? '#F59E0B' : '#3B82F6';
+                const tEmps = (t.employees || []).slice(0, 3).map(e =>
+                  `<span class="alloc-pill-mini">${e.name} ${fmt.decimal(e.hours)}h</span>`).join('');
+                return `
+                  <div class="tag-task-row">
+                    <div class="tag-task-name" dir="auto">${t.name}</div>
+                    <div class="tag-task-stats">
+                      <span class="tag-task-stat">P: <b>${fmt.decimal(t.planned_hours)}h</b></span>
+                      <span class="tag-task-stat">A: <b style="color: ${tc};">${fmt.decimal(t.actual_hours)}h</b></span>
+                      <span class="tag-task-stat">${fmt.decimal(tp)}%</span>
+                    </div>
+                    ${tEmps ? `<div class="tag-task-emps">${tEmps}</div>` : ''}
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          ` : ''}
+        </div>
+      `;
+    });
+
+    html += '</div></div>';
+    cont.innerHTML = html;
+
+    // Wire tag expand/collapse
+    cont.querySelectorAll('[data-tag-toggle]').forEach(el => {
+      el.addEventListener('click', () => {
+        const id = parseInt(el.dataset.tagToggle);
+        if (AppState.expandedTags.has(id)) AppState.expandedTags.delete(id);
+        else AppState.expandedTags.add(id);
+        loadTagsAnalysis();
+      });
+    });
+  } catch (e) {
+    cont.innerHTML = `<div class="banner banner-warn"><strong>Error:</strong> ${e.message}</div>`;
   }
 }
 
-function renderVarianceSubTab(key) {
-  const cont = document.getElementById('varianceContent');
-  const tab = AppState.varianceData?.tabs?.[key];
-  if (!tab) {
-    cont.innerHTML = '<div class="loading">No data for this tab</div>';
-    return;
-  }
+function renderTagPhaseFilters(phaseGroup, available) {
+  const cont = document.getElementById('tagPhaseFilters');
+  if (!cont) return;
+  if (!available.length) { cont.innerHTML = ''; return; }
 
-  let html = '';
-  // Section nav within sub-tab
-  html += '<div class="section-nav-pills">';
-  tab.sections.forEach((s, i) => {
-    html += `<a href="#section-${key}-${s.key}" class="section-pill">${s.label}</a>`;
+  let html = '<label class="filter-label">PHASES (multi-select)</label>';
+  html += '<div class="phase-dropdown" id="tagPhaseDropdown">';
+  html += '<button type="button" class="phase-toggle" id="tagPhaseToggle">';
+  html += `<span id="tagPhaseLabel">${tagPhaseLabel(AppState.activeTagPhases || [], available.length)}</span>`;
+  html += '<span style="margin-left:8px; color: var(--text-muted);">▼</span>';
+  html += '</button>';
+  html += '<div class="phase-menu" id="tagPhaseMenu" style="display:none;">';
+  html += '<div class="phase-menu-actions"><a id="tagPhaseAll">Select all</a><a id="tagPhaseNone">Clear</a></div>';
+  available.filter(p => p && p !== 'undefined' && p !== 'null').forEach(p => {
+    const checked = (AppState.activeTagPhases || []).includes(p);
+    const label = p === 'No Phase' ? '📭 No Phase' : p;
+    html += `<label class="phase-option ${checked ? 'selected' : ''}" data-phase="${encodeURIComponent(p)}">
+      <input type="checkbox" ${checked ? 'checked' : ''}><span dir="auto">${label}</span>
+    </label>`;
   });
-  html += '</div>';
-
-  tab.sections.forEach(sect => {
-    html += `<div class="variance-section" id="section-${key}-${sect.key}">`;
-    html += `<div class="section-bar"><span class="section-num">${sect.label.charAt(0)}</span><h2>${sect.label}</h2><span class="section-source">${sect.sheet || ''}</span></div>`;
-
-    if (sect.error) {
-      html += `<div class="banner banner-warn"><strong>Parse error:</strong> ${sect.error}</div>`;
-    } else if (sect.data) {
-      try {
-        if (sect.key === 'budget') html += renderBudget(sect.data, key);
-        else if (sect.key === 'profitability') html += renderProfitability(sect.data, key);
-        else if (sect.key === 'effort') html += renderEffort(sect.data, key);
-        else if (sect.key === 'estimated') html += renderEstimated(sect.data, key);
-      } catch(e) {
-        html += `<div class="banner banner-warn"><strong>Render error (${sect.key}):</strong> ${e.message}</div>`;
-        console.error('Render error:', sect.key, e);
-      }
-    }
-    html += '</div>';
-  });
-
+  html += '</div></div>';
   cont.innerHTML = html;
 
-  // Wire up auto-save for any budget inputs
-  wireBudgetInputs(cont);
+  const toggle = document.getElementById('tagPhaseToggle');
+  const menu = document.getElementById('tagPhaseMenu');
+  toggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+    toggle.classList.toggle('open', menu.style.display === 'block');
+  });
+  document.addEventListener('click', (e) => {
+    if (!document.getElementById('tagPhaseDropdown')?.contains(e.target)) {
+      menu.style.display = 'none';
+      toggle.classList.remove('open');
+    }
+  });
 
-  // Load order: Effort first (has cost/MDs data), then everything that depends on it
-  const effortContainerId = `effort-live-${key}`;
-
-  // Step 1: Load effort (contains MDs + costs per month)
-  if (tab.sections.some(s => s.key === 'effort')) {
-    setTimeout(async () => {
-      await loadEffortLive(key, effortContainerId);
-      // Step 2: After effort loads, load estimated (contains total MDs + total cost)
-      if (tab.sections.some(s => s.key === 'estimated')) {
-        const wrap = document.getElementById('estimatedLiveWrap');
-        if (wrap) await loadEstimatedLive(key, 'estimatedLiveWrap');
+  menu.querySelectorAll('.phase-option').forEach(opt => {
+    opt.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const phase = decodeURIComponent(opt.dataset.phase);
+      const cb = opt.querySelector('input');
+      if (e.target !== cb) cb.checked = !cb.checked;
+      AppState.activeTagPhases = AppState.activeTagPhases || [];
+      if (cb.checked) {
+        if (!AppState.activeTagPhases.includes(phase)) AppState.activeTagPhases.push(phase);
+        opt.classList.add('selected');
+      } else {
+        AppState.activeTagPhases = AppState.activeTagPhases.filter(p => p !== phase);
+        opt.classList.remove('selected');
       }
-      // Step 3: After estimated loads, recalc budget
-      if (tab.sections.some(s => s.key === 'budget')) {
-        budgetAutoCalc(key);
-      }
-      // Step 4: Rebuild profitability with fresh data
-      if (tab.sections.some(s => s.key === 'profitability')) {
-        profBuildTable(key);
-      }
-    }, 100);
-  }
-
-  // Load budget changes + revenue (independent of effort)
-  if (tab.sections.some(s => s.key === 'budget')) {
-    setTimeout(() => loadBudgetChanges(key), 150);
-  }
-
-  // Estimated standalone (if no effort section)
-  if (!tab.sections.some(s => s.key === 'effort') && tab.sections.some(s => s.key === 'estimated')) {
-    setTimeout(() => {
-      const wrap = document.getElementById('estimatedLiveWrap');
-      if (wrap) loadEstimatedLive(key, 'estimatedLiveWrap');
-    }, 200);
-  }
+      document.getElementById('tagPhaseLabel').textContent = tagPhaseLabel(AppState.activeTagPhases, available.length);
+      loadTagsAnalysis();
+    });
+  });
+  menu.querySelector('#tagPhaseAll').addEventListener('click', (e) => {
+    e.stopPropagation();
+    AppState.activeTagPhases = [...available];
+    loadTagsAnalysis();
+  });
+  menu.querySelector('#tagPhaseNone').addEventListener('click', (e) => {
+    e.stopPropagation();
+    AppState.activeTagPhases = [];
+    loadTagsAnalysis();
+  });
 }
 
-function renderBudget(data, phaseKey) {
-  const a = data.approved || {};
-  const f = data.final || {};
-
-  function editableCell(value, path, type, autoId) {
-    const v = value === null || value === undefined ? '' : value;
-    const step = type === 'pct' ? '0.0001' : '0.01';
-    const cls = type === 'pct' ? 'budget-input budget-input-pct' : 'budget-input';
-    const id = autoId ? `id="${autoId}"` : '';
-    return `<input type="number" step="${step}" class="${cls}" ${id} data-phase="${phaseKey}" data-path="${path}" value="${v}"
-      oninput="budgetAutoCalc('${phaseKey}')"
-      onblur="budgetSaveRevenue('${phaseKey}')">`;
-  }
-
-  const overrideBadge = data._has_overrides
-    ? '<span class="badge badge-blue" style="margin-left:8px;">Has saved overrides</span>' : '';
-
-  // KPI strip
-  let html = `
-    <div class="kpi-strip kpi-strip-small">
-      <div class="kpi-card kpi-blue compact">
-        <div class="kpi-label">PRESALES MDs (FINAL)</div>
-        <div class="kpi-value" id="kpi-mds-${phaseKey}">${fmt.num(a.total_mandays || 0)}</div>
-        <div class="kpi-foot">from Estimated Cost</div>
-      </div>
-      <div class="kpi-card kpi-navy compact">
-        <div class="kpi-label">REVENUE (FINAL)</div>
-        <div class="kpi-value" id="kpi-rev-${phaseKey}">—</div>
-        <div class="kpi-foot">after changes</div>
-      </div>
-      <div class="kpi-card kpi-navy compact">
-        <div class="kpi-label">TOTAL COST (FINAL)</div>
-        <div class="kpi-value" id="kpi-cost-${phaseKey}">—</div>
-        <div class="kpi-foot">after changes</div>
-      </div>
-      <div class="kpi-card kpi-green compact">
-        <div class="kpi-label">PROFIT % (FINAL)</div>
-        <div class="kpi-value" id="kpi-final-pct-${phaseKey}">—</div>
-        <div class="kpi-foot" id="kpi-final-sar-${phaseKey}" style="font-size:13px;font-weight:700;color:inherit;">—</div>
-      </div>
-    </div>
-
-    <div class="card" style="margin-bottom:12px;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-        <h3 class="card-title" style="margin:0;">Budget — Editable ${overrideBadge}</h3>
-        <span style="font-size:11px; color:var(--text-muted);">All fields auto-save on edit · Profit auto-calculated</span>
-      </div>
-    </div>
-
-    <div class="grid-2">
-      <!-- APPROVED -->
-      <div class="card budget-card" style="border-top: 3px solid var(--blue);">
-        <h3 class="card-title" style="margin-bottom:20px;">Approved Project Budget</h3>
-
-        <div style="display:flex; flex-direction:column; gap:14px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:10px; border-bottom:1px solid var(--border-light);">
-            <span style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Total Mandays</span>
-            <span style="font-size:16px; font-weight:700; color:var(--navy);" id="bud-mds-${phaseKey}">${fmt.num(a.total_mandays || 0)}</span>
-          </div>
-          <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:10px; border-bottom:1px solid var(--border-light);">
-            <span style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Total Cost (USD)</span>
-            <span style="font-size:16px; font-weight:700; color:var(--navy);" id="bud-cost-usd-${phaseKey}">$${fmtExact(a.cost_usd || 0)}</span>
-          </div>
-          <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:10px; border-bottom:1px solid var(--border-light);">
-            <span style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Total Cost (SAR)</span>
-            <span style="font-size:16px; font-weight:700; color:var(--navy);" id="bud-cost-sar-${phaseKey}">${fmt.money(a.cost_sar || 0)}</span>
-          </div>
-          <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:10px; border-bottom:1px solid var(--border-light);">
-            <span style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Total Revenue (SAR)</span>
-            <span>${editableCell(a.revenue_sar, 'approved.revenue_sar', 'money', `inp-rev-${phaseKey}`)}</span>
-          </div>
-          <div style="display:flex; justify-content:space-between; align-items:center; padding:12px; background:var(--bg-subtle); border-radius:8px;">
-            <span style="font-size:13px; font-weight:700; color:var(--navy);">Profit (SAR)</span>
-            <span style="font-size:22px; font-weight:800;" id="bud-profit-sar-${phaseKey}">—</span>
-          </div>
-          <div style="display:flex; justify-content:space-between; align-items:center; padding:12px; background:var(--bg-subtle); border-radius:8px;">
-            <span style="font-size:13px; font-weight:700; color:var(--navy);">Profit %</span>
-            <span style="font-size:22px; font-weight:800;" id="bud-profit-pct-${phaseKey}">—</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- FINAL -->
-      <div class="card budget-card" style="border-top: 3px solid var(--amber);">
-        <h3 class="card-title" style="margin-bottom:20px;">Final Budget <span class="badge badge-amber">After Changes</span></h3>
-
-        <div style="display:flex; flex-direction:column; gap:14px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:10px; border-bottom:1px solid var(--border-light);">
-            <span style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Total Cost (SAR)</span>
-            <span style="font-size:16px; font-weight:700; color:var(--navy);" id="fin-cost-sar-${phaseKey}">—</span>
-          </div>
-          <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:10px; border-bottom:1px solid var(--border-light);">
-            <span style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Total Revenue (SAR)</span>
-            <span style="font-size:16px; font-weight:700; color:var(--navy);" id="fin-rev-sar-${phaseKey}">—</span>
-          </div>
-          <div id="fin-delta-cost-row-${phaseKey}" style="display:none; justify-content:space-between; align-items:center; padding-bottom:10px; border-bottom:1px solid var(--border-light);">
-            <span style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Δ Cost (SAR)</span>
-            <span style="font-size:16px; font-weight:700;" id="fin-delta-cost-${phaseKey}">—</span>
-          </div>
-          <div id="fin-delta-rev-row-${phaseKey}" style="display:none; justify-content:space-between; align-items:center; padding-bottom:10px; border-bottom:1px solid var(--border-light);">
-            <span style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase;">Δ Revenue (SAR)</span>
-            <span style="font-size:16px; font-weight:700;" id="fin-delta-rev-${phaseKey}">—</span>
-          </div>
-          <div style="display:flex; justify-content:space-between; align-items:center; padding:12px; background:var(--bg-subtle); border-radius:8px;">
-            <span style="font-size:13px; font-weight:700; color:var(--navy);">Profit (SAR)</span>
-            <span style="font-size:22px; font-weight:800;" id="fin-profit-sar-${phaseKey}">—</span>
-          </div>
-          <div style="display:flex; justify-content:space-between; align-items:center; padding:12px; background:var(--bg-subtle); border-radius:8px;">
-            <span style="font-size:13px; font-weight:700; color:var(--navy);">Profit %</span>
-            <span style="font-size:22px; font-weight:800;" id="fin-profit-pct-${phaseKey}">—</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- APPROVED BUDGET CHANGES -->
-    <div class="card" id="budget-changes-card-${phaseKey}">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
-        <div>
-          <h3 class="card-title" style="margin:0;">Approved Budget Changes</h3>
-          <p class="muted-text" style="font-size:11px; margin:4px 0 0;">Changes to cost or revenue vs. approved baseline · auto-saved</p>
-        </div>
-        <button class="btn-primary" style="font-size:12px; padding:6px 14px;" onclick="budgetAddChange('${phaseKey}')">+ Add Change</button>
-      </div>
-      <div id="budget-changes-body-${phaseKey}"></div>
-    </div>
-  `;
-
-  return html;
+function tagPhaseLabel(phases, total) {
+  if (!phases || phases.length === 0) return 'No phase selected';
+  if (phases.length === 1) return phases[0];
+  if (phases.length === total) return `All phases (${total})`;
+  return `${phases.length} phases selected`;
 }
 
-// ── Budget Changes state ──
-const _budgetChanges = {};  // { phaseKey: [{id, reason, plan_id, delta_cost, delta_rev}] }
-
-async function loadBudgetChanges(phaseKey) {
-  // Load changes
+async function loadOverviewKPIs() {
+  // ── 1. Overview API (Odoo project + Variance) ──────────────────────
   try {
-    const r = await fetch(`/api/budget-changes?phase=${phaseKey}`);
-    if (r.ok) {
-      const d = await r.json();
-      _budgetChanges[phaseKey] = d.changes || [];
-      // Load planned profit history
-      if (d.planned_profit_history) {
-        if (!AppState._plannedProfitHistory) AppState._plannedProfitHistory = {};
-        AppState._plannedProfitHistory[phaseKey] = d.planned_profit_history;
+    const res = await fetch('/api/overview');
+    const d   = await res.json();
+    AppState._overviewData = d;
+
+    // Hide BOG-only tabs for non-BOG projects
+    const _isBog = d.is_bog !== false;
+    ['services', 'missing', 'risks', 'roadmap'].forEach(tab => {
+      const btn = document.querySelector(`.exec-tab[data-tab="${tab}"]`);
+      if (btn) btn.style.display = _isBog ? '' : 'none';
+    });
+
+    // Register callback for variance profitability to update overview KPIs
+    window._overviewUpdateProfKPIs = function(phaseKey) {
+      const d = AppState._latestProfData?.[phaseKey];
+      if (!d) return;
+      _saveKPISnapshot(phaseKey, d);
+      _loadPhaseCostKPIs();
+      const fmtN = n => n ? new Intl.NumberFormat('en-US',{maximumFractionDigits:1}).format(n) : '—';
+      const setOv = (id, val) => { const el=document.getElementById(id); if(el) el.textContent=val; };
+      // services/consultation → Con prefix, support/development → Dev prefix
+      // services/consultation → Con, support → Sup, development → Dev
+      let pre = 'Con';
+      if (phaseKey === 'support') pre = 'Sup';
+      else if (phaseKey === 'development') pre = 'Dev';
+      const pct = d.completionPct || 0;
+      setOv(`kpi${pre}Progress`,  pct > 0 ? fmtN(pct) : '—');
+      setOv(`kpi${pre}Remaining`, d.remainingMDs ? fmtN(d.remainingMDs) + ' MD' : '—');
+      setOv(`kpi${pre}EAC`,       d.eacMDs       ? fmtN(d.eacMDs)               : '—');
+      const bar = document.getElementById(`kpi${pre}ProgressBar`);
+      if (bar) bar.style.width = Math.min(pct, 100) + '%';
+      if (d.monthKey) {
+        // Update footer with "as of YYYY-MM"
+        const card = document.getElementById(`kpi${pre}Progress`)?.closest('[style*="border-radius"]');
+        const foot = card?.querySelector('[style*="font-size:11px"], .kpi-foot');
+        if (foot) foot.textContent = `as of ${d.monthKey}`;
+      }
+    };
+
+    // For non-BOG: switch default phase to 'services' and rewire sub-tabs
+    if (!_isBog) {
+      AppState.currentOverviewPhase = 'services';
+      AppState.currentTagPhase      = 'services';
+
+      // Update sub-tab buttons to use services/support
+      const ovSubTabs = document.getElementById('overviewSubTabs');
+      if (ovSubTabs) {
+        ovSubTabs.innerHTML = `
+          <button class="sub-tab active" data-ovphase="services" id="ovTabSvc">Services</button>
+          <button class="sub-tab" data-ovphase="support" id="ovTabSup">Support</button>`;
+        ovSubTabs.querySelectorAll('.sub-tab').forEach(b => {
+          b.addEventListener('click', () => {
+            const phase = b.dataset.ovphase;
+            AppState.currentOverviewPhase = phase;
+            AppState.activePhases = null;
+            AppState.activeEmployees = [];
+            ovSubTabs.querySelectorAll('.sub-tab').forEach(x =>
+              x.classList.toggle('active', x.dataset.ovphase === phase));
+            loadTaskAnalysis(phase);
+          });
+        });
+      }
+      // Tags sub-tabs — Services / Support for non-BOG
+      const tagSubTabsEl = document.getElementById('tagSubTabs');
+      if (tagSubTabsEl) {
+        tagSubTabsEl.innerHTML = `
+          <button class="sub-tab active" data-tagphase="services" id="tagTabSvc">Services</button>
+          <button class="sub-tab" data-tagphase="support" id="tagTabSup">Support</button>`;
+        tagSubTabsEl.querySelectorAll('.sub-tab').forEach(b => {
+          b.addEventListener('click', () => {
+            const ph = b.dataset.tagphase;
+            AppState.currentTagPhase = ph;
+            AppState.activeTagPhases = null;
+            tagSubTabsEl.querySelectorAll('.sub-tab').forEach(x =>
+              x.classList.toggle('active', x.dataset.tagphase === ph));
+            loadTagsAnalysis(ph);
+          });
+        });
       }
     }
-  } catch (e) {}
-  if (!_budgetChanges[phaseKey]) _budgetChanges[phaseKey] = [];
 
-  // Load saved revenue override and populate input (always override with saved value)
-  try {
-    const r = await fetch(`/api/variance/budget-override/${phaseKey}`);
-    if (r.ok) {
-      const d = await r.json();
-      const overrides = d.overrides || {};
-      const savedRev = overrides['approved.revenue_sar'];
-      if (savedRev !== undefined && savedRev !== null) {
-        // Save to AppState for profitability to use even before budget DOM loads
-        if (!AppState._savedRevenue) AppState._savedRevenue = {};
-        AppState._savedRevenue[phaseKey] = parseFloat(savedRev);
-        const revEl = document.getElementById(`inp-rev-${phaseKey}`);
-        if (revEl) revEl.value = savedRev;
-      }
-    }
-  } catch(e) {}
+    // Rename phase labels for non-BOG: Consultation→Services, hide Development
+    if (!_isBog) {
+      // id → new text (null = hide element)
+      const renameMap = {
+        // Revenue card
+        'labelConRev':      'Services',
+        'labelDevRev':      null,
+        'labelSupRev':      'Support',
+        // Current Cost card
+        'labelConCost':     'Services',
+        'labelDevCost':     null,
+        // EAC card
+        'labelConEAC':      'Services',
+        'labelDevEAC':      null,
+        // Progress bars
+        'labelConProgress': 'Services — Progress',
+        'labelDevProgress': null,
+        // Sub-tabs (tasks analysis & overview)
+        'ovTabCon':         'Services',
+        'ovTabDev':         null,
+        'tagTabCon':        'Services',
+        'tagTabDev':        null,
+      };
+      Object.entries(renameMap).forEach(([id, label]) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (label === null) {
+          const row = el.closest('[style*="justify-content:space-between"]') || el.parentElement;
+          if (row) row.style.display = 'none';
+          else el.style.display = 'none';
+        } else {
+          el.textContent = label;
+        }
+      });
+      // Hide Development progress card entirely
+      const devProgressCard = document.getElementById('labelDevProgress')?.closest('[style*="border-radius:10px"]');
+      if (devProgressCard) devProgressCard.style.display = 'none';
 
-  renderBudgetChanges(phaseKey);
-  // Delay to ensure estimated cost rows are loaded first
-  setTimeout(() => budgetAutoCalc(phaseKey), 300);
-}
-
-function renderBudgetChanges(phaseKey) {
-  const cont = document.getElementById(`budget-changes-body-${phaseKey}`);
-  if (!cont) return;
-  const changes = _budgetChanges[phaseKey] || [];
-
-  if (!changes.length) {
-    cont.innerHTML = `<p style="color:var(--text-muted);font-size:12px;padding:12px 0;">No changes yet — click "+ Add Change"</p>`;
-    return;
-  }
-
-  const totalDeltaCost = changes.reduce((s,c) => s+(parseFloat(c.delta_cost)||0), 0);
-  const totalDeltaRev  = changes.reduce((s,c) => s+(parseFloat(c.delta_rev) ||0), 0);
-
-  const LBL = `display:block;font-size:11px;font-weight:600;color:var(--text-muted);
-               text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px;`;
-
-  const rows = changes.map((c, i) => {
-    const rev  = parseFloat(c.delta_rev)  || 0;
-    const cost = parseFloat(c.delta_cost) || 0;
-    const revColor  = rev  < 0 ? 'color:var(--red)' : rev  > 0 ? 'color:var(--green)' : '';
-    const costColor = cost > 0 ? 'color:var(--red)' : cost < 0 ? 'color:var(--green)' : '';
-    const net = cost + rev;
-    const netColor  = net < 0 ? 'var(--green)' : net > 0 ? 'var(--red)' : 'var(--text-muted)';
-    const netSign   = net > 0 ? '+' : '';
-    const accent    = (cost > 0 || rev < 0) ? 'var(--amber)' : 'var(--blue)';
-
-    const safeR = (c.reason ||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;');
-    const safeP = (c.plan_id||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;');
-
-    return `<div style="border-left:3px solid ${accent};padding:10px 12px;margin-bottom:8px;
-                         background:var(--bg-subtle);border-radius:0 6px 6px 0;">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
-
-        <!-- Left block: Reason + grid of fields -->
-        <div style="flex:1;min-width:0;">
-          <div style="margin-bottom:8px;">
-            <label style="${LBL}">Reason / Description</label>
-            <input type="text" class="svc-input" style="width:100%;font-size:12px;"
-              placeholder="e.g. Third party license"
-              value="${safeR}"
-              oninput="_budgetChanges['${phaseKey}'][${i}].reason=this.value;budgetSaveChanges('${phaseKey}')">
-          </div>
-          <div style="display:grid;grid-template-columns:1fr 100px 130px 130px 80px;gap:8px;align-items:end;">
-            <div>
-              <label style="${LBL}">Plan / CR ID</label>
-              <input type="text" class="svc-input" style="font-size:12px;width:100%;"
-                placeholder="CR-001" value="${safeP}"
-                oninput="_budgetChanges['${phaseKey}'][${i}].plan_id=this.value;budgetSaveChanges('${phaseKey}')">
-            </div>
-            <div>
-              <label style="${LBL}">Date</label>
-              <input type="date" class="svc-input" style="font-size:12px;width:100%;"
-                value="${c.change_date||''}"
-                oninput="_budgetChanges['${phaseKey}'][${i}].change_date=this.value;
-                         budgetSaveChanges('${phaseKey}');budgetAutoCalc('${phaseKey}')">
-            </div>
-            <div>
-              <label style="${LBL}">Δ Cost (SAR)</label>
-              <input type="number" step="1" class="svc-input"
-                style="font-size:12px;width:100%;text-align:right;${costColor};"
-                placeholder="0" value="${c.delta_cost||''}"
-                oninput="_budgetChanges['${phaseKey}'][${i}].delta_cost=parseFloat(this.value)||0;
-                         budgetSaveChanges('${phaseKey}');budgetAutoCalc('${phaseKey}');
-                         this.style.color=parseFloat(this.value)>0?'var(--red)':parseFloat(this.value)<0?'var(--green)':''">
-            </div>
-            <div>
-              <label style="${LBL}">Δ Revenue (SAR)</label>
-              <input type="number" step="1" class="svc-input"
-                style="font-size:12px;width:100%;text-align:right;${revColor};"
-                placeholder="0" value="${c.delta_rev||''}"
-                oninput="_budgetChanges['${phaseKey}'][${i}].delta_rev=parseFloat(this.value)||0;
-                         budgetSaveChanges('${phaseKey}');budgetAutoCalc('${phaseKey}');
-                         this.style.color=parseFloat(this.value)<0?'var(--red)':parseFloat(this.value)>0?'var(--green)':''">
-            </div>
-            <div>
-              <label style="${LBL}">Δ MDs</label>
-              <input type="number" step="0.1" class="svc-input"
-                style="font-size:12px;width:100%;text-align:right;"
-                placeholder="0" value="${c.delta_mds||''}"
-                oninput="_budgetChanges['${phaseKey}'][${i}].delta_mds=parseFloat(this.value)||0;
-                         budgetSaveChanges('${phaseKey}');budgetAutoCalc('${phaseKey}')">
-            </div>
-          </div>
-        </div>
-
-        <!-- Right block: net impact + delete -->
-        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0;">
-          <button onclick="budgetDeleteChange('${phaseKey}',${i})"
-            style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:12px;
-                   padding:2px 4px;line-height:1;" title="Remove"
-            onmouseover="this.style.color='var(--red)'"
-            onmouseout="this.style.color='var(--text-muted)'">✕</button>
-          ${(cost !== 0 || rev !== 0) ? `
-          <div style="text-align:right;margin-top:auto;">
-            <div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.3px;">Net</div>
-            <div style="font-size:13px;font-weight:700;color:${netColor};">${netSign}${fmt.money(Math.round(net))}</div>
-          </div>` : ''}
-        </div>
-      </div>
-    </div>`;
-  }).join('');
-
-  // Summary row
-  const fD = v => {
-    if (!v) return '<span style="color:var(--text-muted)">—</span>';
-    const s = v>0?'+':'', c = v<0?'var(--red)':'var(--green)';
-    return `<b style="color:${c}">${s}${fmt.money(Math.round(v))}</b>`;
-  };
-  const summary = `<div style="display:flex;gap:20px;padding:8px 12px;background:var(--bg-card);
-                               border:1px solid var(--border-light);border-radius:6px;font-size:12px;align-items:center;">
-    <span style="color:var(--text-muted);font-size:11px;">${changes.length} change${changes.length!==1?'s':''}</span>
-    <span style="margin-left:auto;color:var(--text-muted);">Σ Δ Cost: ${fD(totalDeltaCost)}</span>
-    <span style="color:var(--text-muted);">Σ Δ Revenue: ${fD(totalDeltaRev)}</span>
-  </div>`;
-
-  cont.innerHTML = rows + summary;
-}
-// Auto-save revenue input
-async function budgetSaveRevenue(phaseKey) {
-  const revEl = document.getElementById(`inp-rev-${phaseKey}`);
-  if (!revEl) return;
-  const value = parseFloat(revEl.value) || null;
-  // Save to AppState immediately
-  if (!AppState._savedRevenue) AppState._savedRevenue = {};
-  AppState._savedRevenue[phaseKey] = value;
-  try {
-    await fetch('/api/variance/budget-override', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ phase: phaseKey, path: 'approved.revenue_sar', value })
-    });
-    revEl.style.borderColor = 'var(--green)';
-    setTimeout(() => { revEl.style.borderColor = ''; }, 1200);
-  } catch(e) {}
-}
-
-async function budgetSaveChanges(phaseKey) {
-  try {
-    await fetch('/api/budget-changes', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ phase: phaseKey, changes: _budgetChanges[phaseKey] || [] })
-    });
-  } catch(e) {}
-}
-
-function budgetAddChange(phaseKey) {
-  if (!_budgetChanges[phaseKey]) _budgetChanges[phaseKey] = [];
-  _budgetChanges[phaseKey].push({ id: Date.now(), reason:'', plan_id:'', delta_cost:0, delta_rev:0 });
-  budgetSaveChanges(phaseKey);
-  renderBudgetChanges(phaseKey);
-  budgetAutoCalc(phaseKey);
-}
-
-function budgetDeleteChange(phaseKey, idx) {
-  if (!_budgetChanges[phaseKey]) return;
-  _budgetChanges[phaseKey].splice(idx, 1);
-  budgetSaveChanges(phaseKey);
-  renderBudgetChanges(phaseKey);
-  budgetAutoCalc(phaseKey);
-}
-
-function budgetAutoCalc(phaseKey) {
-  const setEl = (id, val, color) => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.textContent = val;
-    if (color) el.style.color = color;
-  };
-
-  // Cost from Estimated Cost rows (BOG) or summary (non-BOG)
-  let mds = 0, costUSD = 0, costSAR = 0;
-  const isBogBudget = AppState._overviewData?.is_bog !== false;
-
-  if (!isBogBudget && AppState._estSummary && AppState._estSummary[phaseKey]) {
-    // Non-BOG: use summary from Excel import
-    const s = AppState._estSummary[phaseKey];
-    mds     = s.total_mds      || 0;
-    costUSD = s.total_cost_usd || 0;
-    costSAR = s.total_cost_sar || (costUSD * 3.75);
-  } else if (_estPhase === phaseKey && _estRows && _estRows.length) {
-    // BOG: use editable rows
-    _estRows.forEach(r => {
-      const hr = parseFloat(r.hourRate)||0, at = parseFloat(r.actualTime)||0, em = parseFloat(r.estMonths)||0;
-      mds     += at * em / 8;
-      costUSD += hr * at * em;
-    });
-    costSAR = costUSD * 3.75;
-  } else {
-    costSAR = costUSD * 3.75;
-  }
-
-  // Revenue from input
-  const revEl = document.getElementById(`inp-rev-${phaseKey}`);
-  const approvedRevSAR = revEl ? (parseFloat(revEl.value)||0) : 0;
-  const approvedCostSAR = costSAR;
-
-  // Changes totals
-  const changes = _budgetChanges[phaseKey] || [];
-  const deltaCostTotal = changes.reduce((s,c) => s + (parseFloat(c.delta_cost)||0), 0);
-  const deltaRevTotal  = changes.reduce((s,c) => s + (parseFloat(c.delta_rev)||0), 0);
-
-  // Final = Approved + Σ Changes
-  const finCostSAR = approvedCostSAR + deltaCostTotal;
-  const finRevSAR  = approvedRevSAR + deltaRevTotal;
-
-  // Approved profit
-  const appProfit    = approvedRevSAR - approvedCostSAR;
-  const appProfitPct = approvedRevSAR > 0 ? appProfit / approvedRevSAR * 100 : 0;
-
-  // Final profit
-  const finProfit    = finRevSAR - finCostSAR;
-  const finProfitPct = finRevSAR > 0 ? finProfit / finRevSAR * 100 : 0;
-
-  const profColor = (p) => p >= 40 ? 'var(--green)' : p >= 20 ? 'var(--amber)' : 'var(--red)';
-
-  // Approved section
-  setEl(`bud-mds-${phaseKey}`, mds > 0 ? fmt.num(Math.round(mds)) : '—');
-  setEl(`bud-cost-usd-${phaseKey}`, costUSD > 0 ? fmtExact(costUSD) : '—');
-  setEl(`bud-cost-sar-${phaseKey}`, costSAR > 0 ? fmt.money(Math.round(costSAR)) : '—');
-  setEl(`bud-profit-sar-${phaseKey}`, approvedRevSAR > 0 ? fmt.money(Math.round(appProfit)) + ' SAR' : '—', profColor(appProfitPct));
-  setEl(`bud-profit-pct-${phaseKey}`, approvedRevSAR > 0 ? fmt.decimal(appProfitPct) + '%' : '—', profColor(appProfitPct));
-
-  // Final section — show only what changed, compute from approved + delta
-  setEl(`fin-cost-sar-${phaseKey}`,   fmt.money(Math.round(finCostSAR)) + ' SAR');
-  setEl(`fin-rev-sar-${phaseKey}`,    fmt.money(Math.round(finRevSAR))  + ' SAR');
-
-  // Show/hide delta rows based on whether there are changes
-  const hasCostChanges = changes.some(c => parseFloat(c.delta_cost) !== 0 && c.delta_cost !== '' && c.delta_cost !== null && c.delta_cost !== undefined);
-  const hasRevChanges  = changes.some(c => parseFloat(c.delta_rev)  !== 0 && c.delta_rev  !== '' && c.delta_rev  !== null && c.delta_rev  !== undefined);
-  const showDeltaCostRow = document.getElementById(`fin-delta-cost-row-${phaseKey}`);
-  const showDeltaRevRow  = document.getElementById(`fin-delta-rev-row-${phaseKey}`);
-  if (showDeltaCostRow) showDeltaCostRow.style.display = hasCostChanges ? '' : 'none';
-  if (showDeltaRevRow)  showDeltaRevRow.style.display  = hasRevChanges  ? '' : 'none';
-
-  if (deltaCostTotal !== 0) {
-    setEl(`fin-delta-cost-${phaseKey}`, (deltaCostTotal > 0 ? '+' : '') + fmt.money(Math.abs(deltaCostTotal)) + ' SAR',
-      deltaCostTotal > 0 ? 'var(--red)' : 'var(--green)');
-  }
-  if (deltaRevTotal !== 0) {
-    setEl(`fin-delta-rev-${phaseKey}`,
-      deltaRevTotal < 0 ? '(' + fmt.money(Math.abs(deltaRevTotal)) + ')' : '+' + fmt.money(deltaRevTotal) + ' SAR',
-      deltaRevTotal > 0 ? 'var(--green)' : 'var(--red)');
-  }
-
-  setEl(`fin-profit-sar-${phaseKey}`, finRevSAR > 0 ? fmt.money(Math.round(finProfit)) + ' SAR' : '—', profColor(finProfitPct));
-  setEl(`fin-profit-pct-${phaseKey}`, finRevSAR > 0 ? fmt.decimal(finProfitPct) + '%' : '—', profColor(finProfitPct));
-
-  // KPI strip
-  // Save final profit % for profitability to use (with date for history)
-  if (finRevSAR > 0) {
-    if (!AppState._finalProfitPct) AppState._finalProfitPct = {};
-    const newProfitPct = finProfit / finRevSAR;
-    const prevPct = AppState._finalProfitPct[phaseKey];
-    AppState._finalProfitPct[phaseKey] = newProfitPct;
-
-    // Save history: if profit% changed, record when
-    if (prevPct !== undefined && Math.abs(newProfitPct - prevPct) > 0.001) {
-      if (!AppState._plannedProfitHistory) AppState._plannedProfitHistory = {};
-      if (!AppState._plannedProfitHistory[phaseKey]) AppState._plannedProfitHistory[phaseKey] = {};
-      const today = new Date().toISOString().slice(0,7); // YYYY-MM
-      AppState._plannedProfitHistory[phaseKey][today] = newProfitPct;
-      // Persist to DB
-      fetch('/api/budget-changes', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ phase: phaseKey, changes: _budgetChanges[phaseKey]||[], 
-          planned_profit_history: AppState._plannedProfitHistory[phaseKey] })
+      // Show Support rows in Cost + EAC cards (hidden by default)
+      fetch('/api/project-phases-available').then(r=>r.json()).then(cfg => {
+        if (cfg.has_support) {
+          ['rowSupCost','rowSupEAC'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = 'flex';
+          });
+          // Add Support progress card after Services
+          const progressRow = document.getElementById('progressRow');
+          if (progressRow && !document.getElementById('supProgressCard')) {
+            const card = document.createElement('div');
+            card.id = 'supProgressCard';
+            card.style.cssText = 'background:var(--bg-card);border:1px solid var(--border);border-top:3px solid var(--amber);border-radius:10px;padding:16px 20px;';
+            card.innerHTML = `
+              <div style="font-size:10px;font-weight:700;color:var(--amber);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Support — Progress</div>
+              <div style="display:flex;align-items:baseline;gap:4px;margin-bottom:8px;">
+                <span style="font-size:30px;font-weight:700;line-height:1;" id="kpiSupProgress">—</span>
+                <span style="font-size:14px;color:var(--muted);">%</span>
+              </div>
+              <div style="height:6px;background:#F3F4F6;border-radius:3px;margin-bottom:8px;">
+                <div id="kpiSupProgressBar" style="height:100%;background:var(--amber);border-radius:3px;width:0%;transition:width .6s;"></div>
+              </div>
+              <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);">
+                <span id="kpiSupProgressFoot" style="font-size:11px;color:var(--muted);">Remaining MDs</span>
+                <span style="font-size:13px;font-weight:700;color:var(--text);" id="kpiSupRemaining">—</span>
+              </div>`;
+            progressRow.appendChild(card);
+            // Re-run phase progress to fill Support card now that element exists
+            setTimeout(_loadPhaseProgress, 100);
+          }
+        }
       }).catch(()=>{});
     }
-  }
-  // Final MDs = approved mds + Σ delta_mds from all changes
-  const deltaMDsTotal = changes.reduce((s,c) => s + (parseFloat(c.delta_mds)||0), 0);
-  const finMDs = mds + deltaMDsTotal;
 
-  setEl(`kpi-mds-${phaseKey}`,       finMDs > 0 ? fmt.num(Math.round(finMDs)) : (mds > 0 ? fmt.num(Math.round(mds)) : '—'));
-  setEl(`kpi-rev-${phaseKey}`,       finRevSAR > 0 ? fmt.money(Math.round(finRevSAR)) : '—');
-  setEl(`kpi-cost-${phaseKey}`,      finCostSAR > 0 ? fmt.money(Math.round(finCostSAR)) : (costSAR > 0 ? fmt.money(Math.round(costSAR)) : '—'));
-  setEl(`kpi-final-pct-${phaseKey}`, finRevSAR > 0 ? fmt.decimal(finProfitPct)+'%' : '—', profColor(finProfitPct));
-  setEl(`kpi-final-sar-${phaseKey}`, finRevSAR > 0 ? fmt.money(Math.round(finProfit)) + ' SAR' : '—', profColor(finProfitPct));
+    const set = (id, v) => { const el=document.getElementById(id); if(el&&v!==null&&v!==undefined) el.textContent=v; };
 
-  // Save to AppState for profitability
-  if (!AppState._budgetApprovedMDs) AppState._budgetApprovedMDs = {};
-  if (!AppState._budgetFinalCost)   AppState._budgetFinalCost   = {};
-  AppState._budgetApprovedMDs[phaseKey] = mds;          // from estimated rows = approved
-  AppState._budgetFinalCost[phaseKey]   = finCostSAR || costSAR;
-}
+    // Header
+    set('headerPM',    d.project_manager || '—');
+    set('headerCoord', d.coordinator     || '—');
+    // headerSubtitle removed — period shown in overview section only
+    const pEl = document.getElementById('ovPeriod');
+    if (pEl) pEl.textContent = [d.roadmap_start, d.roadmap_end].filter(Boolean).join(' → ')
+      + (d.duration_months ? ` (${d.duration_months} months)` : '');
 
-// Wire up auto-save for budget inputs
-function wireBudgetInputs(container) {
-  if (!container) return;
-  container.querySelectorAll('.budget-input').forEach(inp => {
-    inp.addEventListener('blur', async () => {
-      const phase = inp.dataset.phase;
-      const path = inp.dataset.path;
-      const isText = inp.classList.contains('budget-input-text');
-      let value = isText ? inp.value : (parseFloat(inp.value) || 0);
-      // Empty value → null (delete override)
-      if (inp.value === '' || inp.value === null) value = null;
+    // Revenue (Odoo project value)
+    const revEl = document.getElementById('kpiRevenue');
+    if (revEl) revEl.textContent = d.project_value_sar
+      ? fmt.money(Math.round(d.project_value_sar)) : '—';
 
-      try {
-        const res = await fetch('/api/variance/budget-override', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ phase, path, value })
-        });
-        if (res.ok) {
-          inp.style.borderColor = 'var(--green)';
-          setTimeout(() => { inp.style.borderColor = ''; }, 1200);
-        } else {
-          inp.style.borderColor = 'var(--red)';
-        }
-      } catch (e) {
-        inp.style.borderColor = 'var(--red)';
-        console.error('Budget save failed:', e);
+    // Phase revenues from Final Budget (async, non-blocking)
+    _loadPhaseRevenues();
+
+    if (!_isBog) {
+      // Non-BOG: load Progress/Remaining from DB (plan_overrides), update when Variance opens
+      _loadPhaseProgress();
+      // Load Current Cost from effort API
+      _loadPhaseCostKPIs();
+    } else {
+      // BOG: Phase progress from API
+      set('kpiDevProgress',  d.progress_pct || '—');
+      set('kpiDevRemaining', d.remaining_mds !== undefined ? fmt.decimal(d.remaining_mds) + ' MD' : '—');
+      const devBar = document.getElementById('kpiDevProgressBar');
+      if (devBar) devBar.style.width = Math.min(100, d.progress_pct || 0) + '%';
+
+      set('kpiConProgress',  d.con_progress_pct  !== undefined ? d.con_progress_pct  : '—');
+      set('kpiConRemaining', d.con_remaining_mds !== undefined ? fmt.decimal(d.con_remaining_mds) + ' MD' : '—');
+      const conBar = document.getElementById('kpiConProgressBar');
+      if (conBar) conBar.style.width = Math.min(100, d.con_progress_pct || 0) + '%';
+    }
+
+  } catch(e) { console.error('Overview KPIs error:', e); }
+
+  // ── 2. Phase costs + EAC ──────────────────────────────────────────
+  _loadPhaseCostKPIs();
+
+  // ── 3. Team members (from effort API, split by phase) ─────────────
+  // Load team count from effort API
+  _loadTeamCount();
+
+  // Wire team modal close (once)
+  if (!window._teamModalWired) {
+    window._teamModalWired = true;
+    document.getElementById('teamModalClose')?.addEventListener('click', closeTeamModal);
+    document.getElementById('teamModalOverlay')?.addEventListener('click', closeTeamModal);
+    // ESC key
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') {
+        const m = document.getElementById('teamModal');
+        if (m && m.style.display !== 'none') closeTeamModal();
       }
     });
+  }
+}
+
+// ── Team tab switching ──────────────────────────────────────────────
+window.switchTeamTab = function(phase) {
+  AppState._teamActiveTab = phase;
+  const devBtn = document.getElementById('teamTabDev');
+  const conBtn = document.getElementById('teamTabCon');
+  const navy = 'background:var(--navy);color:white;';
+  const idle = 'background:var(--bg-subtle);color:var(--text-muted);';
+  if (devBtn) devBtn.style.cssText = devBtn.style.cssText.replace(/background[^;]+;color[^;]+;/, '') + (phase==='development'?navy:idle);
+  if (conBtn) conBtn.style.cssText = conBtn.style.cssText.replace(/background[^;]+;color[^;]+;/, '') + (phase==='consultation'?navy:idle);
+  _loadTeamKPI(phase);
+};
+
+async function _loadPhaseProgress() {
+  try {
+    const res = await fetch('/api/overview/phase-progress');
+    if (!res.ok) return;
+    const d = await res.json();
+    const fmtN = n => n ? new Intl.NumberFormat('en-US',{maximumFractionDigits:1}).format(n) : '—';
+    const setEl = (id, val) => { const el=document.getElementById(id); if(el) el.textContent=val; };
+
+    // Map phase → element prefix: services→Con, support→Sup
+    const phaseMap = { services: 'Con', support: 'Sup', development: 'Dev', consultation: 'Con' };
+    for (const [phase, data] of Object.entries(d.phases || {})) {
+      if (!data.month_key) continue;
+      const pre = phaseMap[phase] || 'Con';
+      const pct = data.completion || 0;
+      setEl(`kpi${pre}Progress`,  pct > 0 ? fmtN(pct) : '—');
+      setEl(`kpi${pre}Remaining`, data.remaining > 0 ? fmtN(data.remaining) + ' MD' : '—');
+      const bar = document.getElementById(`kpi${pre}ProgressBar`);
+      if (bar) bar.style.width = Math.min(pct, 100) + '%';
+      // Show "as of YYYY-MM" footer using ID
+      const footEl = document.getElementById(`kpi${pre}ProgressFoot`);
+      if (footEl) footEl.textContent = `as of ${data.month_key}`;
+    }
+  } catch(e) { console.warn('Phase progress error:', e); }
+}
+
+async function _loadPhaseRevenues() {
+  try {
+    const res = await fetch('/api/overview/financials');
+    if (!res.ok) return;
+    const d = await res.json();
+    const fSAR = v => (v && v > 0) ? fmt.money(Math.round(v)) : '—';
+    const set  = (id, v) => { const el=document.getElementById(id); if(el) el.textContent=v; };
+    const isBog = AppState._overviewData?.is_bog !== false;
+    if (isBog) {
+      set('kpiConRev', fSAR(d.consultation));
+      set('kpiDevRev', fSAR(d.development));
+      set('kpiSupRev', fSAR(d.support));
+    } else {
+      // Non-BOG: services→Con row, support→Sup row
+      set('kpiConRev', fSAR(d.services));
+      set('kpiSupRev', fSAR(d.support));
+    }
+  } catch(e) { console.warn('Phase revenue error:', e); }
+}
+
+async function _loadTeamKPI_unused(phase) {
+  const listEl  = document.getElementById('kpiTeamList');
+  const countEl = document.getElementById('kpiTeamCount');
+  if (!listEl) return;
+  listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">Loading…</div>';
+
+  try {
+    // Get employees from effort API for this phase
+    if (!AppState._effortMonths) AppState._effortMonths = {};
+    let employees = AppState._effortEmployees?.[phase];
+    if (!employees) {
+      const res = await _fetchEffortCached(phase);
+      const d   = await res.json();
+      if (!AppState._effortEmployees) AppState._effortEmployees = {};
+      AppState._effortEmployees[phase] = d.employees || [];
+      employees = AppState._effortEmployees[phase];
+      // cache effort data
+      if (!AppState._effortMonthCosts) AppState._effortMonthCosts = {};
+      if (!AppState._effortMonthMDs)   AppState._effortMonthMDs   = {};
+      if (!AppState._effortMonths)     AppState._effortMonths     = {};
+      AppState._effortMonthCosts[phase] = d.month_cost_usd || {};
+      AppState._effortMonthMDs[phase]   = d.month_mds      || {};
+      AppState._effortMonths[phase]     = d.months          || [];
+    }
+
+    // Filter: exclude Arabic names + Amr (keep non-Arabic, non-Amr)
+    const isArabic = s => /[؀-ۿ]/.test(s || '');
+    const team = employees.filter(e => {
+      const n = (e.name || '').trim();
+      if (!n || n === '—') return false;
+      if (isArabic(n)) return false;
+      if (/amr/i.test(n)) return false;
+      // Onsite-only rows: skip duplicates (keep base row)
+      if ((e.is_onsite_row || e.onsite)) return false;
+      return true;
+    });
+
+    if (!team.length) {
+      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">No team members found</div>';
+      if (countEl) countEl.textContent = '0 members';
+      return;
+    }
+
+    if (countEl) countEl.textContent = `${team.length} member${team.length!==1?'s':''}`;
+
+    listEl.innerHTML = team.map(e => {
+      const pos = (e.position || '').replace(/^(KSA|EGY|TUN)\s*-\s*/i, '').replace(/ - onsite$/i,'');
+      const country = e.country || (e.position||'').match(/^(KSA|EGY|TUN)/i)?.[1] || '';
+      const countryColor = {'KSA':'var(--amber)','EGY':'var(--blue)','TUN':'var(--green)'}[country.toUpperCase()] || 'var(--text-muted)';
+      return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);">
+        <div style="width:28px;height:28px;border-radius:50%;background:var(--bg-subtle);
+                    display:flex;align-items:center;justify-content:center;
+                    font-size:11px;font-weight:700;color:var(--navy);flex-shrink:0;">
+          ${(e.name||'?').charAt(0).toUpperCase()}
+        </div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:12px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${e.name}</div>
+          <div style="font-size:10px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${pos}</div>
+        </div>
+        ${country ? `<span style="font-size:9px;font-weight:700;color:${countryColor};background:${countryColor}18;
+                          padding:1px 5px;border-radius:8px;flex-shrink:0;">${country}</span>` : ''}
+      </div>`;
+    }).join('');
+
+  } catch(e) {
+    listEl.innerHTML = '<div style="color:var(--red);font-size:12px;">Error loading team</div>';
+    console.error('Team KPI error:', e);
+  }
+}
+
+async function _loadTeamCount() {
+  try {
+    const isBog = AppState._overviewData?.is_bog !== false;
+    const phases = isBog ? ['development','consultation'] : ['services'];
+    const names = new Set();
+    const isArabic = s => /[\u0600-\u06FF]/.test(s||'');
+    const filterEmp = e => {
+      const n=(e.name||'').trim();
+      return n && !isArabic(n) && !/\bamr\b/i.test(n) && !e.is_onsite_row && !e.onsite;
+    };
+    for (const phase of phases) {
+      let emps = AppState._effortEmployees?.[phase];
+      if (!emps) {
+        const res = await _fetchEffortCached(phase);
+        const d = await res.json();
+        if (!AppState._effortEmployees) AppState._effortEmployees = {};
+        AppState._effortEmployees[phase] = d.employees || [];
+        emps = d.employees || [];
+        if (!AppState._effortMonths)     AppState._effortMonths     = {};
+        if (!AppState._effortMonthCosts) AppState._effortMonthCosts = {};
+        if (!AppState._effortMonthMDs)   AppState._effortMonthMDs   = {};
+        AppState._effortMonths[phase]     = d.months         || [];
+        AppState._effortMonthCosts[phase] = d.month_cost_usd || {};
+        AppState._effortMonthMDs[phase]   = d.month_mds      || {};
+      }
+      emps.filter(filterEmp).forEach(e => names.add(e.name));
+    }
+    // For non-BOG: also include employees_available from task analysis if loaded
+    if (!isBog && AppState.ovAnalysisData?.employees_available) {
+      AppState.ovAnalysisData.employees_available.forEach(n => names.add(n));
+    }
+    const countEl = document.getElementById('kpiTeamCount');
+    if (countEl) countEl.textContent = names.size || '—';
+    // Cache names for modal
+    AppState._teamNamesServices = Array.from(names);
+  } catch(e) { console.warn('Team count error:', e); }
+}
+
+async function _loadPhaseCostKPIs() {
+  if (!AppState._latestProfData) {
+    AppState._latestProfData = {};
+    ['services','support','development','consultation'].forEach(ph => {
+      const snap = _loadKPISnapshot(ph);
+      if (snap) { AppState._latestProfData[ph] = snap; console.log('[KPI] loaded snapshot:', ph); }
+    });
+  }
+  const fSAR = v => fmt.money(Math.round(v));
+  const set   = (id, v) => { const el=document.getElementById(id); if(el) el.textContent=v||'—'; };
+
+  let totalCostSAR = 0;
+  let totalEACSAR  = 0;
+
+  const isBogCost = AppState._overviewData?.is_bog !== false;
+  const phases = isBogCost ? ['consultation', 'development'] : ['services', 'support'];
+
+  for (const phase of phases) {
+    try {
+      let months = AppState._effortMonths?.[phase]     || [];
+      let mCosts = AppState._effortMonthCosts?.[phase] || {};
+      let mMDs   = AppState._effortMonthMDs?.[phase]   || {};
+
+      if (!months.length) {
+        const res = await _fetchEffortCached(phase);
+        const d   = await res.json();
+        months = d.months || [];
+        mCosts = d.month_cost_usd || {};
+        mMDs   = d.month_mds      || {};
+        if (!AppState._effortMonths)     AppState._effortMonths     = {};
+        if (!AppState._effortMonthCosts) AppState._effortMonthCosts = {};
+        if (!AppState._effortMonthMDs)   AppState._effortMonthMDs   = {};
+        AppState._effortMonths[phase]     = months;
+        AppState._effortMonthCosts[phase] = mCosts;
+        AppState._effortMonthMDs[phase]   = mMDs;
+      }
+
+      let cumCostUSD = 0;
+      months.forEach(m => { cumCostUSD += mCosts[m.key] || 0; });
+      const cumCostSAR = cumCostUSD * 3.75;
+      totalCostSAR += cumCostSAR;
+
+      const totalMDs = Object.values(mMDs).reduce((s,v)=>s+v, 0);
+      const profData   = AppState._latestProfData?.[phase];
+      const eacCostSAR = profData?.eacCostSAR || cumCostSAR;
+      totalEACSAR += eacCostSAR;
+
+      // Map phase to element prefix: services→Con, support→Sup, development→Dev, consultation→Con
+      let pre = 'Con';
+      if (phase === 'support') pre = 'Sup';
+      else if (phase === 'development') pre = 'Dev';
+      else if (phase === 'consultation') pre = 'Con';
+      else if (phase === 'services') pre = 'Con';
+      set(`kpi${pre}Cost`, fSAR(cumCostSAR));
+      set(`kpi${pre}EAC`,  fSAR(eacCostSAR));
+    } catch(e) {
+      console.warn(`Phase cost KPI (${phase}):`, e);
+    }
+  }
+
+  // Totals
+  const tcEl=document.getElementById('kpiTotalCost');if(tcEl)tcEl.textContent=totalCostSAR?fSAR(totalCostSAR):'—';
+  const teEl=document.getElementById('kpiTotalEAC');if(teEl)teEl.textContent=totalEACSAR?fSAR(totalEACSAR):'—';
+  try{
+    const pr=await fetch('/api/overview/phase-progress');const pd=await pr.json();
+    const isBogK=AppState._overviewData?.is_bog!==false;
+    const phsK=isBogK?['consultation','development']:['services','support'];
+    let lmk='',tc=0,cc=0;
+    for(const ph of phsK){const mk=pd.phases?.[ph]?.month_key||'';if(mk&&mk>lmk)lmk=mk;const pct=pd.phases?.[ph]?.completion||0;if(pct>0){tc+=pct;cc++;}}
+    const avg=cc>0?Math.round(tc/cc):0;
+    ['kpiCostAsOf','kpiEACAsOf'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=lmk?'as of '+lmk:'';});
+    ['kpiCostPct','kpiEACPct'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=avg>0?avg+'% complete':'';});
+    // Save snapshots
+    if(AppState._latestProfData){Object.keys(AppState._latestProfData).forEach(ph=>_saveKPISnapshot(ph,AppState._latestProfData[ph]));}
+  }catch(e){}
+}
+
+
+async function openTeamModal() {
+  const modal = document.getElementById('teamModal');
+  modal.style.display = 'flex';
+  const body = document.getElementById('teamModalBody');
+
+  const isBogTeam = AppState._overviewData?.is_bog !== false;
+  const teamPhases = isBogTeam
+    ? [{id:'modalTabDev', phase:'development', label:'Development'}, {id:'modalTabCon', phase:'consultation', label:'Consultation'}]
+    : [{id:'modalTabSvc', phase:'services',    label:'Services'},    {id:'modalTabSup', phase:'support',      label:'Support'}];
+
+  const tabsHtml = teamPhases.map((t, i) => `
+    <button id="${t.id}" onclick="switchModalTeamTab('${t.phase}')"
+      style="padding:10px 20px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
+             border:none;border-bottom:2px solid ${i===0?'var(--navy)':'transparent'};
+             color:${i===0?'var(--navy)':'var(--text-muted)'};background:none;cursor:pointer;">
+      ${t.label}
+    </button>`).join('');
+
+  body.innerHTML = `
+    <div style="display:flex;border-bottom:1px solid var(--border);margin:-20px -24px 16px;padding:0 24px;">
+      ${tabsHtml}
+    </div>
+    <div id="modalTeamContent"><div class="loading">Loading…</div></div>`;
+
+  window._modalTeamPhases = teamPhases;
+  window._modalTeamActiveTab = teamPhases[0].phase;
+  _loadModalTeamTab(teamPhases[0].phase);
+}
+
+
+window.switchModalTeamTab = function(phase) {
+  window._modalTeamActiveTab = phase;
+  (window._modalTeamPhases || []).forEach(t => {
+    const btn = document.getElementById(t.id);
+    if (btn) {
+      btn.style.borderBottomColor = t.phase===phase ? 'var(--navy)' : 'transparent';
+      btn.style.color = t.phase===phase ? 'var(--navy)' : 'var(--text-muted)';
+    }
+  });
+  _loadModalTeamTab(phase);
+};
+
+async function _loadModalTeamTab(phase) {
+  const cont = document.getElementById('modalTeamContent');
+  if (!cont) return;
+  cont.innerHTML = '<div class="loading">Loading…</div>';
+  const isBogModal2 = AppState._overviewData?.is_bog !== false;
+  try {
+    let employees = AppState._effortEmployees?.[phase];
+    if (!employees) {
+      const res = await _fetchEffortCached(phase);
+      const d   = await res.json();
+      if (!AppState._effortEmployees) AppState._effortEmployees = {};
+      AppState._effortEmployees[phase] = d.employees || [];
+      employees = AppState._effortEmployees[phase];
+      if (!AppState._effortMonths)     AppState._effortMonths     = {};
+      if (!AppState._effortMonthCosts) AppState._effortMonthCosts = {};
+      if (!AppState._effortMonthMDs)   AppState._effortMonthMDs   = {};
+      AppState._effortMonths[phase]     = d.months          || [];
+      AppState._effortMonthCosts[phase] = d.month_cost_usd  || {};
+      AppState._effortMonthMDs[phase]   = d.month_mds       || {};
+    }
+    const isArabic = s => /[\u0600-\u06FF]/.test(s||'');
+    const team = employees.filter(e => {
+      const n = (e.name||'').trim();
+      if (!n || isArabic(n) || /\bamr\b/i.test(n)) return false;
+      if (e.is_onsite_row || e.onsite) return false;
+      return true;
+    });
+    // For non-BOG services: limit to employees who have timesheets on project phases
+    // (effort API returns all project employees regardless of phase)
+    if (!isBogModal2 && phase === 'services') {
+      const knownEmps = AppState.ovAnalysisData?.employees_available || AppState._teamNamesServices || [];
+      if (knownEmps.length > 0) {
+        employees = employees.filter(e => knownEmps.includes(e.name));
+      }
+    }
+
+    const isBogModal = AppState._overviewData?.is_bog !== false;
+    // Non-BOG support with no data → show message
+    if (!isBogModal && phase === 'support' && !team.length) {
+      const cfg = await fetch('/api/project-phases-available').then(r=>r.json()).catch(()=>({}));
+      if (!cfg.has_support) {
+        cont.innerHTML = `<div style="text-align:center;padding:24px;color:var(--text-muted);">
+          <div style="font-size:24px;margin-bottom:8px;">📭</div>
+          <div style="font-size:13px;font-weight:600;">No Support phases in this project</div>
+          <div style="font-size:11px;margin-top:6px;">All team members are shown under Services</div>
+        </div>`;
+        return;
+      }
+    }
+    if (!team.length) { cont.innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:8px 0;">No members found for this phase.</p>'; return; }
+    cont.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;">
+      ${team.map(e => {
+        const pos = (e.position||'').replace(/^(KSA|EGY|TUN)\s*-\s*/i,'').replace(/ - onsite$/i,'');
+        const country = ((e.position||'').match(/^(KSA|EGY|TUN)/i)||[])[1]||'';
+        const cc = {'KSA':'var(--amber)','EGY':'var(--blue)','TUN':'var(--green)'}[country.toUpperCase()]||'var(--text-muted)';
+        return `<div style="display:flex;align-items:center;gap:8px;padding:8px;background:var(--bg-subtle);border-radius:6px;">
+          <div style="width:32px;height:32px;border-radius:50%;background:var(--navy);color:white;
+                      display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0;">
+            ${(e.name||'?').charAt(0).toUpperCase()}
+          </div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${e.name}</div>
+            <div style="font-size:10px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${pos}</div>
+          </div>
+          ${country?`<span style="font-size:9px;font-weight:700;color:${cc};background:${cc}18;padding:2px 6px;border-radius:8px;flex-shrink:0;">${country}</span>`:''}
+        </div>`;
+      }).join('')}
+    </div>`;
+  } catch(e) { cont.innerHTML = '<p style="color:var(--red);">Error loading team.</p>'; }
+}
+
+function closeTeamModal() {
+  document.getElementById('teamModal').style.display = 'none';
+}
+
+async function loadTaskAnalysis(phaseGroup) {
+  const cont = document.getElementById('ovAnalysisContent');
+  const summary = document.getElementById('ovAnalysisSummary');
+  cont.innerHTML = '<div class="loading">Loading task analysis from Odoo…</div>';
+  summary.innerHTML = '';
+
+  // Build query string
+  const params = new URLSearchParams();
+  if (AppState.activePhases && AppState.activePhases.length) {
+    params.set('phases', AppState.activePhases.join(','));
+  }
+  if (AppState.activeEmployees && AppState.activeEmployees.length) {
+    params.set('employees', AppState.activeEmployees.join(','));
+  }
+
+  try {
+    const res = await fetch(`/api/overview/analysis/${phaseGroup}?` + params.toString());
+    const d = await res.json();
+
+    if (!d.connected) {
+      cont.innerHTML = `<div class="banner banner-warn"><strong>${d.error || 'Odoo unreachable'}</strong></div>`;
+      return;
+    }
+
+    // Handle no phases found
+    if (d.no_phases) {
+      cont.innerHTML = `<div class="card" style="padding:24px;text-align:center;color:var(--text-muted);">
+        <div style="font-size:28px;margin-bottom:8px;">📭</div>
+        <div style="font-size:13px;font-weight:600;color:var(--text);">No ${phaseGroup} phases found</div>
+        <div style="font-size:11px;margin-top:6px;max-width:400px;margin-inline:auto;">${d.note || 'No tasks assigned to phases matching ' + phaseGroup + ' keywords'}</div>
+      </div>`;
+      return;
+    }
+
+    AppState.ovAnalysisData = d;
+    if (!AppState.activePhases) AppState.activePhases = d.phases_active || [];
+    if (!AppState.activeEmployees) AppState.activeEmployees = [];
+
+    const isBogTA = AppState._overviewData?.is_bog !== false;
+    // For non-BOG: show available phases in dropdown (filtered by services/support on backend)
+    // For BOG: show all phases
+    renderPhaseFilters(phaseGroup, d.phases_available || []);
+    if (!isBogTA && (!d.phases_available || !d.phases_available.length)) {
+      // No phases returned from backend — show all tasks
+      AppState.activePhases = null;
+    } else if (!isBogTA && d.phases_available?.length) {
+      // Pre-select all available phases
+      if (!AppState.activePhases || AppState.activePhases.length === 0) {
+        AppState.activePhases = [...d.phases_available];
+      }
+    }
+    renderEmployeeFilter(d.employees_available || []);
+    populateStageFilter(d.stages_used || []);
+    renderTaskList(phaseGroup);
+  } catch (e) {
+    cont.innerHTML = `<div class="banner banner-warn"><strong>Error:</strong> ${e.message}</div>`;
+  }
+}
+
+function renderPhaseFilters(phaseGroup,available){
+  const cont=document.getElementById('ovPhaseFilters');if(!cont)return;if(!available.length){cont.innerHTML='';return;}
+  const total=available.length,active=AppState.activePhases||[];
+  const lbl=active.length===0||active.length===total?`All phases (${total})`:active.length===1?active[0]:`${active.length} of ${total} phases`;
+  cont.style.cssText='position:relative;display:inline-flex;flex-direction:column;';
+  let html='<label class="filter-label">PHASES (multi-select)</label><div style="position:relative;display:inline-block;" id="ovPhaseDropdown">';
+  html+=`<button type="button" class="phase-toggle" id="ovPhaseToggle"><span id="ovPhaseLabel">${lbl}</span><span style="margin-left:8px;color:var(--text-muted);">▼</span></button>`;
+  html+='<div id="ovPhaseMenu" style="display:none;position:absolute;top:100%;left:0;z-index:9999;min-width:280px;max-width:420px;max-height:360px;overflow-y:auto;background:white;border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);margin-top:2px;"><div class="phase-menu-actions"><a id="ovPhaseAll">Select all</a><a id="ovPhaseNone">Clear</a></div>';
+  available.filter(p=>p&&p!=='undefined'&&p!=='null').forEach(p=>{const checked=active.includes(p),label=p==='No Phase'?'📭 No Phase':p;html+=`<label class="phase-option ${checked?'selected':''}" data-phase="${encodeURIComponent(p)}" style="display:flex;align-items:center;gap:8px;padding:6px 12px;cursor:pointer;"><input type="checkbox" ${checked?'checked':''}><span dir="auto">${label}</span></label>`;});
+  html+='</div></div>';cont.innerHTML=html;
+  const toggle=document.getElementById('ovPhaseToggle'),menu=document.getElementById('ovPhaseMenu');
+  toggle.addEventListener('click',e=>{e.stopPropagation();menu.style.display=menu.style.display==='none'?'block':'none';toggle.classList.toggle('open',menu.style.display==='block');});
+  document.addEventListener('click',e=>{if(!document.getElementById('ovPhaseDropdown')?.contains(e.target)){menu.style.display='none';toggle.classList.remove('open');}},{capture:false});
+  menu.querySelectorAll('.phase-option').forEach(opt=>{opt.addEventListener('click',e=>{e.stopPropagation();const phase=decodeURIComponent(opt.dataset.phase),cb=opt.querySelector('input');if(e.target!==cb)cb.checked=!cb.checked;AppState.activePhases=AppState.activePhases||[];if(cb.checked){if(!AppState.activePhases.includes(phase))AppState.activePhases.push(phase);opt.classList.add('selected');}else{AppState.activePhases=AppState.activePhases.filter(p=>p!==phase);opt.classList.remove('selected');}const a=AppState.activePhases;document.getElementById('ovPhaseLabel').textContent=a.length===0||a.length===total?`All phases (${total})`:a.length===1?a[0]:`${a.length} of ${total} phases`;loadTaskAnalysis(phaseGroup);});});
+  document.getElementById('ovPhaseAll').addEventListener('click',e=>{e.stopPropagation();AppState.activePhases=[...available];renderPhaseFilters(phaseGroup,available);loadTaskAnalysis(phaseGroup);});
+  document.getElementById('ovPhaseNone').addEventListener('click',e=>{e.stopPropagation();AppState.activePhases=[];renderPhaseFilters(phaseGroup,available);loadTaskAnalysis(phaseGroup);});
+}
+function phaseLabel(phases,total){const t=total||(AppState.ovAnalysisData?.phases_available||[]).length;if(!phases||phases.length===0)return `All phases (${t})`;if(phases.length===t)return `All phases (${t})`;if(phases.length===1)return phases[0];return `${phases.length} of ${t} phases`;}
+
+function renderEmployeeFilter(employees) {
+  const cont = document.getElementById('ovEmployeeFilters');
+  if (!cont || !employees.length) {
+    if (cont) cont.innerHTML = '';
+    return;
+  }
+  let html = '<label class="filter-label">EMPLOYEE (multi-select)</label>';
+  html += '<div class="phase-dropdown" id="ovEmpDropdown">';
+  html += '<button type="button" class="phase-toggle" id="ovEmpToggle">';
+  html += `<span id="ovEmpLabel">${empLabel(AppState.activeEmployees, employees.length)}</span>`;
+  html += '<span style="margin-left:8px; color: var(--text-muted);">▼</span>';
+  html += '</button>';
+  html += '<div class="phase-menu" id="ovEmpMenu" style="display:none; max-height: 360px;">';
+  html += '<div class="phase-menu-actions">';
+  html += '<a id="ovEmpAll">Select all</a>';
+  html += '<a id="ovEmpNone">Clear</a>';
+  html += '</div>';
+  const _seen=new Set(),_ded=employees.filter(e=>{const k=e.replace(/^\[E\d+\]\s*/,'').toLowerCase().trim();if(_seen.has(k))return false;_seen.add(k);return true;});_ded.forEach(e=>{const checked=(AppState.activeEmployees||[]).includes(e);html+=`<label class="phase-option ${checked?'selected':''}" data-emp="${encodeURIComponent(e)}"><input type="checkbox" ${checked?'checked':''}><span dir="auto">${e}</span></label>`;});
+  html += '</div></div>';
+  cont.innerHTML = html;
+
+  const toggle = document.getElementById('ovEmpToggle');
+  const menu = document.getElementById('ovEmpMenu');
+  toggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+    toggle.classList.toggle('open', menu.style.display === 'block');
+  });
+  document.addEventListener('click', (e) => {
+    if (!document.getElementById('ovEmpDropdown')?.contains(e.target)) {
+      menu.style.display = 'none';
+      toggle.classList.remove('open');
+    }
+  });
+
+  menu.querySelectorAll('.phase-option').forEach(opt => {
+    opt.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const emp = decodeURIComponent(opt.dataset.emp);
+      const cb = opt.querySelector('input');
+      if (e.target !== cb) cb.checked = !cb.checked;
+      AppState.activeEmployees = AppState.activeEmployees || [];
+      if (cb.checked) {
+        if (!AppState.activeEmployees.includes(emp)) AppState.activeEmployees.push(emp);
+        opt.classList.add('selected');
+      } else {
+        AppState.activeEmployees = AppState.activeEmployees.filter(p => p !== emp);
+        opt.classList.remove('selected');
+      }
+      document.getElementById('ovEmpLabel').textContent = empLabel(AppState.activeEmployees, employees.length);
+      // Re-render with current data (no backend call needed for employee filter)
+      renderTaskList(AppState.currentOverviewPhase);
+    });
+  });
+  menu.querySelector('#ovEmpAll').addEventListener('click', (e) => {
+    e.stopPropagation();
+    AppState.activeEmployees = [...employees];
+    renderEmployeeFilter(employees);  // refresh checkmarks
+    renderTaskList(AppState.currentOverviewPhase);
+  });
+  menu.querySelector('#ovEmpNone').addEventListener('click', (e) => {
+    e.stopPropagation();
+    AppState.activeEmployees = [];
+    renderEmployeeFilter(employees);
+    renderTaskList(AppState.currentOverviewPhase);
   });
 }
 
-function renderProfitability(data, phaseKey) {
-  // Pre-fetch overrides
-  fetch('/api/plan-overrides').then(r => r.json()).then(o => {
-    AppState.planOverrides = o.plan_overrides || {};
-    setTimeout(() => profBuildTable(phaseKey), 100);
+function empLabel(emps, total) {
+  if (!emps || emps.length === 0) return 'All employees';
+  if (emps.length === 1) return emps[0];
+  if (emps.length === total) return `All (${total})`;
+  return `${emps.length} employees selected`;
+}
+
+function populateStageFilter(stagesUsed) {
+  const sel = document.getElementById('ovTaskStatus');
+  if (!sel) return;
+  const currentValue = sel.value;
+  // Get unique stage names
+  const stageNames = (stagesUsed || []).map(s => s.name).filter(Boolean);
+  const uniqueStages = [...new Set(stageNames)].sort();
+
+  let html = '<option value="all">All stages</option>';
+  uniqueStages.forEach(name => {
+    html += `<option value="${name.toLowerCase()}">${name}</option>`;
+  });
+  sel.innerHTML = html;
+  // Restore selection if still valid
+  if ([...sel.options].some(o => o.value === currentValue)) {
+    sel.value = currentValue;
+  }
+}
+
+function renderSummary(filteredTasks) {
+  const summary = document.getElementById('ovAnalysisSummary');
+  if (!summary) return;
+
+  // Compute summary from filtered (non-context) tasks
+  // Only count leaves to avoid double-counting via parents' rollups
+  const taskList = filteredTasks || [];
+
+  const taskIdsHere = new Set(taskList.map(t => t.id));
+  const isParent = (t) => taskList.some(x => x.parent_id === t.id);
+
+  let totalPlanned = 0;
+  let totalActual = 0;
+  let totalRemaining = 0;
+  let parentsCount = 0;
+  let subsCount = 0;
+  let doneCount = 0;
+  let activeCount = 0;
+  let notStartedCount = 0;
+
+  taskList.forEach(t => {
+    const hasChild = isParent(t);
+    if (hasChild) parentsCount++;
+    else subsCount++;
+
+    // Only count leaf tasks for hours (avoid double-counting parent rollups)
+    if (!hasChild) {
+      const stage = (t.stage || '').toLowerCase().trim();
+      const isClosed = stage === 'closed' || stage === 'done' || (t.progress_pct >= 100);
+      const planned = t.planned_hours || 0;
+      const actual = t.actual_hours || 0;
+      totalPlanned += planned;
+      totalActual += actual;
+      // Closed tasks: remaining = 0
+      if (isClosed) {
+        totalRemaining += 0;
+        doneCount++;
+      } else if (planned > 0) {
+        totalRemaining += Math.max(0, planned - actual);
+        if (actual > 0) activeCount++;
+        else notStartedCount++;
+      } else {
+        // Task without planning — show actual as "active" if any
+        if (actual > 0) activeCount++;
+        else notStartedCount++;
+      }
+    }
   });
 
-  const html = `
-    <div class="kpi-strip kpi-strip-small" id="prof-kpi-${phaseKey}">
+  const totalTasks = taskList.length;
+  const overallProgress = totalPlanned > 0 ? Math.min(150, totalActual / totalPlanned * 100) : 0;
+
+  // Color for remaining: more remaining = warning
+  const remainingColor = totalRemaining === 0 ? 'kpi-green'
+    : totalRemaining > totalPlanned * 0.5 ? 'kpi-red'
+    : totalRemaining > totalPlanned * 0.25 ? 'kpi-amber' : 'kpi-blue';
+
+  const totalEAC = totalActual + totalRemaining;
+  const eacMD = totalEAC / 8;
+  const remMD = totalRemaining / 8;
+
+  // Save remaining MD to AppState for Profitability tab
+  if (!AppState._taskRemainingMDs) AppState._taskRemainingMDs = {};
+  AppState._taskRemainingMDs[AppState.ovActivePhase || 'development'] = remMD;
+
+  summary.innerHTML = `
+    <div class="kpi-strip kpi-strip-small" style="margin-bottom: 16px;">
       <div class="kpi-card kpi-blue compact">
-        <div class="kpi-label">% COMPLETION</div>
-        <div class="kpi-value" id="prof-kpi-completion-${phaseKey}">—</div>
-        <div class="kpi-foot">latest month</div>
-      </div>
-      <div class="kpi-card kpi-amber compact">
-        <div class="kpi-label">REMAINING MDs</div>
-        <div class="kpi-value" id="prof-kpi-remaining-${phaseKey}">—</div>
+        <div class="kpi-label">TASKS</div>
+        <div class="kpi-value">${totalTasks}</div>
+        <div class="kpi-foot">${parentsCount} parents · ${subsCount} subs · <span style="color:var(--green)">${doneCount} done</span> · <span style="color:var(--amber)">${activeCount} active</span> · ${notStartedCount} new</div>
       </div>
       <div class="kpi-card kpi-navy compact">
-        <div class="kpi-label">EAC MDs</div>
-        <div class="kpi-value" id="prof-kpi-eac-${phaseKey}">—</div>
+        <div class="kpi-label">PLANNED HOURS</div>
+        <div class="kpi-value">${fmt.num(Math.round(totalPlanned))}<span class="kpi-unit">h</span></div>
+        <div class="kpi-foot">${fmt.decimal(totalPlanned/8)} MD</div>
       </div>
       <div class="kpi-card kpi-green compact">
-        <div class="kpi-label">CPI</div>
-        <div class="kpi-value" id="prof-kpi-cpi-${phaseKey}">—</div>
-        <div class="kpi-foot">cost performance index</div>
+        <div class="kpi-label">ACTUAL HOURS</div>
+        <div class="kpi-value">${fmt.num(Math.round(totalActual))}<span class="kpi-unit">h</span></div>
+        <div class="kpi-foot">${fmt.decimal(totalActual/8)} MD</div>
+      </div>
+      <div class="kpi-card ${remainingColor} compact">
+        <div class="kpi-label">REMAINING</div>
+        <div class="kpi-value">${fmt.num(Math.round(totalRemaining))}<span class="kpi-unit">h</span></div>
+        <div class="kpi-foot" style="font-weight:700;">${fmt.decimal(remMD)} MD</div>
       </div>
       <div class="kpi-card kpi-blue compact">
-        <div class="kpi-label">PROFIT AT COMPLETION</div>
-        <div class="kpi-value" id="prof-kpi-profit-${phaseKey}">—</div>
-      </div>
-    </div>
-    <div class="card" style="margin-top:12px;" id="prof-card-${phaseKey}">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-        <div>
-          <h3 class="card-title" style="margin:0;">Monthly Profitability Variance</h3>
-          <span class="muted-text" style="font-size:11px;">Enter % Completion and Remaining MDs per month · all other columns auto-calculated · auto-saved</span>
-        </div>
-        <div style="display:flex;gap:8px;">
-          <button class="btn-outline" style="font-size:12px;padding:6px 14px;" 
-            title="Fill Remaining MDs from Tasks Analysis tab"
-            onclick="profFillFromTasks('${phaseKey}')">📋 Fill from Tasks</button>
-          <button class="btn-primary" style="font-size:12px;padding:6px 16px;" onclick="profBuildTable('${phaseKey}')">↻ Recalculate</button>
-        </div>
-      </div>
-      <div id="prof-table-wrap-${phaseKey}">
-        <div class="loading">Waiting for Current Effort data…</div>
+        <div class="kpi-label">EAC</div>
+        <div class="kpi-value">${fmt.num(Math.round(totalEAC))}<span class="kpi-unit">h</span></div>
+        <div class="kpi-foot" style="font-weight:700; color:var(--blue);">${fmt.decimal(eacMD)} MD</div>
       </div>
     </div>
   `;
-
-  // Build table once effort data is available
-  setTimeout(() => profBuildTable(phaseKey), 500);
-
-  return html;
 }
 
-async function profBuildTable(phaseKey) {
-  const wrap = document.getElementById(`prof-table-wrap-${phaseKey}`);
-  if (!wrap) return;
+function renderTaskList(phaseGroup) {
+  const cont = document.getElementById('ovAnalysisContent');
+  const data = AppState.ovAnalysisData;
+  if (!data || !data.tasks) { cont.innerHTML = '<div class="loading">No data</div>'; return; }
 
-  let months = (AppState._effortMonths && AppState._effortMonths[phaseKey]) || [];
+  const search = (document.getElementById('ovTaskSearch')?.value || '').toLowerCase().trim();
+  const typeFilter = document.getElementById('ovTaskType')?.value || 'all';
+  const statusFilter = document.getElementById('ovTaskStatus')?.value || 'all';
 
-  // If no effort data, fetch it silently from API
-  if (!months.length) {
-    wrap.innerHTML = '<div class="loading">Loading effort data…</div>';
-    try {
-      const d = await fetchEffortCached(phaseKey);
-      if (d.months && d.months.length) {
-        // Store months in AppState
-        if (!AppState._effortMonths)     AppState._effortMonths     = {};
-        if (!AppState._effortMonthMDs)   AppState._effortMonthMDs   = {};
-        if (!AppState._effortMonthCosts) AppState._effortMonthCosts = {};
-        AppState._effortMonths[phaseKey] = d.months;
+  // Build full task lookup
+  const allTasks = data.tasks;
+  const taskById = new Map(allTasks.map(t => [t.id, t]));
 
-        // Build MDs and costs per month
-        const monthMDTotals   = {};
-        const monthCostTotals = {};
-        d.months.forEach(m => { monthMDTotals[m.key] = 0; monthCostTotals[m.key] = 0; });
-        (d.employees || []).forEach(emp => {
-          d.months.forEach(m => {
-            const cell = emp.months?.[m.key] || { regular: 0, ramadan: 0, overtime: 0 };
-            monthMDTotals[m.key]   += (cell.regular + cell.overtime) / 8 + cell.ramadan / 6;
-            const hr  = emp.hour_rate || 0;
-            const otr = emp.overtime_rate || hr * 1.5;
-            monthCostTotals[m.key] += (cell.regular + cell.ramadan) * hr + cell.overtime * otr;
-          });
-        });
-        AppState._effortMonthMDs[phaseKey]   = monthMDTotals;
-        AppState._effortMonthCosts[phaseKey] = monthCostTotals;
-        months = d.months;
+  // Build set of parent IDs (tasks that have at least one child in the dataset)
+  const parentIdsInData = new Set();
+  allTasks.forEach(t => {
+    if (t.parent_id && taskById.has(t.parent_id)) parentIdsInData.add(t.parent_id);
+  });
+
+  // Step 1: find which tasks match the filters (direct matches)
+  const activeEmps = AppState.activeEmployees || [];
+  const empFilterActive = activeEmps.length > 0 && activeEmps.length < (data.employees_available || []).length;
+
+  let matchedIds = new Set();
+  allTasks.forEach(t => {
+    let pass = true;
+    if (search) {
+      const matchSearch = (t.name || '').toLowerCase().includes(search);
+      if (!matchSearch) pass = false;
+    }
+    const isActuallyParent = parentIdsInData.has(t.id);
+    if (pass && typeFilter === 'parents' && !isActuallyParent) pass = false;
+    if (pass && typeFilter === 'subtasks' && isActuallyParent) pass = false;
+    if (pass && statusFilter && statusFilter !== 'all') {
+      const taskStage = (t.stage || '').toLowerCase().trim();
+      if (taskStage !== statusFilter.toLowerCase()) pass = false;
+    }
+    // Employee filter: task must have one of the active employees in allocation OR be assignee
+    if (pass && empFilterActive) {
+      const taskEmps = new Set();
+      (t.allocation || []).forEach(a => taskEmps.add(a.name));
+      if (t.assignee) taskEmps.add(t.assignee);
+      const hasMatch = activeEmps.some(e => taskEmps.has(e));
+      if (!hasMatch) pass = false;
+    }
+    if (pass) matchedIds.add(t.id);
+  });
+
+  // Step 2: include all ancestors of matched tasks (so the tree shows context)
+  // EXCEPT when typeFilter is 'subtasks' - then show only sub-tasks flat
+  const visibleIds = new Set(matchedIds);
+  const expandedForSearch = new Set();
+  if (typeFilter !== 'subtasks') {
+    matchedIds.forEach(id => {
+      let cur = taskById.get(id);
+      while (cur && cur.parent_id) {
+        const parent = taskById.get(cur.parent_id);
+        if (!parent) break;
+        visibleIds.add(parent.id);
+        // Auto-expand parents when searching so matches are visible
+        if (search) expandedForSearch.add(parent.id);
+        cur = parent;
       }
-    } catch(e) {}
+    });
   }
 
-  if (!months.length) {
-    wrap.innerHTML = '<div class="loading" style="color:var(--text-muted);">No effort data found for this phase</div>';
+  let tasks = allTasks.filter(t => visibleIds.has(t.id));
+
+  // Update summary KPIs with the matched tasks (excluding context-only ancestors)
+  const matchedTasksList = allTasks.filter(t => matchedIds.has(t.id));
+  renderSummary(matchedTasksList);
+
+  if (!tasks.length) {
+    cont.innerHTML = '<div class="card"><div class="loading">No tasks match the filters.</div></div>';
     return;
   }
 
-  _doBuildProfTable(phaseKey, wrap, months);
-}
+  // Group all tasks by their immediate parent_id (handles multi-level hierarchy)
+  const byParent = new Map();
+  const taskIdSet = new Set(tasks.map(t => t.id));
+  const rootTasks = [];
 
-async function _doBuildProfTable(phaseKey, wrap, months) {
-
-  // Load saved overrides
-  let overrides = {};
-  try {
-    const r = await fetch('/api/plan-overrides');
-    const d = await r.json();
-    AppState.planOverrides = d.plan_overrides || {};
-    overrides = (AppState.planOverrides[phaseKey]) || {};
-  } catch(e) {}
-
-  const tableHtml = `
-    <div class="table-scroll">
-    <table class="data-table" id="profit-table-${phaseKey}" style="font-size:11px; white-space:nowrap;">
-      <thead>
-        <tr>
-          <th rowspan="2" style="position:sticky;left:0;z-index:3;background:var(--navy);color:white;min-width:70px;">Month</th>
-          <th colspan="3" style="text-align:center;background:#1B2A4E;color:#93C5FD;border-left:3px solid #3B82F6;">Presales Budget</th>
-          <th colspan="2" style="text-align:center;background:#1B2A4E;color:#FCD34D;border-left:3px solid #F59E0B;">Current Effort</th>
-          <th colspan="2" style="text-align:center;background:#1B2A4E;color:#93C5FD;border-left:3px solid #60A5FA;">% Completion & Remaining</th>
-          <th colspan="8" style="text-align:center;background:#1B2A4E;color:#6EE7B7;border-left:3px solid #10B981;">Cost Variance</th>
-          <th colspan="6" style="text-align:center;background:#1B2A4E;color:#FCA5A5;border-left:3px solid #EF4444;">Profitability</th>
-          <th colspan="6" style="text-align:center;background:#1B2A4E;color:#C4B5FD;border-left:3px solid #8B5CF6;">Progress &amp; Virtual Invoice</th>
-        </tr>
-        <tr style="font-size:10px;background:#f8fafc;">
-          <th class="num" style="border-left:3px solid #3B82F6;">Revenue SAR</th>
-          <th class="num">Est. Cost SAR</th>
-          <th class="num">Est. MDs</th>
-          <th class="num" style="border-left:3px solid #F59E0B;">This Month MDs</th>
-          <th class="num">Actual MDs to Date</th>
-          <th class="num" style="border-left:3px solid #60A5FA;">% Completion</th>
-          <th class="num">Remaining MDs</th>
-          <th class="num" style="border-left:3px solid #10B981;">Current Cost SAR</th>
-          <th class="num">EAC MDs</th>
-          <th class="num">Expected Overrun</th>
-          <th class="num">Cost to Complete SAR</th>
-          <th class="num">Est. at Completion SAR</th>
-          <th class="num">CPI</th>
-          <th class="num">Variance SAR</th>
-          <th class="num">Variance %</th>
-          <th class="num" style="border-left:3px solid #EF4444;">Profit at Comp SAR</th>
-          <th class="num">Planned Profit SAR</th>
-          <th class="num">Profit %</th>
-          <th class="num">Prof. Var SAR</th>
-          <th class="num">Prof. Var %</th>
-          <th class="num" style="border-left:3px solid #8B5CF6;">Total Recog. Revenue</th>
-          <th class="num">Progress %</th>
-          <th class="num">Production</th>
-          <th class="num">Total Issued SAR</th>
-          <th class="num">Acc. VI SAR</th>
-          <th class="num">This Month VI SAR</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${months.map((m) => {
-          const monthKey = m.key;
-          const mo = overrides[monthKey] || {};
-          const savedPct = mo.completion !== undefined ? parseFloat(mo.completion).toFixed(2) : '0.00';
-          const savedRem = mo.remaining  !== undefined ? parseFloat(mo.remaining).toFixed(2)  : '0.00';
-          return `
-          <tr data-month-key="${monthKey}" style="height:52px;">
-            <td style="position:sticky;left:0;background:white;z-index:2;font-family:var(--mono);font-size:12px;font-weight:600;padding:8px 10px;">${monthKey}</td>
-            <td class="num prof-rev-${phaseKey}" style="border-left:3px solid #3B82F6;">—</td>
-            <td class="num prof-estcost-${phaseKey}">—</td>
-            <td class="num prof-estmds-${phaseKey}">—</td>
-            <td class="num prof-thismonth-${phaseKey}" style="border-left:3px solid #F59E0B;">—</td>
-            <td class="num prof-actual-${phaseKey}">—</td>
-            <td class="num" style="border-left:3px solid #60A5FA;">
-              <input type="number" step="0.01" min="0" max="200"
-                class="completion-input" data-phase="${phaseKey}" data-month="${monthKey}" data-field="completion"
-                value="${savedPct}"
-                style="width:65px;padding:3px 6px;font-size:12px;text-align:right;border:1px solid var(--border-strong);border-radius:4px;font-family:var(--mono);"
-                oninput="profRecomputeAll('${phaseKey}')" onblur="saveOverride(this)">
-              <span style="font-size:10px;color:var(--text-muted);">%</span>
-            </td>
-            <td class="num">
-              <input type="number" step="0.01" min="0"
-                class="remaining-input" data-phase="${phaseKey}" data-month="${monthKey}" data-field="remaining"
-                value="${savedRem}"
-                style="width:75px;padding:3px 6px;font-size:12px;text-align:right;border:1px solid var(--border-strong);border-radius:4px;font-family:var(--mono);"
-                oninput="profRecomputeAll('${phaseKey}')" onblur="saveOverride(this)">
-            </td>
-            <td class="num" style="border-left:3px solid #10B981;"><span class="pc-currcost-${monthKey}">—</span></td>
-            <td class="num"><span class="pc-eac-${monthKey}">—</span></td>
-            <td class="num"><span class="pc-overrun-${monthKey}">—</span></td>
-            <td class="num"><span class="pc-costtocomplete-${monthKey}">—</span></td>
-            <td class="num"><span class="pc-eac-cost-${monthKey}">—</span></td>
-            <td class="num"><span class="pc-cpi-${monthKey}">—</span></td>
-            <td class="num"><span class="pc-variance-${monthKey}">—</span></td>
-            <td class="num"><span class="pc-variance-pct-${monthKey}">—</span></td>
-            <td class="num" style="border-left:3px solid #EF4444;"><span class="pc-profit-comp-${monthKey}">—</span></td>
-            <td class="num"><span class="pc-planned-profit-${monthKey}">—</span></td>
-            <td class="num"><span class="pc-profit-pct-${monthKey}">—</span></td>
-            <td class="num"><span class="pc-prof-var-${monthKey}">—</span></td>
-            <td class="num"><span class="pc-prof-var-pct-${monthKey}">—</span></td>
-            <td class="num" style="border-left:3px solid #8B5CF6;"><span class="pc-rev-todate-${monthKey}">—</span></td>
-            <td class="num"><span class="pc-progress-${monthKey}">—</span></td>
-            <td class="num"><span class="pc-production-${monthKey}">—</span></td>
-            <td class="num"><span class="pc-issued-${monthKey}">—</span></td>
-            <td class="num"><span class="pc-vi-acc-${monthKey}">—</span></td>
-            <td class="num"><span class="pc-vi-month-${monthKey}">—</span></td>
-          </tr>`;
-        }).join('')}
-      </tbody>
-    </table>
-    </div>
-  `;
-
-  wrap.innerHTML = tableHtml;
-  // Set input values from saved overrides explicitly (HTML value attr may not set DOM value)
-  const savedOvs = (AppState.planOverrides?.[phaseKey]) || {};
-  document.querySelectorAll(`#profit-table-${phaseKey} tr[data-month-key]`).forEach(tr => {
-    const mk = tr.dataset.monthKey;
-    const mo = savedOvs[mk] || {};
-    const compInp = tr.querySelector('.completion-input');
-    const remInp  = tr.querySelector('.remaining-input');
-    if (compInp && mo.completion !== undefined) compInp.value = parseFloat(mo.completion).toFixed(2);
-    if (remInp  && mo.remaining  !== undefined) remInp.value  = parseFloat(mo.remaining).toFixed(2);
+  tasks.forEach(t => {
+    if (t.parent_id && taskIdSet.has(t.parent_id)) {
+      if (!byParent.has(t.parent_id)) byParent.set(t.parent_id, []);
+      byParent.get(t.parent_id).push(t);
+    } else {
+      rootTasks.push(t);
+    }
   });
 
-  // Auto-fill remaining MDs from Tasks Analysis if available
-  const taskRemMD = AppState._taskRemainingMDs && AppState._taskRemainingMDs[phaseKey];
-  if (taskRemMD) {
-    setTimeout(() => profFillFromTasks(phaseKey), 50);
+  function renderTaskBranch(task, depth) {
+    const children = byParent.get(task.id) || [];
+    let html = renderTaskCard(task, children.length, depth, matchedIds.has(task.id));
+    const isExpanded = AppState.expandedTasks.has(task.id) || expandedForSearch.has(task.id);
+    if (children.length && isExpanded) {
+      html += `<div class="task-children" style="margin-left: ${Math.min(depth * 12, 36)}px;">`;
+      children.sort((a, b) => (b.progress_pct || 0) - (a.progress_pct || 0)
+                              || (a.name || '').localeCompare(b.name || ''));
+      children.forEach(c => { html += renderTaskBranch(c, depth + 1); });
+      html += '</div>';
+    }
+    return html;
+  }
+
+  rootTasks.sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  const _fKey=[search,typeFilter,statusFilter,(AppState.activeEmployees||[]).join(','),(AppState.activePhases||[]).join(',')].join('|');
+  if(AppState._taskFilterKey!==_fKey){AppState._taskFilterKey=_fKey;AppState._taskPage=0;}
+  if(!AppState._taskPage)AppState._taskPage=0;AppState._lastPhaseGroup=phaseGroup;
+  const _showN=(AppState._taskPage+1)*10,_shown=rootTasks.slice(0,_showN),_rem=Math.max(0,rootTasks.length-_showN);
+  let html=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;"><h3 class="card-title" style="margin:0;">Tasks <span class="muted-text">— ${matchedIds.size} match${matchedIds.size!==1?'es':''}${matchedIds.size<tasks.length?` · ${tasks.length-matchedIds.size} parent context`:''}</span></h3><span class="muted-text" style="font-size:11px;">Click parent to expand · Live from Odoo</span></div><div class="task-analysis-list">`;
+  _shown.forEach(t=>{html+=renderTaskBranch(t,0);});
+  if(_rem>0||AppState._taskPage>0){html+=`<div style="display:flex;gap:8px;justify-content:center;padding:14px 0;">`;if(_rem>0)html+=`<button onclick="_ovLoadMore()" style="padding:6px 20px;border:1px solid var(--border);border-radius:6px;background:var(--bg-subtle);cursor:pointer;font-size:13px;font-weight:600;color:var(--navy);">Show 10 more <span style="color:var(--muted);font-size:12px;">(${_rem} remaining)</span></button>`;if(AppState._taskPage>0)html+=`<button onclick="_ovCollapse()" style="padding:6px 16px;border:1px solid var(--border);border-radius:6px;background:transparent;cursor:pointer;font-size:12px;color:var(--muted);">↑ Collapse to 10</button>`;html+=`</div>`;}
+  html+=`</div></div>`;
+  cont.innerHTML = html;
+
+  // Wire expand clicks
+  cont.querySelectorAll('[data-expand-id]').forEach(el=>{el.addEventListener('click',()=>{const id=parseInt(el.dataset.expandId);if(AppState.expandedTasks.has(id))AppState.expandedTasks.delete(id);else AppState.expandedTasks.add(id);renderTaskList(phaseGroup);});});
+}
+window._ovLoadMore=()=>{AppState._taskPage=(AppState._taskPage||0)+1;renderTaskList(AppState._lastPhaseGroup);};
+window._ovCollapse=()=>{AppState._taskPage=0;renderTaskList(AppState._lastPhaseGroup);};
+function renderTaskCard(t, childCount, depth, isMatched) {
+  const hasChildren = childCount > 0;
+  const stageLower = (t.stage || '').toLowerCase().trim();
+  const isClosed = stageLower === 'closed' || stageLower === 'done';
+
+  let plannedH, actualH, remainingH, progressP;
+  if (hasChildren) {
+    plannedH = t.subtask_planned_hours || 0;
+    actualH = t.subtask_actual_hours || 0;
+    remainingH = isClosed ? 0 : Math.max(0, plannedH - actualH);
+    progressP = isClosed ? 100 : (plannedH > 0 ? Math.min(150, (actualH / plannedH * 100)) : 0);
   } else {
-    setTimeout(() => profRecomputeAll(phaseKey), 50);
+    plannedH = t.planned_hours || 0;
+    actualH = t.actual_hours || 0;
+    remainingH = isClosed ? 0 : Math.max(0, plannedH - actualH);
+    progressP = isClosed ? 100 : (t.progress_pct || 0);
   }
-}
 
-async function profRecomputeAll(phaseKey) {
-  let totalRevSAR = 0, totalEstCostSAR = 0, totalEstMDs = 0;
+  let progressColor, progressLabel;
+  if (progressP === 0) { progressColor = '#9CA3AF'; progressLabel = 'Not started'; }
+  else if (progressP >= 100 && progressP <= 110) { progressColor = '#10B981'; progressLabel = 'Done'; }
+  else if (progressP > 110) { progressColor = '#10B981'; progressLabel = 'Done'; }  // treat over 100 as done
+  else if (progressP >= 75) { progressColor = '#10B981'; progressLabel = 'On track'; }
+  else if (progressP >= 40) { progressColor = '#F59E0B'; progressLabel = 'In progress'; }
+  else { progressColor = '#3B82F6'; progressLabel = 'Active'; }
 
-  // ── 1. Revenue: DOM → AppState → DB ──
-  const revEl = document.getElementById(`inp-rev-${phaseKey}`);
-  if (revEl && parseFloat(revEl.value)) {
-    totalRevSAR = parseFloat(revEl.value);
-  } else if (AppState._savedRevenue?.[phaseKey]) {
-    totalRevSAR = AppState._savedRevenue[phaseKey];
+  const stageColor = stageColorMap(t.stage);
+  const isExpanded = AppState.expandedTasks.has(t.id);
+  const widthBar = Math.min(100, progressP);
+  const isChild = depth > 0;
+
+  // For parent display, show rolled-up allocation; for leaf, show own
+  let displayAlloc;
+  let isInherited = false;
+  if (hasChildren) {
+    displayAlloc = Object.entries(t.rollup_allocation || {})
+      .sort((a, b) => b[1] - a[1]).slice(0, 3)
+      .map(([n, h]) => ({ name: n, hours: h }));
+  } else if ((t.allocation || []).length > 0) {
+    displayAlloc = (t.allocation || []).slice(0, 3);
+  } else if ((t.inherited_allocation || []).length > 0) {
+    // Task has no direct allocation - show inherited from parent
+    displayAlloc = t.inherited_allocation.slice(0, 3);
+    isInherited = true;
   } else {
-    try {
-      const r = await fetch(`/api/variance/budget-override/${phaseKey}`);
-      if (r.ok) {
-        const d = await r.json();
-        const sv = (d.overrides||{})['approved.revenue_sar'];
-        if (sv) { totalRevSAR = parseFloat(sv); if (!AppState._savedRevenue) AppState._savedRevenue={}; AppState._savedRevenue[phaseKey]=totalRevSAR; }
-      }
-    } catch(e) {}
-  }
-  // Add delta changes
-  const budgChanges = _budgetChanges[phaseKey] || [];
-  totalRevSAR += budgChanges.reduce((s,c) => s + (parseFloat(c.delta_rev)||0), 0);
-
-  // Approved bases (from estimated rows, before any changes)
-  const approvedRevBase     = AppState._savedRevenue?.[phaseKey] || 0;
-  const approvedMDsBase     = AppState._budgetApprovedMDs?.[phaseKey] || totalEstMDs || 0;
-  const totalDeltaCostAll   = budgChanges.reduce((s,c) => s + (parseFloat(c.delta_cost)||0), 0);
-  const totalDeltaMDsAll    = budgChanges.reduce((s,c) => s + (parseFloat(c.delta_mds)||0), 0);
-  const approvedCostBase    = (AppState._budgetFinalCost?.[phaseKey] || totalEstCostSAR) - totalDeltaCostAll;
-
-  // Per-month: apply only changes whose change_date ≤ monthKey
-  const _getMonthlyRev = (mk) => {
-    let v = approvedRevBase;
-    budgChanges.forEach(c => { const cd=(c.change_date||'').slice(0,7); if(!cd||cd<=mk) v+=parseFloat(c.delta_rev)||0; });
-    return v;
-  };
-  const _getMonthlyEstCost = (mk) => {
-    let v = approvedCostBase;
-    budgChanges.forEach(c => { const cd=(c.change_date||'').slice(0,7); if(!cd||cd<=mk) v+=parseFloat(c.delta_cost)||0; });
-    return v;
-  };
-  const _getMonthlyEstMDs = (mk) => {
-    if (totalDeltaMDsAll === 0) return approvedMDsBase;
-    let v = approvedMDsBase;
-    budgChanges.forEach(c => { const cd=(c.change_date||'').slice(0,7); if(!cd||cd<=mk) v+=parseFloat(c.delta_mds)||0; });
-    return v;
-  };
-
-  // ── 2. Estimated rows: ALWAYS fetch fresh to ensure totalEstMDs/Cost are set ──
-  {
-    let rows = (_estPhase === phaseKey && _estRows?.length) ? _estRows : null;
-    if (!rows) {
-      try {
-        const r = await fetch(`/api/estimated-rows?phase=${phaseKey}`);
-        if (r.ok) {
-          const d = await r.json();
-          rows = d.rows || [];
-          if (rows.length) { _estRows = rows; _estPhase = phaseKey; }
-        }
-      } catch(e) {}
-    }
-    // Also try non-BOG summary
-    if ((!rows || !rows.length) && AppState._estSummary?.[phaseKey]) {
-      const s = AppState._estSummary[phaseKey];
-      totalEstMDs     = s.total_mds      || 0;
-      totalEstCostSAR = s.total_cost_sar || 0;
-    } else if (rows && rows.length) {
-      let costUSD = 0;
-      rows.forEach(r => {
-        const hr=parseFloat(r.hourRate)||0, at=parseFloat(r.actualTime)||0, em=parseFloat(r.estMonths)||0;
-        costUSD += hr*at*em; totalEstMDs += at*em/8;
-      });
-      totalEstCostSAR = costUSD * 3.75;
-    }
+    displayAlloc = [];
   }
 
-  // Fallback to AppState budget values if still 0
-  if (totalEstMDs === 0)     totalEstMDs     = AppState._budgetApprovedMDs?.[phaseKey] || 0;
-  if (totalEstCostSAR === 0) totalEstCostSAR = AppState._budgetFinalCost?.[phaseKey]   || 0;
+  const allocHtml = displayAlloc.map(a =>
+    `<span class="alloc-pill-mini${isInherited ? ' alloc-inherited' : ''}" title="${a.hours}h${isInherited ? ' (inherited from parent)' : ''}">${a.name}</span>`
+  ).join('');
+  const totalAllocCount = hasChildren
+    ? Object.keys(t.rollup_allocation || {}).length
+    : (t.allocation?.length || (t.inherited_allocation?.length || 0));
+  const moreCount = Math.max(0, totalAllocCount - 3);
 
-  // Save back to AppState
-  if (totalEstMDs > 0)     { if(!AppState._budgetApprovedMDs) AppState._budgetApprovedMDs={}; AppState._budgetApprovedMDs[phaseKey]=totalEstMDs; }
-  if (totalEstCostSAR > 0) { if(!AppState._budgetFinalCost)   AppState._budgetFinalCost={};   AppState._budgetFinalCost[phaseKey]=totalEstCostSAR; }
+  const expandIcon = hasChildren
+    ? `<span class="task-expand-icon" data-expand-id="${t.id}">${isExpanded ? '▼' : '▶'}</span>`
+    : '<span class="task-expand-spacer"></span>';
 
-  // ── 3. Effort MDs + Costs: AppState → API ──
-  let effortMDs = AppState._effortMonthMDs?.[phaseKey];
-  let effortCosts = AppState._effortMonthCosts?.[phaseKey];
-  let months = AppState._effortMonths?.[phaseKey] || [];
-
-  if (!effortMDs || !months.length) {
-    try {
-      const d = await fetchEffortCached(phaseKey);
-      if (d.months?.length) {
-        months = d.months;
-        // Use pre-computed costs from backend (most accurate - uses real rates)
-        if (d.month_cost_usd) {
-          effortMDs   = d.month_mds   || {};
-          effortCosts = d.month_cost_usd;  // USD, multiply by 3.75 for SAR
-        } else {
-          // Fallback: compute from employees
-          const mMDs={}, mCosts={};
-          months.forEach(m => { mMDs[m.key]=0; mCosts[m.key]=0; });
-          (d.employees||[]).forEach(emp => {
-            const hr  = parseFloat(emp.hour_rate)  || 0;
-            const otr = parseFloat(emp.overtime_rate) || hr * 1.5;
-            months.forEach(m => {
-              const cell = emp.months?.[m.key]||{regular:0,ramadan:0,overtime:0};
-              mMDs[m.key] += (cell.regular + cell.overtime) / 8 + cell.ramadan / 6;
-              if (hr > 0) mCosts[m.key] += (cell.regular + cell.ramadan) * hr + cell.overtime * otr;
-              else {
-                const totalH = cell.regular + cell.ramadan + cell.overtime;
-                mCosts[m.key] += (emp.total_cost_usd||0) * (totalH / (emp.total_hours||1));
-              }
-            });
-          });
-          effortMDs=mMDs; effortCosts=mCosts;
-        }
-        if (!AppState._effortMonths) AppState._effortMonths={};
-        if (!AppState._effortMonthMDs) AppState._effortMonthMDs={};
-        if (!AppState._effortMonthCosts) AppState._effortMonthCosts={};
-        AppState._effortMonths[phaseKey]=months;
-        AppState._effortMonthMDs[phaseKey]=effortMDs;
-        AppState._effortMonthCosts[phaseKey]=effortCosts;
-      }
-    } catch(e) { console.warn('Effort fetch error:', e); }
-  }
-
-  const costPerMD = totalEstMDs > 0 ? totalEstCostSAR / totalEstMDs : 0;
-  const finProfitPct = AppState._finalProfitPct?.[phaseKey];
-  // If no saved profit%, calculate from budget: (revenue - est cost) / revenue
-  const plannedProfitSAR = finProfitPct != null
-    ? finProfitPct * totalRevSAR
-    : (totalRevSAR - totalEstCostSAR);
-
-  // Resolve effort data after possible API fetch above
-  const effortMDsFinal   = AppState._effortMonthMDs?.[phaseKey]   || {};
-  const effortCostsFinal = AppState._effortMonthCosts?.[phaseKey] || {};
-  const monthsFinal      = AppState._effortMonths?.[phaseKey]     || [];
-
-  // Avg Cost per MD from effort data
-  let effortAvgCostPerMD = AppState._effortAvgCostPerMD?.[phaseKey];
-  if (!effortAvgCostPerMD) {
-    const allMDs   = Object.values(effortMDsFinal).reduce((s,v) => s+v, 0);
-    const allCosts = Object.values(effortCostsFinal).reduce((s,v) => s+v, 0) * 3.75;
-    effortAvgCostPerMD = allMDs > 0 ? allCosts / allMDs : costPerMD;
-  }
-
-  // ── 4. Issued Invoices: load monthly_cumulative per phase (once, cached) ──
-  if (!AppState._invoiceCumulative) AppState._invoiceCumulative = {};
-  if (!AppState._invoiceCumulative[phaseKey]) {
-    // Load invoices from sales API grouped by variance tab
-    try {
-      if (!AppState._salesInvoicesByPhase) {
-        const salesRes = await fetch('/api/sales-orders');
-        if (salesRes.ok) {
-          const salesData = await salesRes.json();
-          if (salesData.invoices_by_phase) {
-            AppState._salesInvoicesByPhase = salesData.invoices_by_phase;
-          }
-        }
-      }
-      if (AppState._salesInvoicesByPhase) {
-        // Map variance tab → sales phase keys
-        // BOG: development & consultation → 'development', support → 'support', license excluded
-        // Non-BOG: services → 'development', support → 'support'
-        const phaseMapping = {
-          development:  ['development'],
-          consultation: ['consultation'],
-          services:     ['development', 'consultation'],  // non-BOG: services gets dev+consult
-          support:      ['support'],
-        };
-        const matchPhases = phaseMapping[phaseKey] || [phaseKey];
-
-        const monthly = {};
-        for (const [srcPhase, phaseData] of Object.entries(AppState._salesInvoicesByPhase)) {
-          // Skip license — not part of variance profitability
-          if (srcPhase === 'license') continue;
-          if (!matchPhases.includes(srcPhase)) continue;
-          for (const [mk, v] of Object.entries(phaseData)) {
-            monthly[mk] = (monthly[mk] || 0) + (v.month || 0);
-          }
-        }
-        // Build cumulative
-        let running = 0;
-        const cum = {};
-        for (const mk of Object.keys(monthly).sort()) {
-          running += monthly[mk];
-          cum[mk] = running;
-        }
-        if (Object.keys(cum).length) {
-          AppState._invoiceCumulative[phaseKey] = cum;
-        }
-      }
-    } catch(e) { console.warn('Sales invoice load error:', e); }
-
-    if (!AppState._invoiceCumulative[phaseKey]) AppState._invoiceCumulative[phaseKey] = {};
-  }
-
-  const table = document.getElementById(`profit-table-${phaseKey}`);
-  if (!table) return;
-  const rows = table.querySelectorAll('tr[data-month-key]');
-  let accActualMDs=0, latestData={}, prevViAcc=0;
-
-  let rowIdx = 0;
-  for (const tr of rows) {
-    const idx = rowIdx++;
-    const monthKey = tr.dataset.monthKey;
-    const thisMonthMDs = effortMDsFinal[monthKey] || 0;
-    accActualMDs += thisMonthMDs;
-    const actualMDs = accActualMDs;
-
-    const compInp = tr.querySelector('.completion-input');
-    const remInp  = tr.querySelector('.remaining-input');
-    const completionPct = parseFloat(compInp?.value) || 0;
-    const remainingMDs  = parseFloat(remInp?.value)  || 0;
-
-    // Current Cost = cumulative cost from effort (SAR)
-    let accCostUSD = 0;
-    monthsFinal.forEach(m2 => {
-      if (m2.key <= monthKey) accCostUSD += effortCostsFinal[m2.key] || 0;
-    });
-    const currentCostSAR = accCostUSD * 3.75;  // effortCosts stored in USD
-    // ── All equations per reference sheet ──
-    const eacMDs = actualMDs + remainingMDs;
-
-    // Expected Overrun = (Actual/EstMDs) / (%Comp/100) - 1
-    const expectedOverrun = (completionPct > 0 && totalEstMDs > 0 && actualMDs > 0)
-      ? (actualMDs / totalEstMDs) / (completionPct / 100) - 1 : null;
-
-
-    // Avg cost per MD for this month = Current Cost SAR / Actual MDs to Date (running)
-    // This is the "current effort average" - changes each month as more data comes in
-    const thisMonthAvgCostPerMD = actualMDs > 0 ? currentCostSAR / actualMDs : (effortAvgCostPerMD || costPerMD);
-
-    // Est Cost to Complete = Remaining MDs × this month's avg cost per MD
-    const estCostToComplete = remainingMDs * thisMonthAvgCostPerMD;
-    const estAtCompletion   = estCostToComplete + currentCostSAR;
-    const cpi               = estAtCompletion > 0 ? totalEstCostSAR / estAtCompletion : 0;
-    const costVarianceSAR   = totalEstCostSAR - estAtCompletion;
-    const costVariancePct   = totalRevSAR > 0 ? costVarianceSAR / totalRevSAR * 100 : 0;
-    const revToDate         = totalRevSAR * (completionPct / 100);
-    const profitAtComp      = totalRevSAR - estAtCompletion;
-    const profitAtCompPct   = totalRevSAR > 0 ? profitAtComp / totalRevSAR * 100 : 0;
-
-    // Planned Profit - from Final Budget, per-month history
-    // Use month-specific override if budget changed that month, else use latest
-    const monthPlannedPct = (AppState._plannedProfitHistory?.[phaseKey]?.[monthKey]) 
-      ?? (AppState._finalProfitPct?.[phaseKey] ?? (totalRevSAR > 0 ? (totalRevSAR - totalEstCostSAR) / totalRevSAR : 0));
-    const plannedProfitMonthSAR = monthPlannedPct * totalRevSAR;
-
-    // Profitability Variance = Profit at Completion - Planned Profit SAR
-    const profVar    = profitAtComp - plannedProfitMonthSAR;
-    // Profitability Variance % = Profit at Comp % - Planned Profit %
-    const profVarPct = profitAtCompPct - (monthPlannedPct * 100);
-    // Progress % = Current Cost / EAC Cost
-    const progressPct        = estAtCompletion > 0 ? currentCostSAR / estAtCompletion * 100 : 0;
-
-    // Virtual Invoice
-    const viThisMonth = revToDate;                                          // = Revenue to Date this month
-    const viAcc       = revToDate;                                          // = cumulative recognized revenue
-
-    // Helper to format SAR
-    const fSAR = v => fmt.money(Math.round(v));
-    const fNum = v => fmt.decimal(v);
-    const setSpan = (cls, val, color) => {
-      const el = tr.querySelector(`.${cls}`);
-      if (el) { el.innerHTML = val; if (color) el.style.color = color; }
-    };
-
-    // Presales display: each month shows values effective by that month's date
-    const mRev  = _getMonthlyRev(monthKey);
-    const mCost = _getMonthlyEstCost(monthKey);
-    const mMDs  = _getMonthlyEstMDs(monthKey);
-    tr.querySelectorAll(`.prof-rev-${phaseKey}`).forEach(el => el.textContent = mRev  > 0 ? fSAR(mRev)  : '—');
-    tr.querySelectorAll(`.prof-estcost-${phaseKey}`).forEach(el => el.textContent = mCost > 0 ? fSAR(mCost) : '—');
-    tr.querySelectorAll(`.prof-estmds-${phaseKey}`).forEach(el => el.textContent = mMDs  > 0 ? fNum(mMDs)  : '—');
-    // Current effort columns
-    tr.querySelectorAll(`.prof-thismonth-${phaseKey}`).forEach(el => el.textContent = thisMonthMDs > 0 ? fNum(thisMonthMDs) : '—');
-    tr.querySelectorAll(`.prof-actual-${phaseKey}`).forEach(el => el.textContent = actualMDs > 0 ? fNum(actualMDs) : '—');
-
-    // Computed columns
-    setSpan(`pc-currcost-${monthKey}`,      currentCostSAR > 0 ? fSAR(currentCostSAR) : '—');
-    setSpan(`pc-eac-${monthKey}`,           `<b style="color:var(--blue);">${fNum(eacMDs)}</b>`);
-    const ovColor = (expectedOverrun !== null && expectedOverrun > 0) ? 'var(--red)' : 'var(--green)';
-    setSpan(`pc-overrun-${monthKey}`, expectedOverrun !== null ? `<span style="color:${ovColor};">${fmt.decimal(expectedOverrun*100)}%</span>` : '—');
-    setSpan(`pc-costtocomplete-${monthKey}`, estCostToComplete > 0 ? fSAR(estCostToComplete) : '—');
-    setSpan(`pc-eac-cost-${monthKey}`,       estAtCompletion > 0 ? fSAR(estAtCompletion) : '—');
-
-    const cpiColor = cpi >= 1 ? 'var(--green)' : cpi > 0 ? 'var(--amber)' : 'var(--text-muted)';
-    setSpan(`pc-cpi-${monthKey}`,           cpi > 0 ? `<b style="color:${cpiColor};">${fNum(cpi)}</b>` : '—');
-
-    const varColor = costVarianceSAR >= 0 ? 'var(--green)' : 'var(--red)';
-    setSpan(`pc-variance-${monthKey}`,      `<span style="color:${varColor};">${fSAR(costVarianceSAR)}</span>`);
-    setSpan(`pc-variance-pct-${monthKey}`,  `<span style="color:${varColor};">${fmt.decimal(costVariancePct)}%</span>`);
-
-    const profColor2 = profitAtComp > 0 ? 'var(--green)' : 'var(--red)';
-    setSpan(`pc-profit-comp-${monthKey}`,   `<b style="color:${profColor2};">${fSAR(profitAtComp)}</b>`);
-    setSpan(`pc-planned-profit-${monthKey}`, 
-      `${fSAR(plannedProfitMonthSAR)} <span style="font-size:10px;color:var(--text-muted);">(${fmt.decimal(monthPlannedPct*100)}%)</span>`);
-    setSpan(`pc-profit-pct-${monthKey}`,    `<b style="color:${profColor2};">${fmt.decimal(profitAtCompPct)}%</b>`);
-
-    const pvColor = profVar >= 0 ? 'var(--green)' : 'var(--red)';
-    setSpan(`pc-prof-var-${monthKey}`,      `<span style="color:${pvColor};">${fSAR(profVar)}</span>`);
-    setSpan(`pc-prof-var-pct-${monthKey}`,  `<span style="color:${pvColor};">${fmt.decimal(profVarPct)}%</span>`);
-
-    const recognizedRev  = totalRevSAR * (completionPct / 100);  // = Revenue to Date
-    const progressPct2   = estAtCompletion > 0 ? currentCostSAR / estAtCompletion * 100 : 0;
-
-    // Virtual Invoice
-    // Issued invoices: use cumulative up to this month from API (not total)
-    const prevMonthKey = months[idx - 1]?.key;
-    const prevRecogRev = prevMonthKey ? (AppState._profRecogRev?.[phaseKey]?.[prevMonthKey] || 0) : 0;
-    const prevAccVI    = prevMonthKey ? (AppState._profAccVI?.[phaseKey]?.[prevMonthKey] || 0) : 0;
-
-    // _invoiceCumulative[phaseKey] = { 'YYYY-MM': cumulativeIssuedSAR }
-    // Loaded once before the row loop (see profRecomputeAll)
-    const invCum = AppState._invoiceCumulative?.[phaseKey] || {};
-    // Find the cumulative issued amount up to this month
-    // Use exact month match or last available month <= monthKey
-    let issuedUpToMonth = 0;
-    const cumMonths = Object.keys(invCum).sort();
-    for (const mk of cumMonths) {
-      if (mk <= monthKey) issuedUpToMonth = invCum[mk];
-    }
-
-    const production  = recognizedRev - prevRecogRev;
-    // Acc. VI = Recognized Revenue to Date − Cumulative Issued Invoices up to this month
-    const accVI       = recognizedRev - issuedUpToMonth;
-    const thisMonthVI = accVI - prevAccVI;
-    // VI + Issued = total billing picture
-    const viPlusIssued = accVI + issuedUpToMonth;
-
-    // Save for next month's calculation
-    if (!AppState._profRecogRev) AppState._profRecogRev = {};
-    if (!AppState._profRecogRev[phaseKey]) AppState._profRecogRev[phaseKey] = {};
-    if (!AppState._profAccVI) AppState._profAccVI = {};
-    if (!AppState._profAccVI[phaseKey]) AppState._profAccVI[phaseKey] = {};
-    AppState._profRecogRev[phaseKey][monthKey] = recognizedRev;
-    AppState._profAccVI[phaseKey][monthKey]    = accVI;
-
-    setSpan(`pc-rev-todate-${monthKey}`,   completionPct > 0 ? fSAR(recognizedRev) : '—');
-    setSpan(`pc-progress-${monthKey}`,     progressPct2 > 0 ? `${fmt.decimal(progressPct2)}%` : '—');
-    setSpan(`pc-production-${monthKey}`,   production !== 0 ? fSAR(production) : '—');
-    setSpan(`pc-vi-acc-${monthKey}`,       fSAR(accVI));
-    setSpan(`pc-vi-month-${monthKey}`,     thisMonthVI !== 0 ? fSAR(thisMonthVI) : '—');
-    // Show issued invoices column if it exists
-    const issuedEl = tr.querySelector(`.pc-issued-${monthKey}`);
-    if (issuedEl) issuedEl.textContent = issuedUpToMonth > 0 ? fSAR(issuedUpToMonth) : '—';
-
-    // Only update latestData if this month has a % completion or remaining entry
-    if (completionPct || remainingMDs) {
-      latestData = { completionPct, remainingMDs, eacMDs, cpi, profitAtComp, totalRevSAR, monthKey, eacCostSAR: estAtCompletion, currentCostSAR };
-    }
-    if(!AppState._varianceMonthData)AppState._varianceMonthData={};
-    if(!AppState._varianceMonthData[phaseKey])AppState._varianceMonthData[phaseKey]=[];
-    if(completionPct||remainingMDs||actualMDs||thisMonthMDs){
-      AppState._varianceMonthData[phaseKey].push({month:monthKey,consumedRevSAR:recognizedRev||0,totalRevSAR:totalRevSAR||0,totalEstCostSAR:totalEstCostSAR||0,totalEstMDs:totalEstMDs||0,thisMonthMDs:thisMonthMDs||0,actualMDs:actualMDs||0,completionPct:completionPct||0,currentCostSAR:currentCostSAR||0,remainingMDs:remainingMDs||0,eacMDs:eacMDs||0,estCostToComplete:estCostToComplete||0,estAtCompletion:estAtCompletion||0,cpi:cpi||0,costVarianceSAR:costVarianceSAR||0,costVariancePct:costVariancePct||0,profitAtComp:profitAtComp||0,plannedProfitSAR:plannedProfitMonthSAR||0,profitAtCompPct:profitAtCompPct||0,profVar:profVar||0,profVarPct:profVarPct||0,issuedUpToMonth:issuedUpToMonth||0,progressPct:progressPct2||0,recognizedRev:recognizedRev||0,production:production||0,accVI:accVI||0});
-    }
-    prevViAcc = viAcc;
-  }  // end for..of rows
-
-  // Update KPI strip with last month that has actual values
-  const setKPI = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
-  const kpiMonthLabel = latestData.monthKey ? `as of ${latestData.monthKey}` : 'latest month';
-  const kpiFootEl = document.querySelector(`#prof-kpi-${phaseKey} .kpi-foot`);
-  if (kpiFootEl) kpiFootEl.textContent = kpiMonthLabel;
-  setKPI(`prof-kpi-completion-${phaseKey}`, latestData.completionPct ? fmt.decimal(latestData.completionPct) + '%' : '—');
-  setKPI(`prof-kpi-remaining-${phaseKey}`,  latestData.remainingMDs  ? fmt.decimal(latestData.remainingMDs) : '—');
-  setKPI(`prof-kpi-eac-${phaseKey}`,        latestData.eacMDs        ? fmt.decimal(latestData.eacMDs) : '—');
-  setKPI(`prof-kpi-cpi-${phaseKey}`,        latestData.cpi           ? fmt.decimal(latestData.cpi) : '—');
-  setKPI(`prof-kpi-profit-${phaseKey}`,     latestData.profitAtComp  ? fmt.money(Math.round(latestData.profitAtComp)) + ' SAR' : '—');
-
-  // Save to AppState so Overview can display latest profitability KPIs
-  if (latestData.monthKey) {
-    if (!AppState._latestProfData) AppState._latestProfData = {};
-    AppState._latestProfData[phaseKey] = {
-      completionPct:  latestData.completionPct,
-      remainingMDs:   latestData.remainingMDs,
-      eacMDs:         latestData.eacMDs,
-      eacCostSAR:     latestData.eacCostSAR,
-      currentCostSAR: latestData.currentCostSAR,
-      cpi:            latestData.cpi,
-      profitAtComp:   latestData.profitAtComp,
-      totalRevSAR:    latestData.totalRevSAR,
-      monthKey:       latestData.monthKey,
-    };
-    // Save snapshot + notify overview
-    try{sessionStorage.setItem('_kpi_'+phaseKey,JSON.stringify(AppState._latestProfData[phaseKey]));}catch(e){}
-    if(window._overviewUpdateProfKPIs)window._overviewUpdateProfKPIs(phaseKey);
-    // Notify Overview to update its KPIs
-    if (window._overviewUpdateProfKPIs) window._overviewUpdateProfKPIs(phaseKey);
-  }
-}
-
-async function saveOverride(inp) {
-  const phase = inp.dataset.phase;
-  const monthKey = inp.dataset.month;
-  const field = inp.dataset.field;
-  const value = parseFloat(inp.value) || 0;
-  await fetch('/api/plan-overrides', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ phase, month_key: monthKey, field, value })
-  });
-  inp.style.borderColor = 'var(--green)';
-  setTimeout(() => { inp.style.borderColor = 'var(--border-strong)'; }, 1200);
-}
-
-function applyPlanOverrides(phaseKey) {
-  const overrides = (AppState.planOverrides || {})[phaseKey] || {};
-  document.querySelectorAll(`#profit-table-${phaseKey} tr[data-month-key]`).forEach(tr => {
-    const monthKey = tr.dataset.monthKey;
-    const monthOverrides = overrides[monthKey] || {};
-    if (monthOverrides.completion !== undefined) {
-      const inp = tr.querySelector('.completion-input');
-      if (inp) inp.value = parseFloat(monthOverrides.completion).toFixed(2);
-    }
-    if (monthOverrides.remaining !== undefined) {
-      const inp = tr.querySelector('.remaining-input');
-      if (inp) inp.value = parseFloat(monthOverrides.remaining).toFixed(2);
-    }
-  });
-  // Recompute after applying overrides
-  profRecomputeAll(phaseKey);
-}
-
-function renderEffort(data, phaseKey) {
-  const containerId = `effort-live-${phaseKey}`;
-  // Store containerId on window for renderVarianceSubTab to use
-  window._effortContainerId = containerId;
-  window._effortPhaseKey = phaseKey;
+  const matchedClass = isMatched ? '' : ' task-context-only';
 
   return `
-    <div class="card">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
-        <div>
-          <h3 style="margin: 0; font-size: 14px;">Current Effort — Excel Style</h3>
-          <span class="muted-text" style="font-size: 11px;">Live from Odoo · Starting from first month with logs · Regular / Ramadan / Overtime split per country rules</span>
-        </div>
-        <button class="btn-primary" id="effort-reload-${phaseKey}" onclick="loadEffortLive('${phaseKey}','${containerId}')">↻ Refresh from Odoo</button>
-        <button style="font-size:11px;padding:6px 14px;background:#FEF3C7;border:1px solid #F59E0B;color:#92400E;border-radius:6px;cursor:pointer;font-weight:600;" onclick="checkUnassignedHours('${phaseKey}')">⚠ Unassigned Hours</button>
-      </div>
-      <div id="unassigned-banner-${phaseKey}"></div>
-      <div id="${containerId}"><div class="loading">Loading from Odoo…</div></div>
-    </div>
-  `;
-}
-
-async function checkUnassignedHours(phaseKey) {
-  const banner = document.getElementById(`unassigned-banner-${phaseKey}`);
-  if (!banner) return;
-  banner.innerHTML = '<div class="loading" style="padding:8px;">Checking unassigned hours…</div>';
-  try {
-    const res = await fetch(`/api/effort/${phaseKey}/unassigned-hours`);
-    const d   = await res.json();
-
-    if (!d.ok || d.total_hours === 0) {
-      banner.innerHTML = `<div style="background:#D1FAE5;border:1px solid #6EE7B7;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:12px;color:#065F46;">
-        ✅ All hours are assigned to phases. No unassigned timesheets found.
-      </div>`;
-      setTimeout(() => banner.innerHTML = '', 3000);
-      return;
-    }
-
-    const fmtH = h => new Intl.NumberFormat('en-US',{maximumFractionDigits:1}).format(h);
-    const empRows = (d.employees||[]).slice(0,8).map(e =>
-      `<span style="background:#F3F4F6;border-radius:4px;padding:3px 8px;font-size:11px;">${e.name} — ${fmtH(e.hours)}h</span>`
-    ).join(' ');
-
-    banner.innerHTML = `
-      <div style="background:#FEF3C7;border:1px solid #FCD34D;border-radius:8px;padding:14px 16px;margin-bottom:12px;">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">
-          <div>
-            <div style="font-size:13px;font-weight:700;color:#92400E;">⚠ ${fmtH(d.total_hours)}h (${fmtH(d.total_mds)} MDs) not assigned to any phase</div>
-            <div style="font-size:11px;color:#92400E;margin-top:3px;">These timesheets exist on project tasks with no phase — not counted in Current Effort above</div>
+    <div class="task-card-compact ${hasChildren ? 'task-parent-c' : 'task-leaf-c'}${matchedClass}">
+      <div class="tcc-row1">
+        ${expandIcon}
+        <div class="tcc-name-block">
+          <div class="tcc-name" dir="auto">
+            ${hasChildren ? '📁' : '📄'} ${t.name || '—'}
+            ${hasChildren ? `<span class="tcc-sub-count" data-expand-id="${t.id}">${childCount} sub${childCount !== 1 ? 's' : ''}</span>` : ''}
           </div>
-          <button onclick="document.getElementById('unassigned-banner-${phaseKey}').innerHTML=''"
-            style="background:none;border:none;cursor:pointer;color:#92400E;font-size:18px;padding:0;">×</button>
-        </div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">${empRows}</div>
-        <div style="font-size:11px;color:#92400E;margin-bottom:10px;">What would you like to do with these hours?</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button onclick="addUnassignedToPhase('${phaseKey}','services')"
-            style="background:#2563EB;color:white;border:none;border-radius:6px;padding:7px 16px;font-size:12px;font-weight:600;cursor:pointer;">
-            ➕ Add to Services
-          </button>
-          <button onclick="addUnassignedToPhase('${phaseKey}','support')"
-            style="background:#D97706;color:white;border:none;border-radius:6px;padding:7px 16px;font-size:12px;font-weight:600;cursor:pointer;">
-            ➕ Add to Support
-          </button>
-          <button onclick="document.getElementById('unassigned-banner-${phaseKey}').innerHTML=''"
-            style="background:#F3F4F6;color:#374151;border:1px solid #D1D5DB;border-radius:6px;padding:7px 16px;font-size:12px;cursor:pointer;">
-            Cancel
-          </button>
-        </div>
-      </div>`;
-  } catch(e) {
-    banner.innerHTML = `<div style="color:var(--red);font-size:12px;padding:8px;">Error: ${e.message}</div>`;
-  }
-}
-
-async function addUnassignedToPhase(currentPhase, targetPhase) {
-  const banner = document.getElementById(`unassigned-banner-${currentPhase}`);
-  if (banner) banner.innerHTML = '<div style="padding:8px;font-size:12px;color:#6B7280;">Saving…</div>';
-  try {
-    // Save override: include unassigned hours in this phase
-    await fetch('/api/plan-overrides', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ phase: targetPhase, month_key: 'unassigned', field: 'include_unassigned', value: true })
-    });
-    if (banner) banner.innerHTML = `
-      <div style="background:#D1FAE5;border:1px solid #6EE7B7;border-radius:8px;padding:10px 14px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;">
-        <span style="font-size:12px;color:#065F46;font-weight:600;">✅ Unassigned hours will now be included in <b>${targetPhase}</b> Current Effort</span>
-        <button onclick="document.getElementById('unassigned-banner-${currentPhase}').innerHTML=''"
-          style="background:none;border:none;cursor:pointer;color:#065F46;font-size:16px;">×</button>
-      </div>`;
-    // Reload effort for target phase
-    const containerId = `effort-live-${targetPhase}`;
-    if (document.getElementById(containerId)) {
-      await loadEffortLive(targetPhase, containerId);
-    }
-  } catch(e) {
-    if (banner) banner.innerHTML = `<div style="color:var(--red);font-size:12px;padding:8px;">Error: ${e.message}</div>`;
-  }
-}
-
-async function loadEffortLive(phaseKey, containerId) {
-  const cont = document.getElementById(containerId);
-  if (!cont) { console.warn('loadEffortLive: container not found:', containerId); return; }
-  cont.innerHTML = '<div class="loading">Loading from Odoo (this may take a moment)…</div>';
-
-  try {
-    const d = await fetchEffortCached(phaseKey);
-
-    if (d.error) {
-      cont.innerHTML = `<div class="banner banner-warn"><strong>Error:</strong> ${d.error}</div>`;
-      return;
-    }
-
-    if (!d.employees || !d.employees.length) {
-      cont.innerHTML = `<div class="loading">No timesheet entries found for this phase</div>`;
-      return;
-    }
-
-    const months = d.months || [];
-
-    // Build column headers: # | Name | Position | Hour Rate | Overtime | [month1: 3 cols] | [month2: 3 cols] ...
-    let monthHeaders1 = '';  // top row - month names spanning 3 cols
-    let monthHeaders2 = '';  // bottom row - Reg/Ram/OT labels
-    months.forEach(m => {
-      monthHeaders1 += `<th colspan="3" class="num eff-month-head" style="border-left: 2px solid var(--border-strong);">${m.label}</th>`;
-      monthHeaders2 += `
-        <th class="num" style="border-left: 2px solid var(--border-strong); font-size: 9px;">Regular (MH)</th>
-        <th class="num" style="font-size: 9px;">Ramadan Hours</th>
-        <th class="num" style="font-size: 9px;">Overtime (MH)</th>
-      `;
-    });
-
-    let html = `
-      <div class="banner banner-info" style="margin-bottom: 12px; font-size: 12px;">
-        <strong>${d.total_employees} team members</strong> · 
-        Showing <strong>${months.length} month${months.length !== 1 ? 's' : ''}</strong>
-        (from <strong>${months[0]?.label || '—'}</strong> to <strong>${months[months.length-1]?.label || '—'}</strong>) ·
-        Rates from Odoo (SAR÷3.75) with DB fallback · Overtime = Hour Rate × 1.5
-      </div>
-      <div class="table-scroll eff-table-scroll">
-        <table class="data-table eff-table">
-          <thead>
-            <tr class="eff-row-month">
-              <th rowspan="2" style="position: sticky; left: 0; background: var(--navy); color: white; z-index: 3;">#</th>
-              <th rowspan="2" style="position: sticky; left: 40px; background: var(--navy); color: white; z-index: 3;">Name</th>
-              <th rowspan="2" style="position: sticky; background: var(--navy); color: white; z-index: 3;">Position</th>
-              <th rowspan="2" class="num">Hour Rate ($)</th>
-              <th rowspan="2" class="num">Overtime Rate</th>
-              ${monthHeaders1}
-              <th rowspan="2" class="num" style="border-left: 2px solid var(--border-strong);">Total Cost ($)</th>
-              <th rowspan="2" class="num">Current MDs done</th>
-            </tr>
-            <tr class="eff-row-subhead">
-              ${monthHeaders2}
-            </tr>
-          </thead>
-          <tbody>
-    `;
-
-    let grandTotalCost = 0;
-    let grandTotalHours = 0;
-    let grandTotalMDs = 0;
-
-    // Current month key
-    const now = new Date();
-    const thisMonthKey = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
-    let grandThisMonthMDs = 0;
-
-    // Per-month MD totals for TOTAL row + profitability
-    const monthMDTotals = {};
-    const monthCostTotals = {};
-    months.forEach(m => { monthMDTotals[m.key] = 0; monthCostTotals[m.key] = 0; });
-
-    d.employees.forEach((emp, idx) => {
-      grandTotalCost += emp.total_cost_usd || 0;
-      grandTotalHours += emp.total_hours || 0;
-      grandTotalMDs += emp.current_mds || 0;
-
-      // Accumulate per-month MDs and costs
-      months.forEach(m => {
-        const cell = emp.months?.[m.key] || { regular: 0, ramadan: 0, overtime: 0 };
-        const monthMDs = (cell.regular + cell.overtime) / 8 + cell.ramadan / 6;
-        monthMDTotals[m.key] += monthMDs;
-        // Cost for this month
-        const hr  = parseFloat(emp.hour_rate)  || 0;
-        const otr = parseFloat(emp.overtime_rate) || hr * 1.5;
-        if (!monthCostTotals[m.key]) monthCostTotals[m.key] = 0;
-        if (hr > 0) {
-          monthCostTotals[m.key] += (cell.regular + cell.ramadan) * hr + cell.overtime * otr;
-        } else {
-          // Fallback: distribute total_cost_usd proportionally
-          const totalH = cell.regular + cell.ramadan + cell.overtime;
-          const empTotalH = emp.total_hours || 1;
-          monthCostTotals[m.key] += (emp.total_cost_usd || 0) * (totalH / empTotalH);
-        }
-      });
-
-      // This month MDs for summary strip
-      const thisCell = emp.months?.[thisMonthKey] || { regular: 0, ramadan: 0, overtime: 0 };
-      grandThisMonthMDs += (thisCell.regular + thisCell.overtime) / 8 + thisCell.ramadan / 6;
-      // Country color
-      const countryColor = emp.country === 'KSA' ? '#10B981'
-                         : emp.country === 'TUN' ? '#F59E0B'
-                         : '#3B82F6';
-
-      // Onsite badge
-      const onsiteBadge = emp.is_onsite
-        ? '<span class="badge badge-amber" style="font-size: 9px; margin-left: 4px;">ONSITE</span>'
-        : '';
-
-      // Rate source badge
-      let sourceBadge = '';
-      if (emp.rate_source === 'odoo') {
-        sourceBadge = '<span class="badge" style="font-size: 9px; background: #d1fae5; color: #065f46;">Odoo</span>';
-      } else if (emp.rate_source && emp.rate_source.includes('onsite')) {
-        sourceBadge = '<span class="badge" style="font-size: 9px; background: #fef3c7; color: #92400e;">Onsite DB</span>';
-      } else if (emp.rate_source) {
-        sourceBadge = '<span class="badge" style="font-size: 9px; background: #e0e7ff; color: #3730a3;">DB</span>';
-      }
-
-      // Build month cells
-      let monthCells = '';
-      months.forEach(m => {
-        const cell = emp.months[m.key] || { regular: 0, ramadan: 0, overtime: 0 };
-        monthCells += `
-          <td class="num" style="border-left: 2px solid var(--border-strong);">${cell.regular > 0 ? fmt.decimal(cell.regular) : '<span class="muted-text">—</span>'}</td>
-          <td class="num" style="color: ${cell.ramadan > 0 ? 'var(--amber)' : 'var(--text-muted)'};">${cell.ramadan > 0 ? fmt.decimal(cell.ramadan) : '—'}</td>
-          <td class="num" style="color: ${cell.overtime > 0 ? 'var(--red)' : 'var(--text-muted)'};">${cell.overtime > 0 ? fmt.decimal(cell.overtime) : '—'}</td>
-        `;
-      });
-
-      html += `
-        <tr>
-          <td style="position: sticky; left: 0; background: white; z-index: 2; font-weight: 600;">${idx + 1}</td>
-          <td style="position: sticky; left: 40px; background: white; z-index: 2;">
-            <b>${emp.name}</b>${onsiteBadge}<br>
-            <span class="muted-text" style="font-size: 10px;">${emp.code} · <span style="color: ${countryColor};">${emp.country}</span></span>
-          </td>
-          <td style="position: sticky; background: white; z-index: 2; font-size: 11px;">${emp.position}${sourceBadge ? ' ' + sourceBadge : ''}</td>
-          <td class="num"><b>${emp.hour_rate ? '$' + fmt.decimal(emp.hour_rate) : '<span style="color: var(--red);">—</span>'}</b></td>
-          <td class="num">${emp.overtime_rate ? '$' + fmt.decimal(emp.overtime_rate) : '—'}</td>
-          ${monthCells}
-          <td class="num" style="border-left: 2px solid var(--border-strong);"><b style="color: var(--blue);">$${fmt.num(Math.round(emp.total_cost_usd))}</b></td>
-          <td class="num"><b>${fmt.decimal(emp.current_mds)}</b></td>
-        </tr>
-      `;
-    });
-
-    // Totals row — with per-month MD subtotals
-    html += `
-      <tr style="background: var(--bg-subtle); font-weight: 700;">
-        <td colspan="2" style="position: sticky; left: 0; background: var(--bg-subtle); z-index: 2;">TOTAL</td>
-        <td colspan="3" style="position: sticky; background: var(--bg-subtle); z-index: 2;">${d.total_employees} employees</td>
-    `;
-    months.forEach(m => {
-      const mds = monthMDTotals[m.key] || 0;
-      html += `
-        <td colspan="3" class="num" style="border-left: 2px solid var(--border-strong); vertical-align: middle;">
-          ${mds > 0 ? `<div style="font-size:10px; color:var(--text-muted); font-weight:400; margin-bottom:1px;">MDs</div><span style="color:var(--blue); font-size:13px;">${fmt.decimal(mds)}</span>` : '—'}
-        </td>`;
-    });
-    html += `
-        <td class="num" style="border-left: 2px solid var(--border-strong);"><b style="color: var(--blue);">$${fmt.num(Math.round(grandTotalCost))}</b></td>
-        <td class="num"><b style="color: var(--blue);">${fmt.decimal(grandTotalMDs)}</b></td>
-      </tr>
-      </tbody></table></div>
-    `;
-
-    // ── Summary strip OUTSIDE the table ──
-    const totalCostSAR = grandTotalCost * 3.75;
-    const avgCostPerMD = grandTotalMDs > 0 ? totalCostSAR / grandTotalMDs : 0;
-    // Save for profitability to use
-    if (!AppState._effortAvgCostPerMD) AppState._effortAvgCostPerMD = {};
-    AppState._effortAvgCostPerMD[phaseKey] = avgCostPerMD;
-    html += `
-      <div style="display: flex; gap: 32px; align-items: center; flex-wrap: wrap; margin-top: 16px; padding: 14px 18px; background: #EFF6FF; border-radius: 8px; border: 1px solid #BFDBFE;">
-        <div>
-          <div style="font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 2px;">Total Cost in SAR</div>
-          <div style="font-size: 20px; font-weight: 700; color: var(--navy);">SAR ${fmt.num(Math.round(totalCostSAR))}</div>
-        </div>
-        <div style="width: 1px; height: 36px; background: #BFDBFE;"></div>
-        <div>
-          <div style="font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 2px;">Average Cost per MD</div>
-          <div style="font-size: 20px; font-weight: 700; color: var(--navy);">SAR ${fmt.num(Math.round(avgCostPerMD))}</div>
-        </div>
-        <div style="width: 1px; height: 36px; background: #BFDBFE;"></div>
-        <div>
-          <div style="font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 2px;">This Month MDs</div>
-          <div style="font-size: 20px; font-weight: 700; color: var(--blue);">${fmt.decimal(grandThisMonthMDs)}</div>
-        </div>
-        <div style="font-size: 11px; color: var(--text-muted); margin-left: auto;">$1 = SAR 3.75 · Total MDs: <b style="color:var(--navy)">${fmt.decimal(grandTotalMDs)}</b></div>
-      </div>
-    `;
-    cont.innerHTML = html;
-  } catch (err) {
-    cont.innerHTML = `<div class="banner banner-warn"><strong>Error:</strong> ${err.message}</div>`;
-  }
-}
-
-function renderEstimated(data, phaseKey) {
-  return `<div id="estimatedLiveWrap">
-    <div class="loading">Loading estimated cost…</div>
-  </div>`;
-}
-
-let _estPositions = [];
-let _estRows = [];
-let _estPhase = '';
-
-// Format number with exact 2 decimal places + thousand separators, no rounding
-function fmtExact(n) {
-  if (n === null || n === undefined || isNaN(n)) return '—';
-  return n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-}
-
-function makeEstRow(position = '', hourRate = '', actualTime = 176, estMonths = '') {
-  return { id: Date.now() + Math.random(), position, hourRate, actualTime, estMonths };
-}
-
-async function loadEstimatedLive(phaseKey, containerId) {
-  const wrap = document.getElementById(containerId || 'estimatedLiveWrap');
-  if (!wrap) { console.warn('estimatedLiveWrap not found for', phaseKey); return; }
-  wrap.innerHTML = '<div class="loading">Loading estimated cost…</div>';
-
-  // Non-BOG: try to load saved summary first
-  const isBog = AppState._overviewData?.is_bog !== false;
-  if (!isBog) {
-    if (window.estLoadSummaryIfSaved) {
-      const loaded = await estLoadSummaryIfSaved(phaseKey, wrap.id);
-      if (loaded) return;
-    }
-    // No saved summary — show upload prompt
-    wrap.innerHTML = `
-      <div style="text-align:center;padding:40px;color:#6B7280;">
-        <div style="font-size:32px;margin-bottom:12px;">📊</div>
-        <div style="font-size:14px;font-weight:600;margin-bottom:8px;">No Estimated Cost data yet</div>
-        <div style="font-size:12px;margin-bottom:16px;">Upload the Estimated Cost Excel file</div>
-        <label style="cursor:pointer;">
-          <input type="file" accept=".xlsx,.xls" style="display:none;"
-            onchange="estImportExcel(this,'${phaseKey}')">
-          <span style="background:#3B82F6;color:white;padding:10px 20px;border-radius:8px;
-                       font-size:13px;font-weight:600;cursor:pointer;">⬆ Upload Excel</span>
-        </label>
-      </div>`;
-    return;
-  }
-
-  // Load positions catalog from DB
-  let positions = [];
-  try {
-    const r = await fetch('/api/positions');
-    const d = await r.json();
-    positions = (d.positions || []).filter(p => p.hour_rate)
-      .sort((a,b) => (a.position||a.name||'').localeCompare(b.position||b.name||''));
-  } catch (e) { console.warn('positions load failed:', e); }
-
-  // Load saved rows from server
-  let rows = [];
-  try {
-    const r = await fetch('/api/estimated-rows?phase=' + encodeURIComponent(phaseKey || 'development'));
-    if (r.ok) {
-      const d = await r.json();
-      rows = d.rows || [];
-    }
-  } catch (e) {}
-  if (!rows.length) rows = [makeEstRow()];
-
-  // Auto-update hour rates from DB for any saved rows with a position set
-  rows = rows.map(r => {
-    if (r.position) {
-      const pos = positions.find(p => (p.position || p.name) === r.position);
-      if (pos && pos.hour_rate) r.hourRate = parseFloat(pos.hour_rate);
-    }
-    return r;
-  });
-
-  _estPositions = positions;
-  _estRows = rows;
-  _estPhase = phaseKey;
-  renderEstimatedTable(wrap, rows, positions, phaseKey);
-  // After estimated loads, update budget calculations
-  setTimeout(() => budgetAutoCalc(phaseKey), 50);
-}
-
-function renderEstimatedTable(wrap, rows, positions, phaseKey) {
-  _estPositions = positions;
-  _estRows = rows;
-  _estPhase = phaseKey;
-
-  const posOptions = positions.map(p =>
-    `<option value="${p.position || p.name}">${p.position || p.name} — $${p.hour_rate}/h</option>`
-  ).join('');
-
-  // Compute totals
-  let totalUSD = 0, totalMDs = 0;
-  let sumCostPerMonth = 0;  // sum(hour_rate × actual_time) = TOTAL USD per month
-  let sumActualTime = 0;    // sum(actual_time MH) for MDs/month
-  rows.forEach(r => {
-    const hr = parseFloat(r.hourRate) || 0;
-    const at = parseFloat(r.actualTime) || 0;
-    const em = parseFloat(r.estMonths) || 0;
-    sumCostPerMonth += hr * at;
-    sumActualTime += at;
-    totalUSD += hr * at * em;
-    totalMDs += at * em / 8;
-  });
-
-  const totalSAR = totalUSD * 3.75;
-  // Correct equations:
-  const totalUSDperMonth = sumCostPerMonth;            // sum(Cost per month)
-  const totalSARperMonth = totalUSDperMonth * 3.75;    // × 3.75
-  const estMDsPerMonth = sumActualTime / 8;            // sum(Actual Time MH) / 8
-  const costPerMDSAR = estMDsPerMonth > 0 ? totalSARperMonth / estMDsPerMonth : 0; // SAR/month ÷ MDs/month
-
-  let html = `
-    <div class="card">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-        <h3 class="card-title" style="margin:0;">Estimated Cost by Position <span class="muted-text" style="font-size:12px;">— editable · auto-calculates from DB rates</span></h3>
-        <div style="display:flex;gap:8px;">
-          ${!AppState._overviewData?.is_bog ? `<label style="cursor:pointer;" title="Import positions from Excel">
-            <input type="file" accept=".xlsx,.xls" style="display:none;" onchange="estImportExcel(this,'${phaseKey}')">
-            <span class="btn-outline" style="font-size:11px;cursor:pointer;">⬆ Import Excel</span>
-          </label>` : ''}
-          <button class="btn-outline" style="font-size:11px;" onclick="estAddRow()">+ Add Row</button>
-          <button class="btn-outline" style="font-size:11px; color:var(--red);" onclick="estClearAll()">🗑 Clear All</button>
-        </div>
-      </div>
-      <div class="table-scroll">
-        <table class="data-table" id="estTable">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th style="min-width:220px;">Position</th>
-              <th class="num">Hour Rate ($)</th>
-              <th class="num">Actual Time<br><small>(MH/month)</small></th>
-              <th class="num">Cost per Month<br><small>($)</small></th>
-              <th class="num">Est. # of Months</th>
-              <th class="num">Total Cost USD</th>
-              <th class="num">Total No of MDs</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-  `;
-
-  rows.forEach((r, i) => {
-    const hr = parseFloat(r.hourRate) || 0;
-    const at = parseFloat(r.actualTime) || 0;
-    const em = parseFloat(r.estMonths) || 0;
-    const costPerMonth = hr > 0 && at > 0 ? hr * at : null;
-    const totalCost = hr > 0 && at > 0 && em > 0 ? hr * at * em : null;  // full precision, no intermediate rounding
-    const mds = at > 0 && em > 0 ? at * em / 8 : null;
-
-    html += `
-      <tr data-row="${r.id}">
-        <td style="color:var(--text-muted); font-size:11px;">${i + 1}</td>
-        <td>
-          <select class="svc-input est-pos-select" data-rowid="${r.id}" style="width:100%; padding:4px 6px; font-size:12px; border:1px solid var(--border-strong); border-radius:4px;"
-            onchange="estOnPosChange(this)">
-            <option value="">— select position —</option>
-            ${posOptions}
-          </select>
-          <script>document.querySelector('[data-row="${r.id}"] select').value = ${JSON.stringify(r.position || '')};</script>
-        </td>
-        <td class="num">
-          <input type="number" step="0.01" class="svc-input" data-rowid="${r.id}" data-field="hourRate"
-            value="${r.hourRate ? parseFloat(r.hourRate).toFixed(2) : ''}" placeholder="$"
-            style="width:75px; padding:4px 6px; text-align:right; border:1px solid var(--border-strong); border-radius:4px; font-size:12px;"
-            oninput="estOnChange(this)">
-        </td>
-        <td class="num">
-          <input type="number" step="1" class="svc-input" data-rowid="${r.id}" data-field="actualTime"
-            value="${r.actualTime || 176}" placeholder="176"
-            style="width:60px; padding:4px 6px; text-align:right; border:1px solid var(--border-strong); border-radius:4px; font-size:12px;"
-            oninput="estOnChange(this)">
-        </td>
-        <td class="num" style="font-weight:600; color:var(--navy);">${costPerMonth !== null ? '$' + fmtExact(costPerMonth) : '—'}</td>
-        <td class="num">
-          <input type="number" step="1" min="1" class="svc-input" data-rowid="${r.id}" data-field="estMonths"
-            value="${r.estMonths || ''}" placeholder="#"
-            style="width:55px; padding:4px 6px; text-align:right; border:1px solid var(--border-strong); border-radius:4px; font-size:12px;"
-            oninput="estOnChange(this)">
-        </td>
-        <td class="num"><b style="color:var(--blue);">${totalCost !== null ? '$' + fmtExact(totalCost) : '—'}</b></td>
-        <td class="num">${mds !== null ? fmt.decimal(mds) : '—'}</td>
-        <td><button style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:14px;" onclick="estDeleteRow('${r.id}')">✕</button></td>
-      </tr>
-    `;
-  });
-
-  html += `
-          </tbody>
-          <tfoot>
-            <tr style="background:var(--navy); color:white; font-weight:700;">
-              <td colspan="6" style="text-align:right; padding:8px 12px;">TOTAL</td>
-              <td class="num" style="color:#93C5FD;">$${fmt.num(Math.round(totalUSD))}</td>
-              <td class="num" style="color:#93C5FD;">${fmt.decimal(totalMDs)}</td>
-              <td></td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-    </div>
-
-    <!-- Summary strip (mirrors Excel summary block) -->
-    <div class="card" style="margin-top:12px; background:#F8FAFC;">
-      <div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:0; border:1px solid var(--border-strong); border-radius:6px; overflow:hidden;">
-        ${[
-          ['TOTAL USD per month (22 days)', `$${fmtExact(totalUSDperMonth)} USD`],
-          ['TOTAL Estimated Cost per month (22 days) SAR', `${fmtExact(totalSARperMonth)} SAR`],
-          ['Estimated MDs / Month', fmtExact(estMDsPerMonth)],
-          ['TOTAL Estimated Cost per MD SAR', `${fmtExact(costPerMDSAR)} SAR`],
-        ].map(([label, val]) => `
-          <div style="padding:12px 16px; border-right:1px solid var(--border-strong);">
-            <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:4px;">${label}</div>
-            <div class="est-summary-val" style="font-size:16px; font-weight:700; color:var(--navy);">${val}</div>
+          <div class="tcc-meta">
+            ${t.stage ? `<span class="tcc-pill" style="background: ${stageColor}18; color: ${stageColor}; border-color: ${stageColor}40;">${t.stage}</span>` : ''}
+            ${t.deadline ? `<span class="tcc-pill tcc-deadline">⏰ ${t.deadline}</span>` : ''}
           </div>
-        `).join('')}
+        </div>
+        <div class="tcc-stats">
+          <div class="tcc-stat">
+            <div class="tcc-stat-lbl">${hasChildren ? 'SUB-PLANNED' : 'PLANNED'}</div>
+            <div class="tcc-stat-val">${fmt.decimal(plannedH)}<small>h</small></div>
+          </div>
+          <div class="tcc-stat">
+            <div class="tcc-stat-lbl">${hasChildren ? 'SUB-SPENT' : 'SPENT'}</div>
+            <div class="tcc-stat-val" style="color: ${progressColor};">${fmt.decimal(actualH)}<small>h</small></div>
+          </div>
+          <div class="tcc-stat">
+            <div class="tcc-stat-lbl">REMAIN</div>
+            <div class="tcc-stat-val">${fmt.decimal(remainingH)}<small>h</small></div>
+          </div>
+          <div class="tcc-stat">
+            <div class="tcc-stat-lbl">EAC</div>
+            <div class="tcc-stat-val" style="color:var(--blue);">${fmt.decimal(actualH+remainingH)}<small>h</small></div>
+          </div>
+          <div class="tcc-progress-num" style="color: ${progressColor};">
+            ${fmt.decimal(Math.min(100, progressP))}<small>%</small>
+          </div>
+        </div>
       </div>
-      <div style="margin-top:10px; padding:14px 18px; background:var(--navy); border-radius:6px; display:flex; justify-content:space-between; align-items:center;">
-        <span style="color:#93C5FD; font-size:13px; font-weight:600;">Total Project Estimated Cost (SAR)</span>
-        <span class="est-total-sar" style="color:white; font-size:22px; font-weight:700;">SAR ${fmt.num(Math.round(totalSAR))}</span>
+      <div class="tcc-progress-bar">
+        <div class="tcc-progress-fill" style="width: ${widthBar}%; background: ${progressColor};"></div>
       </div>
+      ${(allocHtml || progressLabel) ? `
+        <div class="tcc-row2">
+          ${progressLabel ? `<span class="tcc-status" style="background: ${progressColor}18; color: ${progressColor};">${progressLabel}</span>` : ''}
+          ${allocHtml ? `<div class="tcc-allocs">${allocHtml}${moreCount ? `<span class="tcc-more">+${moreCount}</span>` : ''}</div>` : ''}
+        </div>
+      ` : ''}
     </div>
   `;
-
-  wrap.innerHTML = html;
-
-  // Set select values properly after render
-  rows.forEach(r => {
-    const sel = wrap.querySelector(`[data-row="${r.id}"] select`);
-    if (sel && r.position) sel.value = r.position;
-  });
 }
 
-async function estSave() {
-  try {
-    await fetch('/api/estimated-rows', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phase: _estPhase, rows: _estRows })
-    });
-  } catch (e) { console.warn('estSave failed:', e); }
-}
 
-let _estSaveTimer = null;
-function estScheduleSave() {
-  clearTimeout(_estSaveTimer);
-  _estSaveTimer = setTimeout(async () => {
-    try {
-      const res = await fetch('/api/estimated-rows', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phase: _estPhase, rows: _estRows })
-      });
-      if (!res.ok) console.warn('estSave failed', res.status);
-    } catch (e) { console.warn('estSave error:', e); }
-  }, 800);
-}
-
-async function estSave() {
-  try {
-    await fetch('/api/estimated-rows', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phase: _estPhase, rows: _estRows })
-    });
-  } catch (e) { console.warn('estSave error:', e); }
-}
-
-async function estOnPosChange(sel) {
-  const rowId = sel.dataset.rowid;
-  const posName = sel.value;
-  const row = _estRows.find(r => String(r.id) === String(rowId));
-  if (!row) return;
-  row.position = posName;
-
-  // Get rate from catalog (exact value stored in DB)
-  const pos = _estPositions.find(p => (p.position || p.name) === posName);
-  if (pos && pos.hour_rate) {
-    row.hourRate = parseFloat(pos.hour_rate);
-    // Update the input field with exact value
-    const hrInput = document.querySelector(`tr[data-row="${rowId}"] input[data-field="hourRate"]`);
-    if (hrInput) hrInput.value = parseFloat(pos.hour_rate).toFixed(2);
-  }
-
-  estScheduleSave();
-  estUpdateRowCalc(rowId);
-  estUpdateTotals();
-}
-
-function estOnChange(inp) {
-  const rowId = inp.dataset.rowid;
-  const field = inp.dataset.field;
-  const row = _estRows.find(r => String(r.id) === String(rowId));
-  if (!row) return;
-  row[field] = inp.value;
-  estScheduleSave();
-  // Only update the computed cells, not re-render the whole table
-  estUpdateRowCalc(rowId);
-  estUpdateTotals();
-}
-
-function estUpdateRowCalc(rowId) {
-  const row = _estRows.find(r => String(r.id) === String(rowId));
-  if (!row) return;
-  const hr = parseFloat(row.hourRate) || 0;
-  const at = parseFloat(row.actualTime) || 0;
-  const em = parseFloat(row.estMonths) || 0;
-  const costPerMonth = hr > 0 && at > 0 ? hr * at : null;
-  const totalCost = hr > 0 && at > 0 && em > 0 ? hr * at * em : null;
-  const mds = at > 0 && em > 0 ? at * em / 8 : null;
-
-  const tr = document.querySelector(`tr[data-row="${rowId}"]`);
-  if (!tr) return;
-  const cells = tr.querySelectorAll('td');
-  // cells: #, position, hourRate, actualTime, costPerMonth(4), estMonths(5), totalCost(6), mds(7)
-  if (cells[4]) cells[4].innerHTML = costPerMonth !== null ? `<b style="color:var(--navy);">$${fmtExact(costPerMonth)}</b>` : '—';
-  if (cells[6]) cells[6].innerHTML = totalCost !== null ? `<b style="color:var(--blue);">$${fmtExact(totalCost)}</b>` : '—';
-  if (cells[7]) cells[7].textContent = mds !== null ? fmt.decimal(mds) : '—';
-}
-
-function estUpdateTotals() {
-  let totalUSD = 0, totalMDs = 0;
-  let sumCostPerMonth = 0, sumActualTime = 0;
-  _estRows.forEach(r => {
-    const hr = parseFloat(r.hourRate) || 0;
-    const at = parseFloat(r.actualTime) || 0;
-    const em = parseFloat(r.estMonths) || 0;
-    sumCostPerMonth += hr * at;
-    sumActualTime += at;
-    totalUSD += hr * at * em;
-    totalMDs += at * em / 8;
-  });
-  const totalSAR = totalUSD * 3.75;
-  const totalUSDperMonth = sumCostPerMonth;
-  const totalSARperMonth = totalUSDperMonth * 3.75;
-  const estMDsPerMonth = sumActualTime / 8;
-  const costPerMDSAR = estMDsPerMonth > 0 ? totalSARperMonth / estMDsPerMonth : 0;
-
-  // Update tfoot — cols: #(0), pos(1), hr(2), at(3), cpm(4), months(5), totalUSD(6), mds(7), del(8)
-  const tfoot = document.querySelector('#estTable tfoot tr');
-  if (tfoot) {
-    const cells = tfoot.querySelectorAll('td');
-    if (cells[1]) cells[1].innerHTML = `<span style="color:#93C5FD;">$${fmt.num(Math.round(totalUSD))}</span>`;
-    if (cells[2]) cells[2].innerHTML = `<span style="color:#93C5FD;">${fmt.decimal(totalMDs)}</span>`;
-  }
-
-  // Update summary strip
-  const summaryEls = document.querySelectorAll('.est-summary-val');
-  if (summaryEls.length >= 4) {
-    summaryEls[0].textContent = `$${fmtExact(totalUSDperMonth)} USD`;
-    summaryEls[1].textContent = `${fmtExact(totalSARperMonth)} SAR`;
-    summaryEls[2].textContent = fmtExact(estMDsPerMonth);
-    summaryEls[3].textContent = `${fmtExact(costPerMDSAR)} SAR`;
-  }
-  const totalEl = document.querySelector('.est-total-sar');
-  if (totalEl) totalEl.textContent = `SAR ${fmtExact(totalSAR)}`;
-}
-
-async function estAddRow() {
-  _estRows.push(makeEstRow('', '', 176, ''));
-  await estSave();
-  renderEstimatedTable(document.getElementById('estimatedLiveWrap'), _estRows, _estPositions, _estPhase);
-}
-
-async function estDeleteRow(id) {
-  _estRows = _estRows.filter(r => String(r.id) !== String(id));
-  if (!_estRows.length) _estRows = [makeEstRow()];
-  await estSave();
-  renderEstimatedTable(document.getElementById('estimatedLiveWrap'), _estRows, _estPositions, _estPhase);
-}
-
-async function estClearAll() {
-  if (!confirm('Clear all rows?')) return;
-  _estRows = [makeEstRow()];
-  await estSave();
-  renderEstimatedTable(document.getElementById('estimatedLiveWrap'), _estRows, _estPositions, _estPhase);
-}
-
-// ====== TRAVEL & ONSITE ======
-async function renderTravelSubTab() {
-  const cont = document.getElementById('variance-travel-cont');
-  if (!cont) return;
-  cont.innerHTML = `
-    <div class="banner banner-info" style="display:flex;align-items:center;gap:16px;">
-      <span style="font-size:20px;">✈️</span>
-      <div>
-        <strong>Travel & Onsite records are now managed centrally.</strong><br>
-        <span style="font-size:13px;">Go to <a href="/manage" style="color:var(--blue);font-weight:600;">⚙ Manage → Travel Records</a> to view, add, or import travel data.</span>
-      </div>
-    </div>`;
-}
-
-async function loadTravelRecords() { {
-  let d = { records: [] };
-  try {
-    const res = await fetch('/api/travel');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    d = await res.json();
-  } catch(e) {
-    console.error('Travel API error:', e);
-  }
-  const tbody = document.querySelector('#travelTable tbody');
-  if (!d.records || !d.records.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="loading">No travel records yet — add one above</td></tr>';
-    return;
-  }
-  AppState.travelRecords = d.records;
-  tbody.innerHTML = '';
-  d.records.forEach(r => {
-    const tr = document.createElement('tr');
-    const statusClass = r.status === 'Returned' ? 'status-Done' :
-                        r.status === 'Onsite' ? 'status-In-Progress' :
-                        r.status === 'Onsite (open-ended)' ? 'status-At-Risk' : 'status-Not-Started';
-    tr.innerHTML = `
-      <td><b>${r.name}</b></td>
-      <td><span class="muted-text" style="font-size: 11px;">${r.position || '—'}</span></td>
-      <td><span style="font-family: var(--mono); font-size: 12px;">${r.start_date}</span></td>
-      <td><span style="font-family: var(--mono); font-size: 12px;">${r.end_date || '<span style="color: var(--amber); font-weight: 600;">— open —</span>'}</span></td>
-      <td class="num"><b>${r.days_onsite || 0}</b></td>
-      <td><span class="status-pill ${statusClass}">${r.status}</span></td>
-      <td><span class="muted-text" style="font-size: 11px;">${r.notes || ''}</span></td>
-      <td>
-        <button class="see-details-btn" data-edit-id="${r.id}">Edit</button>
-        <button class="btn-ghost" style="padding: 4px 10px; font-size: 11px;" data-del-id="${r.id}">Delete</button>
-      </td>
-    `;
-    tbody.appendChild(tr);
-  });
-  tbody.querySelectorAll('[data-edit-id]').forEach(b => {
-    b.addEventListener('click', () => startEdit(b.dataset.editId));
-  });
-  tbody.querySelectorAll('[data-del-id]').forEach(b => {
-    b.addEventListener('click', async () => {
-      if (!confirm('Delete this travel record?')) return;
-      await fetch(`/api/travel/${b.dataset.delId}`, { method: 'DELETE' });
-      loadTravelRecords();
-    });
-  });
-}
-
-function startEdit(id) {
-  const r = (AppState.travelRecords || []).find(x => String(x.id) === String(id));
-  if (!r) return;
-  document.getElementById('trName').value = r.name || '';
-  document.getElementById('trPos').value = r.position || '';
-  document.getElementById('trStart').value = r.start_date || '';
-  document.getElementById('trEnd').value = r.end_date || '';
-  document.getElementById('trNotes').value = r.notes || '';
-  document.getElementById('trEditingId').value = r.id;
-  document.getElementById('trSubmit').textContent = '✓ Save Changes';
-  document.getElementById('trSubmit').className = 'btn-export';
-  document.getElementById('trCancel').style.display = '';
-  document.getElementById('travelFormTitle').textContent = `Edit Travel Record #${r.id} — ${r.name}`;
-  // Scroll to form
-  document.querySelector('.travel-form').scrollIntoView({ behavior: 'smooth', block: 'center' });
-}
-
-function cancelEdit() {
-  document.getElementById('trEditingId').value = '';
-  ['trName','trPos','trStart','trEnd','trNotes'].forEach(id => document.getElementById(id).value = '');
-  document.getElementById('trSubmit').textContent = '+ Add Record';
-  document.getElementById('trSubmit').className = 'btn-primary';
-  document.getElementById('trCancel').style.display = 'none';
-  document.getElementById('travelFormTitle').textContent = 'Add Travel Record';
-}
-
-async function submitTravel() {
-  const editingId = document.getElementById('trEditingId').value;
-  const body = {
-    name: document.getElementById('trName').value.trim(),
-    position: document.getElementById('trPos').value.trim(),
-    start_date: document.getElementById('trStart').value,
-    end_date: document.getElementById('trEnd').value || null,
-    notes: document.getElementById('trNotes').value.trim(),
-  };
-  if (!body.name || !body.start_date) {
-    alert('Name and start date are required');
-    return;
-  }
-  let res;
-  if (editingId) {
-    res = await fetch(`/api/travel/${editingId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-  } else {
-    res = await fetch('/api/travel', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-  }
-  if (res.ok) {
-    cancelEdit();
-    loadTravelRecords();
-  } else {
-    const e = await res.json();
-    alert('Error: ' + (e.error || 'failed'));
-  }
-}
-
-// ============================================================
-// PROMOTIONS SUB-TAB
-// ============================================================
-async function renderPromotionsSubTab() {
-  const cont = document.getElementById('variance-promotions-cont');
-  if (!cont) return;
-  cont.innerHTML = `
-    <div class="banner banner-info" style="display:flex;align-items:center;gap:16px;">
-      <span style="font-size:20px;">🏆</span>
-      <div>
-        <strong>Promotions are now managed centrally.</strong><br>
-        <span style="font-size:13px;">Go to <a href="/manage" style="color:var(--blue);font-weight:600;">⚙ Manage → Promotions</a> to view, add, or import promotion data.</span>
-      </div>
-    </div>`;
-}
-
-async function promoFetchOdooPosition() {
-  const name = document.getElementById('promoName')?.value?.trim();
-  const hint = document.getElementById('promoOdooHint');
-  if (!name || name.length < 3) { if (hint) hint.textContent = ''; return; }
-  if (hint) hint.textContent = 'Fetching position from Odoo…';
-  try {
-    const res = await fetch(`/api/promotions/employee-odoo-position?name=${encodeURIComponent(name)}`);
-    const d = await res.json();
-    if (d.current_position) {
-      const newPosEl = document.getElementById('promoNewPos');
-      const oldPosEl = document.getElementById('promoOldPos');
-      if (newPosEl && !newPosEl.value) newPosEl.value = d.current_position;
-      if (oldPosEl && !oldPosEl.value && d.suggested_old_position) oldPosEl.value = d.suggested_old_position;
-      if (hint) hint.textContent = `✓ Odoo position: ${d.current_position}`;
-    } else {
-      if (hint) hint.textContent = 'Position not found in Odoo';
-    }
-  } catch (e) {
-    if (hint) hint.textContent = '';
-  }
-}
-
-async function submitPromotion() {
-  const id = document.getElementById('promoEditId')?.value;
-  const body = {
-    name: document.getElementById('promoName')?.value?.trim(),
-    promotion_date: document.getElementById('promoDate')?.value,
-    old_position: document.getElementById('promoOldPos')?.value?.trim(),
-    new_position: document.getElementById('promoNewPos')?.value?.trim(),
-    notes: '',
-  };
-  if (!body.name || !body.promotion_date) { alert('Name and promotion date are required'); return; }
-
-  const url = id ? `/api/promotions/${id}` : '/api/promotions';
-  const method = id ? 'PUT' : 'POST';
-  const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  if (res.ok) {
-    cancelPromoEdit();
-    renderPromotionsSubTab();
-  } else {
-    const e = await res.json();
-    alert('Error: ' + (e.error || 'failed'));
-  }
-}
-
-async function startPromoEdit(id) {
-  const res = await fetch('/api/promotions');
-  const d = await res.json();
-  const r = (d.records || []).find(x => x.id === id);
-  if (!r) return;
-  document.getElementById('promoEditId').value = id;
-  document.getElementById('promoName').value = r.name || '';
-  document.getElementById('promoDate').value = r.promotion_date || '';
-  document.getElementById('promoOldPos').value = r.old_position || '';
-  document.getElementById('promoNewPos').value = r.new_position || '';
-  document.getElementById('promoFormTitle').textContent = `Edit Promotion — ${r.name}`;
-  document.getElementById('promoCancelBtn').style.display = '';
-}
-
-function cancelPromoEdit() {
-  document.getElementById('promoEditId').value = '';
-  document.getElementById('promoName').value = '';
-  document.getElementById('promoDate').value = '';
-  document.getElementById('promoOldPos').value = '';
-  document.getElementById('promoNewPos').value = '';
-  document.getElementById('promoFormTitle').textContent = 'Add Promotion Record';
-  const btn = document.getElementById('promoCancelBtn');
-  if (btn) btn.style.display = 'none';
-  const hint = document.getElementById('promoOdooHint');
-  if (hint) hint.textContent = '';
-}
-
-async function deletePromo(id) {
-  if (!confirm('Delete this promotion record?')) return;
-  await fetch(`/api/promotions/${id}`, { method: 'DELETE' });
-  renderPromotionsSubTab();
-}
-
+function stageColorMap(stage) {
+  if (!stage) return 'var(--text-muted)';
+  const s = stage.toLowerCase();
+  if (s.includes('backlog') || s.includes('new')) return '#6B7280';
+  if (s.includes('progress') || s.includes('active') || s.includes('doing')) return '#3B82F6';
+  if (s.includes('done') || s.includes('closed') || s.includes('complete')) return '#10B981';
+  if (s.includes('block') || s.includes('hold')) return '#EF4444';
+  if (s.includes('review') || s.includes('test')) return '#F59E0B';
+  return '#6366F1';
 }
