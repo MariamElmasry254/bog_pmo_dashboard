@@ -83,9 +83,7 @@ function profFillFromTasks(phaseKey) {
 function fetchEffortCached(phaseKey){
   var ckey='_eff_'+phaseKey+'_'+(window._activeProjectId||'');
   try{var hit=sessionStorage.getItem(ckey);if(hit){var d=JSON.parse(hit);if(d&&d.months&&d.months.length)return Promise.resolve(d);}}catch(e){}
-  return fetch('/api/effort/'+phaseKey+'/all-months')
-    .then(function(res){if(!res.ok)throw new Error('Effort API '+res.status);return res.json();})
-    .then(function(d){try{sessionStorage.setItem(ckey,JSON.stringify(d));}catch(e){}return d;});
+  return fetch('/api/effort/'+phaseKey+'/all-months').then(function(res){if(!res.ok)throw new Error('Effort API '+res.status);return res.json();}).then(function(d){try{sessionStorage.setItem(ckey,JSON.stringify(d));}catch(e){}return d;});
 }
 
 window.loadVariance = async function() {
@@ -1204,7 +1202,7 @@ async function profRecomputeAll(phaseKey) {
         const phaseMapping = {
           development:  ['development'],
           consultation: ['consultation'],
-          services:     ['services', 'development', 'consultation'],  // services tab gets all non-support phases
+          services:     ['services', 'development', 'consultation'],  // services tab includes all non-support
           support:      ['support'],
         };
         const matchPhases = phaseMapping[phaseKey] || [phaseKey];
@@ -1225,6 +1223,10 @@ async function profRecomputeAll(phaseKey) {
           running += monthly[mk];
           cum[mk] = running;
         }
+        console.log('[INV DEBUG] phaseKey='+phaseKey+' matchPhases='+JSON.stringify(matchPhases));
+        console.log('[INV DEBUG] salesInvoicesByPhase keys='+Object.keys(AppState._salesInvoicesByPhase||{}).join(','));
+        console.log('[INV DEBUG] monthly='+JSON.stringify(monthly));
+        console.log('[INV DEBUG] cum months='+Object.keys(cum).length);
         if (Object.keys(cum).length) {
           AppState._invoiceCumulative[phaseKey] = cum;
         }
@@ -1360,6 +1362,7 @@ async function profRecomputeAll(phaseKey) {
     for (const mk of cumMonths) {
       if (mk <= monthKey) issuedUpToMonth = invCum[mk];
     }
+    if (monthKey === cumMonths[0] || !cumMonths.length) console.log('[INV ROW] '+phaseKey+' month='+monthKey+' cumMonths='+JSON.stringify(cumMonths)+' issued='+issuedUpToMonth);
 
     const production  = recognizedRev - prevRecogRev;
     // Acc. VI = Recognized Revenue to Date − Cumulative Issued Invoices up to this month
