@@ -1951,15 +1951,11 @@ def api_variance_export_pmo():
         total_rev=latest.get('totalRevSAR',0) or 0; total_cost=latest.get('totalEstCostSAR',0) or 0; total_mds=latest.get('totalEstMDs',0) or 0
         ws.row_dimensions[1].height=32; ws.merge_cells(f'A1:{get_column_letter(NCOLS)}1')
         sc(ws,1,1,'ENVNT.',fill(NAVY),font(WHITE,True,16),al('left','center'))
-        ws.row_dimensions[2].height=20
-        sc(ws,2,1,'Project',fill('E2E8F0'),font(DARK,True,10),al('left','center'))
-        ws.merge_cells(f'B2:{get_column_letter(NCOLS)}2')
-        sc(ws,2,2,proj_name,fill('E2E8F0'),font(DARK,False,10),al('left','center'))
-        ws.row_dimensions[3].height=8
-        ws.row_dimensions[4].height=22; ws.merge_cells(f'A4:{get_column_letter(NCOLS)}4')
-        sc(ws,4,1,ph_label,fill(NAVY),font(WHITE,True,13),al('left','center'))
-        ws.row_dimensions[5].height=18
-        sc(ws,5,1,'Total Revenue SAR',fill('F8FAFC'),font(DARK,True,9),al('left','center'))
+        ws.row_dimensions[2].height=20; sc(ws,2,1,'Project',fill('E2E8F0'),font(DARK,True,10),al('left','center'))
+        ws.merge_cells(f'B2:{get_column_letter(NCOLS)}2'); sc(ws,2,2,proj_name,fill('E2E8F0'),font(DARK,False,10),al('left','center'))
+        ws.row_dimensions[3].height=8; ws.row_dimensions[4].height=22
+        ws.merge_cells(f'A4:{get_column_letter(NCOLS)}4'); sc(ws,4,1,ph_label,fill(NAVY),font(WHITE,True,13),al('left','center'))
+        ws.row_dimensions[5].height=18; sc(ws,5,1,'Total Revenue SAR',fill('F8FAFC'),font(DARK,True,9),al('left','center'))
         rc=next((ci for ci,(_,__,nm,*_) in enumerate(ALL_COLS,1) if nm=='Total Revenue (SAR)'),None)
         cc2=next((ci for ci,(_,__,nm,*_) in enumerate(ALL_COLS,1) if nm=='Total Est. Cost (SAR)'),None)
         mc=next((ci for ci,(_,__,nm,*_) in enumerate(ALL_COLS,1) if nm=='Est. Effort MDs'),None)
@@ -1970,8 +1966,7 @@ def api_variance_export_pmo():
         for grp_label,cols,grp_col in GROUPS:
             ncols=len(cols)
             if ncols>1: ws.merge_cells(f'{get_column_letter(col)}6:{get_column_letter(col+ncols-1)}6')
-            sc(ws,6,col,grp_label if grp_label!='Month' else '',fill(grp_col),font(WHITE,True,9),al('center','center'))
-            col+=ncols
+            sc(ws,6,col,grp_label if grp_label!='Month' else '',fill(grp_col),font(WHITE,True,9),al('center','center')); col+=ncols
         ws.row_dimensions[7].height=28
         for ci,(_,__,nm,w,nf,aln) in enumerate(ALL_COLS,1): sc(ws,7,ci,nm,fill(DARK),font(WHITE,True,8),al('center','center',True),thin())
         for ri,m in enumerate(months,8):
@@ -8306,15 +8301,18 @@ def api_sales_orders():
             'overall_invoiced_pct': round(total_invoiced / total_untaxed * 100, 1) if total_untaxed else 0,
         }
 
-        # Build invoices_by_phase: use FULL invoice amount (excl. VAT)
-        # because some invoice lines may not be linked to analytic account
-        invoices_by_phase = {}  # { phase_key: { 'YYYY-MM': amount_excl_vat } }
+        # Build invoices_by_phase: accumulate by SO LINE amounts per phase
+        # This correctly splits invoices that span multiple phases
+        invoices_by_phase = {}  # { phase_key: { 'YYYY-MM': amount } }
 
-        # Step 1: Map each invoice → phase from SO line products + user overrides
-        inv_phase_map = {}  # move_id → phase_key
-        inv_phase_overrides = {}  # move_id → phase when user explicitly set it
+        # Build inv_date lookup from invoices_raw
+        inv_date_map = {inv['id']: (inv.get('invoice_date') or '')[:7]
+                        for inv in invoices_raw if inv.get('state') == 'posted'}
+
+        # Accumulate per SO line → get phase + line invoice amounts
         for order in orders:
             for line in order.get('lines', []):
+                # Determine phase for this SO line
                 prod_name = ''
                 if isinstance(line.get('product_id'), list):
                     prod_name = line['product_id'][1] if len(line['product_id']) > 1 else ''
@@ -8327,37 +8325,34 @@ def api_sales_orders():
                     lp = 'license'
                 else:
                     lp = 'development'
-                # User override from dropdown (check both line id and string)
+                # User override wins
                 line_id_str = str(line.get('id', ''))
                 user_override = line_var_map.get(line_id_str)
                 if user_override:
                     lp = user_override
+
+                # Accumulate each invoice LINE amount for this phase
                 for li in line.get('line_invoices', []):
                     mid = li.get('move_id')
-                    if mid:
-                        if user_override:
-                            # User explicitly chose — always wins
-                            inv_phase_map[mid] = lp
-                        elif mid not in inv_phase_map:
-                            inv_phase_map[mid] = lp
-
-        # Step 2: Accumulate FULL invoice amount_untaxed per phase per month
-        processed_invs = set()
-        for inv in invoices_raw:
-            if inv['id'] in processed_invs:
-                continue
-            processed_invs.add(inv['id'])
-            if inv.get('state') != 'posted':
-                continue
-            month = (inv.get('invoice_date') or '')[:7]
-            if not month:
-                continue
-            lp = inv_phase_map.get(inv['id'], 'development')
-            if lp not in invoices_by_phase:
-                invoices_by_phase[lp] = {}
-            invoices_by_phase[lp][month] = (
-                invoices_by_phase[lp].get(month, 0) + (inv.get('amount_untaxed') or 0)
-            )
+                    if not mid:
+                        continue
+                    month = inv_date_map.get(mid, '')
+                    if not month:
+                        continue
+                    # Use the line amount (price_subtotal) not full invoice
+                    amt = float(li.get('amount', 0) or 0)
+                    if amt == 0:
+                        # Fallback: use invoiced_amt from SO line proportionally
+                        amt = float(li.get('qty', 0) or 0) * float(line.get('price_unit', 0) or 0)
+                        disc = 1 - (float(line.get('discount', 0) or 0)) / 100
+                        amt = round(amt * disc, 2)
+                    if amt == 0:
+                        continue
+                    if lp not in invoices_by_phase:
+                        invoices_by_phase[lp] = {}
+                    invoices_by_phase[lp][month] = (
+                        invoices_by_phase[lp].get(month, 0) + amt
+                    )
 
         # Build cumulative per phase
         invoices_by_phase_cumulative = {}
