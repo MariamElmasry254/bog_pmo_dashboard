@@ -87,28 +87,22 @@ tr:hover td{background:#FAFAFA;}
 .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:200;display:none;align-items:center;justify-content:center;}
 .modal-bg.open{display:flex;}
 .modal{background:#fff;border-radius:12px;padding:28px;width:440px;max-width:92vw;box-shadow:0 20px 60px rgba(0,0,0,.3);}
-
 .role-management .btn-ghost.btn-sm { display: none !important; }
 .role-management #ticketSection { display: none !important; }
 .role-management #ticketConfirmBtn { display: none !important; }
 .role-management #promoFormWrap { display: none !important; }
-.role-management #travelAddBtn { display: none !important; }
 .role-management .btn-primary { display: none !important; }
 </style>
 <script>
-// Read role from cookie SYNCHRONOUSLY - no async delay
 (function(){
-  var m = document.cookie.match(/(?:^|;)\s*pmo_role=([^;]+)/);
-  var role = m ? decodeURIComponent(m[1]) : "";
+  var m = document.cookie.match(/(?:^|;\s*)pmo_role=([^;]+)/);
+  var role = m ? m[1] : '';
   window._currentRole = role;
-  if (role === "management") {
-    document.documentElement.classList.add("role-management");
-  }
-  // Also fetch to get Users tab for admin (async ok for that)
-  fetch("/api/me").then(function(r){return r.json();}).then(function(d){
+  if (role === 'management') document.documentElement.classList.add('role-management');
+  fetch('/api/me').then(function(r){return r.json();}).then(function(d){
     window._currentRole = d.role;
-    if (d.role === "management") document.documentElement.classList.add("role-management");
-    if (d.role === "admin") { var b=document.getElementById("tabBtnUsers"); if(b) b.style.display=""; }
+    if (d.role === 'management') document.documentElement.classList.add('role-management');
+    if (d.role === 'admin') { var b=document.getElementById('tabBtnUsers'); if(b) b.style.display=''; }
   }).catch(function(){});
 })();
 </script>
@@ -134,7 +128,6 @@ tr:hover td{background:#FAFAFA;}
     <button class="tab-btn" onclick="switchTab('promotions')">
       🏆 Promotions <span class="cnt-badge" id="promoCount">…</span>
     </button>
-
     <button class="tab-btn" id="tabBtnUsers" onclick="switchTab('users')" style="display:none;">
       Users
     </button>
@@ -1522,7 +1515,7 @@ loadTravel();
 <div id="tab-users" class="tab-panel">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
     <h3 style="margin:0;font-size:16px;font-weight:700;color:var(--navy);">Users</h3>
-    <button class="btn btn-primary" onclick="showAddUser()">+ Add User</button>
+    <button class="btn btn-primary mgmt-ok" onclick="showAddUser()">+ Add User</button>
   </div>
   <div id="userFormWrap" style="display:none;background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:16px;">
     <h4 id="userFormTitle" style="margin:0 0 14px;font-size:14px;font-weight:600;"></h4>
