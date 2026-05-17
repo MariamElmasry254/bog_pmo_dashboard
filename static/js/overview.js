@@ -3,23 +3,26 @@
   function _a(b){['services','missing','risks','roadmap'].forEach(function(t){var e=document.querySelector('.exec-tab[data-tab="'+t+'"]');if(e)e.style.display=b?'':'none';});}
   async function _f(){try{var d=await fetch('/api/project-info').then(function(r){return r.json();});_b=d.is_bog!==false;if(window.AppState){if(!AppState._overviewData)AppState._overviewData={};AppState._overviewData.is_bog=_b;}_a(_b);}catch(e){}}
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',_f);else _f();
-  var obs=new MutationObserver(function(){if(_b===false)_a(false);});function s(){obs.observe(document.body||document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['style']});}
+  var obs=new MutationObserver(function(){if(_b===false)_a(false);});
+  function s(){if(document.body)obs.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['style']});}
   if(document.body)s();else document.addEventListener('DOMContentLoaded',s);
 })();
-/* Overview tab — Roadmap KPIs + Tasks Analysis with multi-phase + employee filter */
-
-// ─── Effort cache + KPI snapshot ─────────────────────────────────────
+// ─── Effort cache + KPI snapshot helpers ─────────────────────────────
 async function _fetchEffortCached(phase) {
-  const key='_eff_'+phase+'_'+(AppState._overviewData?.project_id||window._activeProjectId||'');
-  try{const h=sessionStorage.getItem(key);if(h){const d=JSON.parse(h);if(d?.months?.length)return d;}}catch(e){}
-  const res=await fetch('/api/effort/'+phase+'/all-months');
-  if(!res.ok)throw new Error('Effort API '+res.status);
-  const d=await res.json();
-  try{sessionStorage.setItem(key,JSON.stringify(d));}catch(e){}
-  return d;
+  const _key = '_eff_' + phase + '_' + (AppState._overviewData?.project_id || window._activeProjectId || '');
+  try {
+    const _hit = sessionStorage.getItem(_key);
+    if (_hit) { const _d = JSON.parse(_hit); if (_d?.months?.length) return _d; }
+  } catch(_e) {}
+  const _res = await fetch('/api/effort/' + phase + '/all-months');
+  if (!_res.ok) throw new Error('Effort API ' + _res.status);
+  const _d2 = await _res.json();
+  try { sessionStorage.setItem(_key, JSON.stringify(_d2)); } catch(_e) {}
+  return _d2;
 }
-function _saveKPISnapshot(phase,data){try{sessionStorage.setItem('_kpi_'+phase,JSON.stringify(data));}catch(e){}}
-function _loadKPISnapshot(phase){try{const h=sessionStorage.getItem('_kpi_'+phase);return h?JSON.parse(h):null;}catch(e){return null;}}
+function _saveKPISnapshot(ph, data) { try { sessionStorage.setItem('_kpi_' + ph, JSON.stringify(data)); } catch(_e) {} }
+function _loadKPISnapshot(ph) { try { const _h = sessionStorage.getItem('_kpi_' + ph); return _h ? JSON.parse(_h) : null; } catch(_e) { return null; } }
+/* Overview tab — Roadmap KPIs + Tasks Analysis with multi-phase + employee filter */
 
 window.loadOverview = async function() {
   if (!AppState.loaded.overview) {
@@ -676,8 +679,7 @@ async function _loadTeamCount() {
     for (const phase of phases) {
       let emps = AppState._effortEmployees?.[phase];
       if (!emps) {
-        const res = await _fetchEffortCached(phase);
-        const d = await res.json();
+        const d = await _fetchEffortCached(phase);
         if (!AppState._effortEmployees) AppState._effortEmployees = {};
         AppState._effortEmployees[phase] = d.employees || [];
         emps = d.employees || [];
@@ -702,6 +704,7 @@ async function _loadTeamCount() {
 }
 
 async function _loadPhaseCostKPIs() {
+  // Load cached snapshots if variance not yet loaded
   if (!AppState._latestProfData) {
     AppState._latestProfData = {};
     ['services','support','development','consultation'].forEach(ph => {
@@ -725,8 +728,7 @@ async function _loadPhaseCostKPIs() {
       let mMDs   = AppState._effortMonthMDs?.[phase]   || {};
 
       if (!months.length) {
-        const res = await _fetchEffortCached(phase);
-        const d   = await res.json();
+        const d = await _fetchEffortCached(phase);
         months = d.months || [];
         mCosts = d.month_cost_usd || {};
         mMDs   = d.month_mds      || {};
@@ -744,7 +746,9 @@ async function _loadPhaseCostKPIs() {
       totalCostSAR += cumCostSAR;
 
       const totalMDs = Object.values(mMDs).reduce((s,v)=>s+v, 0);
-      const profData   = AppState._latestProfData?.[phase];
+      const avgCPMD  = totalMDs > 0 ? cumCostSAR / totalMDs : 0;
+      // EAC from profitability data if available
+      const profData = AppState._latestProfData?.[phase];
       const eacCostSAR = profData?.eacCostSAR || cumCostSAR;
       totalEACSAR += eacCostSAR;
 
@@ -762,20 +766,29 @@ async function _loadPhaseCostKPIs() {
   }
 
   // Totals
-  const tcEl=document.getElementById('kpiTotalCost');if(tcEl)tcEl.textContent=totalCostSAR?fSAR(totalCostSAR):'—';
-  const teEl=document.getElementById('kpiTotalEAC');if(teEl)teEl.textContent=totalEACSAR?fSAR(totalEACSAR):'—';
-  try{
-    const pr=await fetch('/api/overview/phase-progress');const pd=await pr.json();
-    const isBogK=AppState._overviewData?.is_bog!==false;
-    const phsK=isBogK?['consultation','development']:['services','support'];
-    let lmk='',tc=0,cc=0;
-    for(const ph of phsK){const mk=pd.phases?.[ph]?.month_key||'';if(mk&&mk>lmk)lmk=mk;const pct=pd.phases?.[ph]?.completion||0;if(pct>0){tc+=pct;cc++;}}
-    const avg=cc>0?Math.round(tc/cc):0;
-    ['kpiCostAsOf','kpiEACAsOf'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=lmk?'as of '+lmk:'';});
-    ['kpiCostPct','kpiEACPct'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=avg>0?avg+'% complete':'';});
-    // Save snapshots
-    if(AppState._latestProfData){Object.keys(AppState._latestProfData).forEach(ph=>_saveKPISnapshot(ph,AppState._latestProfData[ph]));}
-  }catch(e){}
+  const tcEl = document.getElementById('kpiTotalCost');
+  if (tcEl) tcEl.textContent = totalCostSAR ? fSAR(totalCostSAR) : '—';
+  const teEl = document.getElementById('kpiTotalEAC');
+  if (teEl) teEl.textContent = totalEACSAR  ? fSAR(totalEACSAR)  : '—';
+  try {
+    const _pr = await fetch('/api/overview/phase-progress');
+    const _pd = await _pr.json();
+    const _isBog = AppState._overviewData?.is_bog !== false;
+    const _phs   = _isBog ? ['consultation','development'] : ['services','support'];
+    let _lmk='', _tc=0, _cc=0;
+    for (const _ph of _phs) {
+      const _mk = _pd.phases?.[_ph]?.month_key || '';
+      if (_mk && _mk > _lmk) _lmk = _mk;
+      const _pct = _pd.phases?.[_ph]?.completion || 0;
+      if (_pct > 0) { _tc += _pct; _cc++; }
+    }
+    const _avg = _cc > 0 ? Math.round(_tc / _cc) : 0;
+    ['kpiCostAsOf','kpiEACAsOf'].forEach(id => { const el=document.getElementById(id); if(el) el.textContent = _lmk ? 'as of '+_lmk : ''; });
+    ['kpiCostPct','kpiEACPct'].forEach(id => { const el=document.getElementById(id); if(el) el.textContent = _avg > 0 ? _avg+'% complete' : ''; });
+    if (AppState._latestProfData) {
+      Object.keys(AppState._latestProfData).forEach(ph => _saveKPISnapshot(ph, AppState._latestProfData[ph]));
+    }
+  } catch(_e) {}
 }
 
 
@@ -955,24 +968,50 @@ async function loadTaskAnalysis(phaseGroup) {
   }
 }
 
-function renderPhaseFilters(phaseGroup,available){
-  const cont=document.getElementById('ovPhaseFilters');if(!cont)return;if(!available.length){cont.innerHTML='';return;}
-  const total=available.length,active=AppState.activePhases||[];
-  const lbl=active.length===0||active.length===total?`All phases (${total})`:active.length===1?active[0]:`${active.length} of ${total} phases`;
-  cont.style.cssText='position:relative;display:inline-flex;flex-direction:column;';
-  let html='<label class="filter-label">PHASES (multi-select)</label><div style="position:relative;display:inline-block;" id="ovPhaseDropdown">';
-  html+=`<button type="button" class="phase-toggle" id="ovPhaseToggle"><span id="ovPhaseLabel">${lbl}</span><span style="margin-left:8px;color:var(--text-muted);">▼</span></button>`;
-  html+='<div id="ovPhaseMenu" style="display:none;position:absolute;top:100%;left:0;z-index:9999;min-width:280px;max-width:420px;max-height:360px;overflow-y:auto;background:white;border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);margin-top:2px;"><div class="phase-menu-actions"><a id="ovPhaseAll">Select all</a><a id="ovPhaseNone">Clear</a></div>';
-  available.filter(p=>p&&p!=='undefined'&&p!=='null').forEach(p=>{const checked=active.includes(p),label=p==='No Phase'?'📭 No Phase':p;html+=`<label class="phase-option ${checked?'selected':''}" data-phase="${encodeURIComponent(p)}" style="display:flex;align-items:center;gap:8px;padding:6px 12px;cursor:pointer;"><input type="checkbox" ${checked?'checked':''}><span dir="auto">${label}</span></label>`;});
-  html+='</div></div>';cont.innerHTML=html;
-  const toggle=document.getElementById('ovPhaseToggle'),menu=document.getElementById('ovPhaseMenu');
-  toggle.addEventListener('click',e=>{e.stopPropagation();menu.style.display=menu.style.display==='none'?'block':'none';toggle.classList.toggle('open',menu.style.display==='block');});
-  document.addEventListener('click',e=>{if(!document.getElementById('ovPhaseDropdown')?.contains(e.target)){menu.style.display='none';toggle.classList.remove('open');}},{capture:false});
-  menu.querySelectorAll('.phase-option').forEach(opt=>{opt.addEventListener('click',e=>{e.stopPropagation();const phase=decodeURIComponent(opt.dataset.phase),cb=opt.querySelector('input');if(e.target!==cb)cb.checked=!cb.checked;AppState.activePhases=AppState.activePhases||[];if(cb.checked){if(!AppState.activePhases.includes(phase))AppState.activePhases.push(phase);opt.classList.add('selected');}else{AppState.activePhases=AppState.activePhases.filter(p=>p!==phase);opt.classList.remove('selected');}const a=AppState.activePhases;document.getElementById('ovPhaseLabel').textContent=a.length===0||a.length===total?`All phases (${total})`:a.length===1?a[0]:`${a.length} of ${total} phases`;loadTaskAnalysis(phaseGroup);});});
-  document.getElementById('ovPhaseAll').addEventListener('click',e=>{e.stopPropagation();AppState.activePhases=[...available];renderPhaseFilters(phaseGroup,available);loadTaskAnalysis(phaseGroup);});
-  document.getElementById('ovPhaseNone').addEventListener('click',e=>{e.stopPropagation();AppState.activePhases=[];renderPhaseFilters(phaseGroup,available);loadTaskAnalysis(phaseGroup);});
+function renderPhaseFilters(phaseGroup, available) {
+  const cont = document.getElementById('ovPhaseFilters');
+  if (!cont) return;
+  if (!available.length) { cont.innerHTML = ''; return; }
+  const total = available.length, active = AppState.activePhases || [];
+  const lbl = active.length===0||active.length===total ? `All phases (${total})` : active.length===1 ? active[0] : `${active.length} of ${total} phases`;
+  cont.style.cssText = 'position:relative;display:inline-flex;flex-direction:column;';
+  let html = '<label class="filter-label">PHASES (multi-select)</label>';
+  html += '<div style="position:relative;display:inline-block;" id="ovPhaseDropdown">';
+  html += `<button type="button" class="phase-toggle" id="ovPhaseToggle"><span id="ovPhaseLabel">${lbl}</span><span style="margin-left:8px;color:var(--text-muted);">▼</span></button>`;
+  html += '<div id="ovPhaseMenu" style="display:none;position:absolute;top:100%;left:0;z-index:9999;min-width:280px;max-width:420px;max-height:360px;overflow-y:auto;background:white;border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);margin-top:2px;">';
+  html += '<div class="phase-menu-actions"><a id="ovPhaseAll">Select all</a><a id="ovPhaseNone">Clear</a></div>';
+  available.filter(p=>p&&p!=='undefined'&&p!=='null').forEach(p => {
+    const checked = active.includes(p), label = p==='No Phase' ? '📭 No Phase' : p;
+    html += `<label class="phase-option ${checked?'selected':''}" data-phase="${encodeURIComponent(p)}" style="display:flex;align-items:center;gap:8px;padding:6px 12px;cursor:pointer;"><input type="checkbox" ${checked?'checked':''}><span dir="auto">${label}</span></label>`;
+  });
+  html += '</div></div>';
+  cont.innerHTML = html;
+  const toggle = document.getElementById('ovPhaseToggle'), menu = document.getElementById('ovPhaseMenu');
+  toggle.addEventListener('click', ev => { ev.stopPropagation(); menu.style.display = menu.style.display==='none'?'block':'none'; toggle.classList.toggle('open', menu.style.display==='block'); });
+  document.addEventListener('click', ev => { if (!document.getElementById('ovPhaseDropdown')?.contains(ev.target)) { menu.style.display='none'; toggle.classList.remove('open'); } }, {capture:false});
+  menu.querySelectorAll('.phase-option').forEach(opt => {
+    opt.addEventListener('click', ev => {
+      ev.stopPropagation();
+      const phase = decodeURIComponent(opt.dataset.phase), cb = opt.querySelector('input');
+      if (ev.target !== cb) cb.checked = !cb.checked;
+      AppState.activePhases = AppState.activePhases || [];
+      if (cb.checked) { if (!AppState.activePhases.includes(phase)) AppState.activePhases.push(phase); opt.classList.add('selected'); }
+      else { AppState.activePhases = AppState.activePhases.filter(p=>p!==phase); opt.classList.remove('selected'); }
+      const a = AppState.activePhases;
+      document.getElementById('ovPhaseLabel').textContent = a.length===0||a.length===total ? `All phases (${total})` : a.length===1 ? a[0] : `${a.length} of ${total} phases`;
+      loadTaskAnalysis(phaseGroup);
+    });
+  });
+  document.getElementById('ovPhaseAll').addEventListener('click', ev => { ev.stopPropagation(); AppState.activePhases=[...available]; renderPhaseFilters(phaseGroup,available); loadTaskAnalysis(phaseGroup); });
+  document.getElementById('ovPhaseNone').addEventListener('click', ev => { ev.stopPropagation(); AppState.activePhases=[]; renderPhaseFilters(phaseGroup,available); loadTaskAnalysis(phaseGroup); });
 }
-function phaseLabel(phases,total){const t=total||(AppState.ovAnalysisData?.phases_available||[]).length;if(!phases||phases.length===0)return `All phases (${t})`;if(phases.length===t)return `All phases (${t})`;if(phases.length===1)return phases[0];return `${phases.length} of ${t} phases`;}
+function phaseLabel(phases, total) {
+  const t = total || (AppState.ovAnalysisData?.phases_available||[]).length;
+  if (!phases||phases.length===0) return `All phases (${t})`;
+  if (phases.length===t) return `All phases (${t})`;
+  if (phases.length===1) return phases[0];
+  return `${phases.length} of ${t} phases`;
+}
 
 function renderEmployeeFilter(employees) {
   const cont = document.getElementById('ovEmployeeFilters');
@@ -991,7 +1030,12 @@ function renderEmployeeFilter(employees) {
   html += '<a id="ovEmpAll">Select all</a>';
   html += '<a id="ovEmpNone">Clear</a>';
   html += '</div>';
-  const _seen=new Set(),_ded=employees.filter(e=>{const k=e.replace(/^\[E\d+\]\s*/,'').toLowerCase().trim();if(_seen.has(k))return false;_seen.add(k);return true;});_ded.forEach(e=>{const checked=(AppState.activeEmployees||[]).includes(e);html+=`<label class="phase-option ${checked?'selected':''}" data-emp="${encodeURIComponent(e)}"><input type="checkbox" ${checked?'checked':''}><span dir="auto">${e}</span></label>`;});
+  const _empSeen = new Set();
+  const _dedupEmps = employees.filter(e => { const k=e.replace(/^\[E\d+\]\s*/,'').toLowerCase().trim(); if(_empSeen.has(k))return false; _empSeen.add(k); return true; });
+  _dedupEmps.forEach(e => {
+    const checked = (AppState.activeEmployees || []).includes(e);
+    html += `<label class="phase-option ${checked?'selected':''}" data-emp="${encodeURIComponent(e)}"><input type="checkbox" ${checked?'checked':''}><span dir="auto">${e}</span></label>`;
+  });
   html += '</div></div>';
   cont.innerHTML = html;
 
@@ -1270,18 +1314,30 @@ function renderTaskList(phaseGroup) {
   }
 
   rootTasks.sort((a,b)=>(a.name||'').localeCompare(b.name||''));
-  const _fKey=[search,typeFilter,statusFilter,(AppState.activeEmployees||[]).join(','),(AppState.activePhases||[]).join(',')].join('|');
-  if(AppState._taskFilterKey!==_fKey){AppState._taskFilterKey=_fKey;AppState._taskPage=0;}
-  if(!AppState._taskPage)AppState._taskPage=0;AppState._lastPhaseGroup=phaseGroup;
+  const _fKey2=[search,typeFilter,statusFilter,(AppState.activeEmployees||[]).join(','),(AppState.activePhases||[]).join(',')].join('|');
+  if(AppState._taskFilterKey!==_fKey2){AppState._taskFilterKey=_fKey2;AppState._taskPage=0;}
+  if(!AppState._taskPage)AppState._taskPage=0; AppState._lastPhaseGroup=phaseGroup;
   const _showN=(AppState._taskPage+1)*10,_shown=rootTasks.slice(0,_showN),_rem=Math.max(0,rootTasks.length-_showN);
   let html=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;"><h3 class="card-title" style="margin:0;">Tasks <span class="muted-text">— ${matchedIds.size} match${matchedIds.size!==1?'es':''}${matchedIds.size<tasks.length?` · ${tasks.length-matchedIds.size} parent context`:''}</span></h3><span class="muted-text" style="font-size:11px;">Click parent to expand · Live from Odoo</span></div><div class="task-analysis-list">`;
   _shown.forEach(t=>{html+=renderTaskBranch(t,0);});
-  if(_rem>0||AppState._taskPage>0){html+=`<div style="display:flex;gap:8px;justify-content:center;padding:14px 0;">`;if(_rem>0)html+=`<button onclick="_ovLoadMore()" style="padding:6px 20px;border:1px solid var(--border);border-radius:6px;background:var(--bg-subtle);cursor:pointer;font-size:13px;font-weight:600;color:var(--navy);">Show 10 more <span style="color:var(--muted);font-size:12px;">(${_rem} remaining)</span></button>`;if(AppState._taskPage>0)html+=`<button onclick="_ovCollapse()" style="padding:6px 16px;border:1px solid var(--border);border-radius:6px;background:transparent;cursor:pointer;font-size:12px;color:var(--muted);">↑ Collapse to 10</button>`;html+=`</div>`;}
+  if(_rem>0||AppState._taskPage>0){
+    html+=`<div style="display:flex;gap:8px;justify-content:center;padding:14px 0;">`;
+    if(_rem>0)html+=`<button onclick="_ovLoadMore()" style="padding:6px 20px;border:1px solid var(--border);border-radius:6px;background:var(--bg-subtle);cursor:pointer;font-size:13px;font-weight:600;color:var(--navy);">Show 10 more <span style="color:var(--muted);font-size:12px;">(${_rem} remaining)</span></button>`;
+    if(AppState._taskPage>0)html+=`<button onclick="_ovCollapse()" style="padding:6px 16px;border:1px solid var(--border);border-radius:6px;background:transparent;cursor:pointer;font-size:12px;color:var(--muted);">↑ Collapse to 10</button>`;
+    html+=`</div>`;
+  }
   html+=`</div></div>`;
   cont.innerHTML = html;
 
   // Wire expand clicks
-  cont.querySelectorAll('[data-expand-id]').forEach(el=>{el.addEventListener('click',()=>{const id=parseInt(el.dataset.expandId);if(AppState.expandedTasks.has(id))AppState.expandedTasks.delete(id);else AppState.expandedTasks.add(id);renderTaskList(phaseGroup);});});
+  cont.querySelectorAll('[data-expand-id]').forEach(el => {
+    el.addEventListener('click', () => {
+      const id=parseInt(el.dataset.expandId);
+      if(AppState.expandedTasks.has(id))AppState.expandedTasks.delete(id);
+      else AppState.expandedTasks.add(id);
+      renderTaskList(phaseGroup);
+    });
+  });
 }
 window._ovLoadMore=()=>{AppState._taskPage=(AppState._taskPage||0)+1;renderTaskList(AppState._lastPhaseGroup);};
 window._ovCollapse=()=>{AppState._taskPage=0;renderTaskList(AppState._lastPhaseGroup);};
