@@ -33,11 +33,16 @@ window.loadSalesOrders = async function() {
     if (mapRes.ok) {
       const mapData = await mapRes.json();
       const soMap = mapData.plan_overrides?.so_line_map || {};
-      for (const [lineId, fields] of Object.entries(soMap)) {
-        if (fields && typeof fields === 'object' && fields.var_tab)
-          window.AppState._soLineVarMap[lineId] = fields.var_tab;
-        else if (typeof fields === 'string' && fields)
-          window.AppState._soLineVarMap[lineId] = fields;
+      for (const [rawKey, val] of Object.entries(soMap)) {
+        // Saved as key='12345.var_tab', value='support'
+        if (rawKey.endsWith('.var_tab')) {
+          const lineId = rawKey.slice(0, -'.var_tab'.length);
+          if (typeof val === 'string' && val) window.AppState._soLineVarMap[lineId] = val;
+        } else if (val && typeof val === 'object' && val.var_tab) {
+          window.AppState._soLineVarMap[rawKey] = val.var_tab;
+        } else if (typeof val === 'string' && val) {
+          window.AppState._soLineVarMap[rawKey] = val;
+        }
       }
     }
   } catch(e) {}
@@ -398,7 +403,7 @@ window.setSoLineVarTab = function(lineId, varTab) {
     headers: {'Content-Type':'application/json'},
     body: JSON.stringify({phase: 'so_line_map', month_key: String(lineId), field: 'var_tab', value: varTab})
   }).catch(()=>{});
-  // Clear full invoice cache so variance reloads with new mapping
+  // Clear full invoice cache so variance reloads correctly
   if (window.AppState) {
     window.AppState._invoiceCumulative    = {};
     window.AppState._salesInvoicesByPhase = null;
