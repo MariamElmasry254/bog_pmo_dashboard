@@ -920,65 +920,87 @@ async function loadTaskAnalysis(phaseGroup) {
 function renderPhaseFilters(phaseGroup, available) {
   const cont = document.getElementById('ovPhaseFilters');
   if (!cont) return;
-  if (!available.length) { cont.innerHTML = ''; return; }
+  if (!available.length) {
+    cont.innerHTML = '';
+    return;
+  }
+  let html = '<label class="filter-label">PHASES (multi-select)</label>';
+  html += '<div class="phase-dropdown" id="ovPhaseDropdown" style="position:relative;display:inline-block;">';
+  html += `<button type="button" class="phase-toggle" id="ovPhaseToggle"
+    style="display:flex;align-items:center;gap:8px;padding:7px 12px;min-width:200px;
+           border:1px solid var(--border);border-radius:6px;background:var(--bg-card,white);
+           cursor:pointer;font-size:13px;font-weight:500;text-align:left;justify-content:space-between;">
+    <span id="ovPhaseLabel" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${phaseLabel(AppState.activePhases || [])}</span>
+    <span style="color:var(--text-muted);flex-shrink:0;">▼</span>
+  </button>`;
+  html += '<div class="phase-menu" id="ovPhaseMenu" style="display:none;position:absolute;z-index:999;top:100%;left:0;min-width:280px;max-width:420px;max-height:360px;overflow-y:auto;background:var(--bg-card,white);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);margin-top:2px;">';
+  html += '<div style="display:flex;gap:12px;padding:8px 12px;border-bottom:1px solid var(--border);background:var(--bg-subtle);">';
+  html += '<a id="ovPhaseAll" style="font-size:12px;font-weight:600;color:var(--blue,#3B82F6);cursor:pointer;text-decoration:none;">Select all</a>';
+  html += '<a id="ovPhaseNone" style="font-size:12px;color:var(--text-muted);cursor:pointer;text-decoration:none;">Clear</a>';
+  html += '</div>';
+  available.filter(p => p && p !== 'undefined' && p !== 'null').forEach(p => {
+    const checked = (AppState.activePhases || []).includes(p);
+    const label = p === 'No Phase' ? '📭 No Phase' : p;
+    html += `<label class="phase-option ${checked ? 'selected' : ''}" data-phase="${encodeURIComponent(p)}"
+      style="display:flex;align-items:center;gap:8px;padding:7px 12px;cursor:pointer;
+             background:${checked ? 'var(--bg-info,#EFF6FF)' : 'transparent'};
+             border-bottom:1px solid var(--border);font-size:13px;user-select:none;">
+      <input type="checkbox" ${checked ? 'checked' : ''} style="cursor:pointer;accent-color:var(--blue,#3B82F6);width:15px;height:15px;flex-shrink:0;">
+      <span dir="auto" style="color:${checked ? 'var(--blue,#1D4ED8)' : 'var(--text)'};font-weight:${checked ? '600' : '400'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${label}</span>
+    </label>`;
+  });
+  html += '</div></div>';
+  cont.innerHTML = html;
 
-  const clean = available.filter(p => p && p !== 'undefined' && p !== 'null');
-  const active = AppState.activePhases || [];
-  const total  = (AppState.ovAnalysisData?.phases_available || clean).length;
+  // Wire dropdown toggle
+  const toggle = document.getElementById('ovPhaseToggle');
+  const menu = document.getElementById('ovPhaseMenu');
+  toggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+    toggle.classList.toggle('open', menu.style.display === 'block');
+  });
+  document.addEventListener('click', (e) => {
+    if (!document.getElementById('ovPhaseDropdown')?.contains(e.target)) {
+      menu.style.display = 'none';
+      toggle.classList.remove('open');
+    }
+  });
 
-  // Use native <select multiple> — works everywhere, no CSS dependency
-  const opts = clean.map(p => {
-    const sel    = active.includes(p) ? 'selected' : '';
-    const label  = p === 'No Phase' ? '📭 No Phase' : p;
-    return `<option value="${p.replace(/"/g,'&quot;')}" ${sel} dir="auto">${label}</option>`;
-  }).join('');
-
-  const selLabel = active.length === 0 ? `All phases (${total})`
-                 : active.length === 1 ? active[0]
-                 : active.length === total ? `All phases (${total})`
-                 : `${active.length} of ${total} phases`;
-
-  cont.innerHTML = `
-    <label class="filter-label">PHASES (multi-select)</label>
-    <div style="display:flex;flex-direction:column;gap:4px;">
-      <div style="display:flex;gap:6px;align-items:center;margin-bottom:2px;">
-        <span style="font-size:11px;font-weight:600;color:var(--text-muted);">${selLabel}</span>
-        <button id="ovPhaseAll" style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;font-weight:600;">All</button>
-        <button id="ovPhaseNone" style="font-size:11px;color:var(--text-muted);background:none;border:none;cursor:pointer;padding:0;">Clear</button>
-      </div>
-      <select id="ovPhaseSelect" multiple
-        style="width:100%;min-width:220px;max-width:420px;height:130px;
-               border:1px solid var(--border);border-radius:6px;font-size:12px;
-               padding:4px;background:var(--bg-card);color:var(--text);
-               font-family:var(--sans);">
-        ${opts}
-      </select>
-    </div>`;
-
-  const sel = cont.querySelector('#ovPhaseSelect');
-  const updateLabel = () => {
-    const selected = [...sel.selectedOptions].map(o => o.value);
-    AppState.activePhases = selected.length === clean.length ? [] : selected;
-    const lbl = selected.length === 0 || selected.length === clean.length
-      ? `All phases (${total})`
-      : selected.length === 1 ? selected[0]
-      : `${selected.length} of ${total} phases`;
-    cont.querySelector('span').textContent = lbl;
-    loadTaskAnalysis(phaseGroup);
-  };
-
-  sel.addEventListener('change', updateLabel);
-
-  cont.querySelector('#ovPhaseAll').addEventListener('click', () => {
-    [...sel.options].forEach(o => o.selected = true);
-    AppState.activePhases = [];
-    cont.querySelector('span').textContent = `All phases (${total})`;
+  // Wire checkboxes
+  menu.querySelectorAll('.phase-option').forEach(opt => {
+    opt.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const phase = decodeURIComponent(opt.dataset.phase);
+      const cb = opt.querySelector('input');
+      if (e.target !== cb) cb.checked = !cb.checked;
+      AppState.activePhases = AppState.activePhases || [];
+      if (cb.checked) {
+        if (!AppState.activePhases.includes(phase)) AppState.activePhases.push(phase);
+        opt.classList.add('selected');
+        opt.style.background = 'var(--bg-info,#EFF6FF)';
+        opt.querySelector('span').style.color = 'var(--blue,#1D4ED8)';
+        opt.querySelector('span').style.fontWeight = '600';
+      } else {
+        AppState.activePhases = AppState.activePhases.filter(p => p !== phase);
+        opt.classList.remove('selected');
+        opt.style.background = 'transparent';
+        opt.querySelector('span').style.color = 'var(--text)';
+        opt.querySelector('span').style.fontWeight = '400';
+      }
+      document.getElementById('ovPhaseLabel').textContent = phaseLabel(AppState.activePhases);
+      // Reload data with new filter
+      loadTaskAnalysis(phaseGroup);
+    });
+  });
+  menu.querySelector('#ovPhaseAll').addEventListener('click', (e) => {
+    e.stopPropagation();
+    AppState.activePhases = [...available];
     loadTaskAnalysis(phaseGroup);
   });
-  cont.querySelector('#ovPhaseNone').addEventListener('click', () => {
-    [...sel.options].forEach(o => o.selected = false);
+  menu.querySelector('#ovPhaseNone').addEventListener('click', (e) => {
+    e.stopPropagation();
     AppState.activePhases = [];
-    cont.querySelector('span').textContent = `All phases (${total})`;
     loadTaskAnalysis(phaseGroup);
   });
 }
