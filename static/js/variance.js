@@ -1183,7 +1183,9 @@ async function profRecomputeAll(phaseKey) {
 
   // ── 4. Issued Invoices: load monthly_cumulative per phase (once, cached) ──
   if (!AppState._invoiceCumulative) AppState._invoiceCumulative = {};
-  if (!AppState._invoiceCumulative[phaseKey]) {
+  if (!AppState._invoiceCumulative[phaseKey] || Object.keys(AppState._invoiceCumulative[phaseKey]).length === 0) {
+    // Always clear cache so phase changes from Sales tab are picked up
+    AppState._salesInvoicesByPhase = null;
     // Load invoices from sales API grouped by variance tab
     try {
       if (!AppState._salesInvoicesByPhase) {
@@ -1201,8 +1203,6 @@ async function profRecomputeAll(phaseKey) {
           const errTxt = await salesRes.text();
           console.log('[INV] salesRes ERROR:', errTxt.slice(0,300));
         }
-      } else {
-        console.log('[INV] using cached _salesInvoicesByPhase keys='+JSON.stringify(Object.keys(AppState._salesInvoicesByPhase||{})));
       }
       console.log('[INV] _salesInvoicesByPhase exists='+!!AppState._salesInvoicesByPhase);
       if (AppState._salesInvoicesByPhase) {
