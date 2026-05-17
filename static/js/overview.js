@@ -1,31 +1,18 @@
-// ── Hide BOG-only tabs immediately on load (before Odoo API responds) ──
-(function initNonBogTabs() {
-  const BOG_ONLY_TABS = ['services', 'missing', 'risks', 'roadmap'];
-
-  async function applyTabVisibility() {
-    try {
-      const info = await fetch('/api/project-info').then(r => r.json());
-      const isBog = info.is_bog !== false;
-      // Cache in AppState if available
-      if (window.AppState) {
-        if (!AppState._overviewData) AppState._overviewData = {};
-        AppState._overviewData.is_bog       = isBog;
-        AppState._overviewData.project_id   = info.project_id;
-        AppState._overviewData.project_name = info.project_name;
-      }
-      BOG_ONLY_TABS.forEach(tab => {
-        const btn = document.querySelector(`.exec-tab[data-tab="${tab}"]`);
-        if (btn) btn.style.display = isBog ? '' : 'none';
+// Hide BOG tabs instantly before Odoo API responds
+(function(){
+  async function _setTabs(){
+    try{
+      const d=await fetch('/api/project-info').then(r=>r.json());
+      const bog=d.is_bog!==false;
+      if(window.AppState){if(!AppState._overviewData)AppState._overviewData={};AppState._overviewData.is_bog=bog;}
+      ['services','missing','risks','roadmap'].forEach(t=>{
+        const el=document.querySelector('.exec-tab[data-tab="'+t+'"]');
+        if(el)el.style.display=bog?'':'none';
       });
-    } catch(e) {}
+    }catch(e){}
   }
-
-  // Run as early as possible
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', applyTabVisibility);
-  } else {
-    applyTabVisibility();
-  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',_setTabs);
+  else _setTabs();
 })();
 
 /* Overview tab — Roadmap KPIs + Tasks Analysis with multi-phase + employee filter */
@@ -960,17 +947,13 @@ function renderPhaseFilters(phaseGroup, available) {
   html += `<span id="ovPhaseLabel">${phaseLabel(AppState.activePhases || [])}</span>`;
   html += '<span style="margin-left:8px; color: var(--text-muted);">▼</span>';
   html += '</button>';
-  html += '<div class="phase-menu" id="ovPhaseMenu" style="display:none;">';
-  html += '<div class="phase-menu-actions">';
-  html += '<a id="ovPhaseAll">Select all</a>';
-  html += '<a id="ovPhaseNone">Clear</a>';
-  html += '</div>';
+  html += '<div class="phase-menu" id="ovPhaseMenu" style="display:none; max-height:360px;">';
+  html += '<div class="phase-menu-actions"><a id="ovPhaseAll">Select all</a><a id="ovPhaseNone">Clear</a></div>';
   available.filter(p => p && p !== 'undefined' && p !== 'null').forEach(p => {
     const checked = (AppState.activePhases || []).includes(p);
     const label = p === 'No Phase' ? '📭 No Phase' : p;
     html += `<label class="phase-option ${checked ? 'selected' : ''}" data-phase="${encodeURIComponent(p)}">
-      <input type="checkbox" ${checked ? 'checked' : ''}>
-      <span dir="auto">${label}</span>
+      <input type="checkbox" ${checked ? 'checked' : ''}><span dir="auto">${label}</span>
     </label>`;
   });
   html += '</div></div>';
@@ -1014,11 +997,13 @@ function renderPhaseFilters(phaseGroup, available) {
   menu.querySelector('#ovPhaseAll').addEventListener('click', (e) => {
     e.stopPropagation();
     AppState.activePhases = [...available];
+    renderPhaseFilters(phaseGroup, available);
     loadTaskAnalysis(phaseGroup);
   });
   menu.querySelector('#ovPhaseNone').addEventListener('click', (e) => {
     e.stopPropagation();
     AppState.activePhases = [];
+    renderPhaseFilters(phaseGroup, available);
     loadTaskAnalysis(phaseGroup);
   });
 }
@@ -1334,6 +1319,19 @@ function renderTaskList(phaseGroup) {
 
   rootTasks.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
+  // Pagination: 10 default, 50 filtered
+  const isFiltered = !!(search || (typeFilter && typeFilter !== 'all') ||
+    (statusFilter && statusFilter !== 'all') || empFilterActive ||
+    (AppState.activePhases && AppState.activePhases.length));
+  const PAGE_SIZE = isFiltered ? 50 : 10;
+  const fKey = [search,typeFilter,statusFilter,(AppState.activeEmployees||[]).join(','),(AppState.activePhases||[]).join(',')].join('|');
+  if (AppState._lastFilterKey !== fKey) { AppState._taskPage = 0; AppState._lastFilterKey = fKey; }
+  if (!AppState._taskPage) AppState._taskPage = 0;
+  AppState._lastPhaseGroup = phaseGroup;
+  const pageEnd = (AppState._taskPage + 1) * PAGE_SIZE;
+  const shownRoots = rootTasks.slice(0, pageEnd);
+  const hasMore = rootTasks.length > pageEnd;
+
   let html = `<div class="card">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
       <h3 class="card-title" style="margin:0;">Tasks <span class="muted-text">— ${matchedIds.size} match${matchedIds.size !== 1 ? 'es' : ''}${matchedIds.size < tasks.length ? ` · ${tasks.length - matchedIds.size} parent context` : ''}</span></h3>
@@ -1341,9 +1339,15 @@ function renderTaskList(phaseGroup) {
     </div>
     <div class="task-analysis-list">`;
 
-  rootTasks.forEach(t => {
-    html += renderTaskBranch(t, 0);
-  });
+  shownRoots.forEach(t => { html += renderTaskBranch(t, 0); });
+
+  if (hasMore) {
+    html += `<div style="text-align:center;padding:16px 0;">
+      <button onclick="_ovLoadMore()" style="padding:7px 22px;border:1px solid var(--border);
+        border-radius:6px;background:var(--bg-subtle);cursor:pointer;font-size:13px;font-weight:600;color:var(--navy);">
+        Show more — ${rootTasks.length - pageEnd} remaining
+      </button></div>`;
+  }
 
   html += `</div></div>`;
   cont.innerHTML = html;
@@ -1358,6 +1362,12 @@ function renderTaskList(phaseGroup) {
     });
   });
 }
+
+window._ovLoadMore = function() {
+  if (!AppState._taskPage) AppState._taskPage = 0;
+  AppState._taskPage += 1;
+  renderTaskList(AppState._lastPhaseGroup);
+};
 
 function renderTaskCard(t, childCount, depth, isMatched) {
   const hasChildren = childCount > 0;
