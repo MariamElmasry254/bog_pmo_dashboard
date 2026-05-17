@@ -61,18 +61,25 @@ function profFillFromTasks(phaseKey) {
 /* Variance tab — mirrors variance.xlsx with sub-tabs */
 
 
-// ─── Cached effort fetch ──────────────────────────────────────────────
+// ─── Cached effort fetch — returns parsed JSON directly ──────────────
 async function fetchEffortCached(phaseKey) {
   const ckey = '_eff_' + phaseKey + '_' + (window._activeProjectId || '');
   try {
     const hit = sessionStorage.getItem(ckey);
-    if (hit) { const d=JSON.parse(hit); if(d&&d.months&&d.months.length){console.log('[cache] effort:',phaseKey);return d;} }
-  } catch(e){}
+    if (hit) {
+      const d = JSON.parse(hit);
+      if (d && d.months && d.months.length) {
+        console.log('[cache] effort:', phaseKey);
+        return d;  // return parsed object directly - NOT a Response
+      }
+    }
+  } catch(e) {}
+  // Fetch fresh and cache
   const res = await fetch('/api/effort/' + phaseKey + '/all-months');
   if (!res.ok) throw new Error('Effort API ' + res.status);
   const d = await res.json();
-  try { sessionStorage.setItem(ckey, JSON.stringify(d)); } catch(e){}
-  return d;
+  try { sessionStorage.setItem(ckey, JSON.stringify(d)); } catch(e) {}
+  return d;  // return parsed object directly
 }
 
 window.loadVariance = async function() {
@@ -81,9 +88,8 @@ window.loadVariance = async function() {
     AppState.loaded.variance = true;
     let _vBtn=document.getElementById('varianceExport');
     if(!_vBtn){
-      _vBtn=document.createElement('button');
-      _vBtn.id='varianceExport';
-      _vBtn.textContent='\u2b07 Export Excel';
+      _vBtn=document.createElement('button');_vBtn.id='varianceExport';
+      _vBtn.textContent='⬇ Export Excel';
       _vBtn.style.cssText='position:fixed;bottom:24px;right:24px;z-index:999;padding:10px 20px;background:#1B2A4E;color:white;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.3)';
       document.body.appendChild(_vBtn);
     }
@@ -857,9 +863,7 @@ async function profBuildTable(phaseKey) {
   if (!months.length) {
     wrap.innerHTML = '<div class="loading">Loading effort data…</div>';
     try {
-      const res = await fetchEffortCached(phaseKey);
-      if (!res.ok) throw new Error('Effort API ' + res.status);
-      const d = await res.json();
+      const d = await fetchEffortCached(phaseKey);
       if (d.months && d.months.length) {
         // Store months in AppState
         if (!AppState._effortMonths)     AppState._effortMonths     = {};
@@ -1115,8 +1119,7 @@ async function profRecomputeAll(phaseKey) {
 
   if (!effortMDs || !months.length) {
     try {
-      const res = await fetchEffortCached(phaseKey);
-      const d = await res.json();
+      const d = await fetchEffortCached(phaseKey);
       if (d.months?.length) {
         months = d.months;
         // Use pre-computed costs from backend (most accurate - uses real rates)
@@ -1383,11 +1386,11 @@ async function profRecomputeAll(phaseKey) {
     if(!AppState._varianceMonthData[phaseKey])AppState._varianceMonthData[phaseKey]=[];
     if(completionPct||remainingMDs||actualMDs){
       AppState._varianceMonthData[phaseKey].push({
-        month:monthKey, variancePct:expectedOverrun!==null?expectedOverrun*100:0,
-        actualMDs:actualMDs||0, completionPct:completionPct||0, remainingMDs:remainingMDs||0,
-        eacMDs:eacMDs||0, currentCostSAR:currentCostSAR||0, estAtCompletion:estAtCompletion||0,
-        cpi:cpi||0, costVarianceSAR:costVarianceSAR||0, profitAtComp:profitAtComp||0,
-        progressPct:progressPct||0, virtualInvoice:viAcc||0,
+        month:monthKey,variancePct:expectedOverrun!==null?expectedOverrun*100:0,
+        actualMDs:actualMDs||0,completionPct:completionPct||0,remainingMDs:remainingMDs||0,
+        eacMDs:eacMDs||0,currentCostSAR:currentCostSAR||0,estAtCompletion:estAtCompletion||0,
+        cpi:cpi||0,costVarianceSAR:costVarianceSAR||0,profitAtComp:profitAtComp||0,
+        progressPct:progressPct||0,virtualInvoice:viAcc||0,
       });
     }
     prevViAcc = viAcc;
@@ -1560,8 +1563,7 @@ async function loadEffortLive(phaseKey, containerId) {
   cont.innerHTML = '<div class="loading">Loading from Odoo (this may take a moment)…</div>';
 
   try {
-    const res = await fetchEffortCached(phaseKey);
-    const d = await res.json();
+    const d = await fetchEffortCached(phaseKey);
 
     if (d.error) {
       cont.innerHTML = `<div class="banner banner-warn"><strong>Error:</strong> ${d.error}</div>`;
@@ -2355,35 +2357,23 @@ async function deletePromo(id) {
 
 }
 
-// ─── PMO Variance Export ─────────────────────────────────────────────
 async function exportVariancePMO() {
   const btn=document.getElementById('varianceExport');
   const orig=btn?btn.textContent:'';
-  if(btn){btn.textContent='\u23f3 Generating...';btn.disabled=true;}
+  if(btn){btn.textContent='⏳ Generating...';btn.disabled=true;}
   try {
     const isBog=AppState._overviewData?.is_bog!==false;
     const phaseKeys=isBog?['development','consultation']:['services','support'];
-    const phases=phaseKeys.map(k=>({
-      phase:k,
-      latestData:AppState._latestProfData?.[k]||{},
-      months:AppState._varianceMonthData?.[k]||[],
-    }));
-    const body={
-      project_name:AppState._overviewData?.project_name||document.title||'Project',
-      generated:new Date().toISOString().slice(0,10),
-      phases,
-    };
-    const res=await fetch('/api/variance/export-pmo',{
-      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),
-    });
+    const phases=phaseKeys.map(k=>({phase:k,latestData:AppState._latestProfData?.[k]||{},months:AppState._varianceMonthData?.[k]||[]}));
+    const body={project_name:AppState._overviewData?.project_name||'Project',generated:new Date().toISOString().slice(0,10),phases};
+    const res=await fetch('/api/variance/export-pmo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     if(!res.ok) throw new Error('Server error '+res.status);
     const blob=await res.blob();
     const url=URL.createObjectURL(blob);
     const a=document.createElement('a');a.href=url;
     const cd=res.headers.get('Content-Disposition')||'';
     a.download=cd.match(/filename="?([^"]+)"?/)?.[1]||'variance_report.xlsx';
-    document.body.appendChild(a);a.click();document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
   } catch(e){alert('Export failed: '+e.message);}
-  finally{if(btn){btn.textContent=orig||'\u2b07 Export Excel';btn.disabled=false;}}
+  finally{if(btn){btn.textContent=orig||'⬇ Export Excel';btn.disabled=false;}}
 }
