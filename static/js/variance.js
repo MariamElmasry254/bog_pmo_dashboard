@@ -1035,6 +1035,15 @@ async function _doBuildProfTable(phaseKey, wrap, months) {
 }
 
 async function profRecomputeAll(phaseKey) {
+  // Clear effort cache to get fresh data from API
+  try {
+    const _ck = '_eff_' + phaseKey + '_' + (window._activeProjectId || '');
+    sessionStorage.removeItem(_ck);
+  } catch(_e) {}
+  // Clear AppState effort cache for this phase
+  if (AppState._effortMonthMDs) delete AppState._effortMonthMDs[phaseKey];
+  if (AppState._effortMonths)   delete AppState._effortMonths[phaseKey];
+  if (AppState._effortMonthCosts) delete AppState._effortMonthCosts[phaseKey];
   let totalRevSAR = 0, totalEstCostSAR = 0, totalEstMDs = 0;
 
   // ── 1. Revenue: DOM → AppState → DB ──
