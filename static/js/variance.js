@@ -60,34 +60,37 @@ function profFillFromTasks(phaseKey) {
 
 /* Variance tab — mirrors variance.xlsx with sub-tabs */
 
+
+// ─── Cached effort fetch ──────────────────────────────────────────────
+async function fetchEffortCached(phaseKey) {
+  const cacheKey = '_eff_' + phaseKey + '_' + (window._activeProjectId || '');
+  try {
+    const cached = sessionStorage.getItem(cacheKey);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (parsed && parsed.months && parsed.months.length) {
+        console.log('[cache] effort hit:', phaseKey);
+        return parsed;
+      }
+    }
+  } catch(e) {}
+  // Fetch fresh
+  const res = await fetch('/api/effort/' + phaseKey + '/all-months');
+  if (!res.ok) throw new Error('Effort API ' + res.status);
+  const d = await res.json();
+  try { sessionStorage.setItem(cacheKey, JSON.stringify(d)); } catch(e) {}
+  return d;
+}
+
 window.loadVariance = async function() {
+  // Store project context for cache keys
+  if (AppState._overviewData?.project_id)
+    window._activeProjectId = AppState._overviewData.project_id;
   if (!AppState.loaded.variance) {
     AppState.loaded.variance = true;
-    // Wire or create export button
-    let exportBtn = document.getElementById('varianceExport');
-    if (!exportBtn) {
-      exportBtn = document.createElement('button');
-      exportBtn.id = 'varianceExport';
-      exportBtn.innerHTML = '⬇ Export Excel';
-      exportBtn.style.cssText = [
-        'position:fixed;bottom:24px;right:24px;z-index:999',
-        'padding:10px 20px;background:#1B2A4E;color:white',
-        'border:none;border-radius:8px;font-size:13px;font-weight:600',
-        'cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.3)',
-        'display:none'  // hidden until variance tab is active
-      ].join(';');
-      document.body.appendChild(exportBtn);
-      // Show when variance tab active, hide otherwise
-      document.querySelectorAll('.exec-tab').forEach(t => {
-        t.addEventListener('click', () => {
-          exportBtn.style.display = t.dataset.tab === 'variance' ? 'block' : 'none';
-        });
-      });
-    }
-    if (exportBtn) {
-      exportBtn.style.display = 'block';
-      exportBtn.addEventListener('click', () => { exportVariancePMO(); });
-    }
+    let _vBtn=document.getElementById('varianceExport');
+    if(!_vBtn){_vBtn=document.createElement('button');_vBtn.id='varianceExport';_vBtn.textContent='⬇ Export Excel';_vBtn.style.cssText='position:fixed;bottom:24px;right:24px;z-index:999;padding:10px 20px;background:#1B2A4E;color:white;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.3)';document.body.appendChild(_vBtn);}
+    _vBtn.addEventListener('click',()=>exportVariancePMO());
     document.querySelectorAll('.sub-tab').forEach(b => {
       b.addEventListener('click', () => switchSubTab(b.dataset.subtab));
     });
@@ -856,7 +859,7 @@ async function profBuildTable(phaseKey) {
   if (!months.length) {
     wrap.innerHTML = '<div class="loading">Loading effort data…</div>';
     try {
-      const res = await fetch(`/api/effort/${phaseKey}/all-months`);
+      const res = await fetchEffortCached(phaseKey);
       if (!res.ok) throw new Error('Effort API ' + res.status);
       const d = await res.json();
       if (d.months && d.months.length) {
@@ -1114,7 +1117,7 @@ async function profRecomputeAll(phaseKey) {
 
   if (!effortMDs || !months.length) {
     try {
-      const res = await fetch(`/api/effort/${phaseKey}/all-months`);
+      const res = await fetchEffortCached(phaseKey);
       const d = await res.json();
       if (d.months?.length) {
         months = d.months;
@@ -1382,14 +1385,11 @@ async function profRecomputeAll(phaseKey) {
     if (!AppState._varianceMonthData[phaseKey]) AppState._varianceMonthData[phaseKey] = [];
     if (completionPct || remainingMDs || actualMDs) {
       AppState._varianceMonthData[phaseKey].push({
-        month: monthKey,
-        variancePct: expectedOverrun !== null ? expectedOverrun * 100 : 0,
-        actualMDs: actualMDs || 0, completionPct: completionPct || 0,
-        remainingMDs: remainingMDs || 0, eacMDs: eacMDs || 0,
-        currentCostSAR: currentCostSAR || 0, estAtCompletion: estAtCompletion || 0,
-        cpi: cpi || 0, costVarianceSAR: costVarianceSAR || 0,
-        profitAtComp: profitAtComp || 0,
-        progressPct: progressPct || 0, virtualInvoice: viAcc || 0,
+        month: monthKey, variancePct: expectedOverrun!==null?expectedOverrun*100:0,
+        actualMDs:actualMDs||0, completionPct:completionPct||0, remainingMDs:remainingMDs||0,
+        eacMDs:eacMDs||0, currentCostSAR:currentCostSAR||0, estAtCompletion:estAtCompletion||0,
+        cpi:cpi||0, costVarianceSAR:costVarianceSAR||0, profitAtComp:profitAtComp||0,
+        progressPct:progressPct||0, virtualInvoice:viAcc||0,
       });
     }
     prevViAcc = viAcc;
@@ -1562,7 +1562,7 @@ async function loadEffortLive(phaseKey, containerId) {
   cont.innerHTML = '<div class="loading">Loading from Odoo (this may take a moment)…</div>';
 
   try {
-    const res = await fetch(`/api/effort/${phaseKey}/all-months`);
+    const res = await fetchEffortCached(phaseKey);
     const d = await res.json();
 
     if (d.error) {
@@ -2355,38 +2355,4 @@ async function deletePromo(id) {
   renderPromotionsSubTab();
 }
 
-}
-
-// ─── PMO Variance Export ──────────────────────────────────────────────
-async function exportVariancePMO() {
-  const btn = document.getElementById('varianceExport');
-  const orig = btn ? btn.textContent : '';
-  if (btn) { btn.textContent = '⏳ Generating...'; btn.disabled = true; }
-  try {
-    const isBog = AppState._overviewData?.is_bog !== false;
-    const phaseKeys = isBog ? ['development','consultation'] : ['services','support'];
-    const phases = phaseKeys.map(k => ({
-      phase: k,
-      latestData: AppState._latestProfData?.[k] || {},
-      months: AppState._varianceMonthData?.[k] || [],
-    }));
-    const body = {
-      project_name: AppState._overviewData?.project_name || 'Project',
-      generated: new Date().toISOString().slice(0,10),
-      phases,
-    };
-    const res = await fetch('/api/variance/export-pmo', {
-      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error('Server error ' + res.status);
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    const cd = res.headers.get('Content-Disposition') || '';
-    a.download = cd.match(/filename="?([^"]+)"?/)?.[1] || 'variance_report.xlsx';
-    document.body.appendChild(a); a.click();
-    document.body.removeChild(a); URL.revokeObjectURL(url);
-  } catch(e) { alert('Export failed: ' + e.message); }
-  finally { if (btn) { btn.textContent = orig || '⬇ Export Excel'; btn.disabled = false; } }
 }
