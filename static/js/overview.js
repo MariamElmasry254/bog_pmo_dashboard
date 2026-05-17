@@ -1,5 +1,23 @@
 /* Overview tab — Roadmap KPIs + Tasks Analysis with multi-phase + employee filter */
 
+
+// ─── Cached effort fetch (overview) ──────────────────────────────────
+async function _fetchEffortCached(phase) {
+  const key = '_eff_' + phase + '_' + (window._activeProjectId || AppState._overviewData?.project_id || '');
+  try {
+    const cached = sessionStorage.getItem(key);
+    if (cached) {
+      const d = JSON.parse(cached);
+      if (d && d.months && d.months.length) return d;
+    }
+  } catch(e) {}
+  const res = await fetch('/api/effort/' + phase + '/all-months');
+  if (!res.ok) throw new Error('Effort API ' + res.status);
+  const d = await res.json();
+  try { sessionStorage.setItem(key, JSON.stringify(d)); } catch(e) {}
+  return d;
+}
+
 window.loadOverview = async function() {
   if (!AppState.loaded.overview) {
     AppState.loaded.overview = true;
@@ -318,8 +336,6 @@ async function loadOverviewKPIs() {
     window._overviewUpdateProfKPIs = function(phaseKey) {
       const d = AppState._latestProfData?.[phaseKey];
       if (!d) return;
-      // Refresh cost KPIs with real EAC from variance
-      _loadPhaseCostKPIs();
       const fmtN = n => n ? new Intl.NumberFormat('en-US',{maximumFractionDigits:1}).format(n) : '—';
       const setOv = (id, val) => { const el=document.getElementById(id); if(el) el.textContent=val; };
       // services/consultation → Con prefix, support/development → Dev prefix
@@ -583,7 +599,7 @@ async function _loadTeamKPI_unused(phase) {
     if (!AppState._effortMonths) AppState._effortMonths = {};
     let employees = AppState._effortEmployees?.[phase];
     if (!employees) {
-      const res = await fetch(`/api/effort/${phase}/all-months`);
+      const res = await _fetchEffortCached(phase);
       const d   = await res.json();
       if (!AppState._effortEmployees) AppState._effortEmployees = {};
       AppState._effortEmployees[phase] = d.employees || [];
@@ -655,7 +671,7 @@ async function _loadTeamCount() {
     for (const phase of phases) {
       let emps = AppState._effortEmployees?.[phase];
       if (!emps) {
-        const res = await fetch(`/api/effort/${phase}/all-months`);
+        const res = await _fetchEffortCached(phase);
         const d = await res.json();
         if (!AppState._effortEmployees) AppState._effortEmployees = {};
         AppState._effortEmployees[phase] = d.employees || [];
@@ -682,38 +698,13 @@ async function _loadTeamCount() {
 
 async function _loadPhaseCostKPIs() {
   const fSAR = v => fmt.money(Math.round(v));
-  const set  = (id, v) => { const el=document.getElementById(id); if(el) el.textContent=v||'—'; };
+  const set   = (id, v) => { const el=document.getElementById(id); if(el) el.textContent=v||'—'; };
 
-  const isBogCost = AppState._overviewData?.is_bog !== false;
-  const phases    = isBogCost ? ['consultation','development'] : ['services','support'];
-
-  // Get phase progress (month_key, %, remaining) from variance plan overrides
-  let phaseProgress = {};
-  try {
-    const pr = await fetch('/api/overview/phase-progress');
-    const pd = await pr.json();
-    phaseProgress = pd.phases || {};
-    AppState._phaseProgressData = pd;
-  } catch(e) {}
-
-  // Latest month = max month_key across phases (from variance)
-  let latestMonth = '';
-  for (const ph of phases) {
-    const mk = phaseProgress[ph]?.month_key || '';
-    if (mk && mk > latestMonth) latestMonth = mk;
-  }
-
-  // Weighted % completion
-  let totalComp = 0, compCount = 0;
-  for (const ph of phases) {
-    const pct = phaseProgress[ph]?.completion || 0;
-    if (pct > 0) { totalComp += pct; compCount++; }
-  }
-  const avgComp = compCount > 0 ? Math.round(totalComp / compCount) : 0;
-
-  // Cost: cumulate effort up to variance month
   let totalCostSAR = 0;
   let totalEACSAR  = 0;
+
+  const isBogCost = AppState._overviewData?.is_bog !== false;
+  const phases = isBogCost ? ['consultation', 'development'] : ['services', 'support'];
 
   for (const phase of phases) {
     try {
@@ -722,7 +713,7 @@ async function _loadPhaseCostKPIs() {
       let mMDs   = AppState._effortMonthMDs?.[phase]   || {};
 
       if (!months.length) {
-        const res = await fetch(`/api/effort/${phase}/all-months`);
+        const res = await _fetchEffortCached(phase);
         const d   = await res.json();
         months = d.months || [];
         mCosts = d.month_cost_usd || {};
@@ -735,19 +726,24 @@ async function _loadPhaseCostKPIs() {
         AppState._effortMonthMDs[phase]   = mMDs;
       }
 
-      // Current cost = effort up to variance month
-      const cutoff = phaseProgress[phase]?.month_key || latestMonth;
       let cumCostUSD = 0;
-      months.forEach(m => { if (!cutoff || m.key <= cutoff) cumCostUSD += mCosts[m.key] || 0; });
+      months.forEach(m => { cumCostUSD += mCosts[m.key] || 0; });
       const cumCostSAR = cumCostUSD * 3.75;
       totalCostSAR += cumCostSAR;
 
-      // EAC SAR = from variance AppState (estAtCompletion = currentCost + costToComplete)
-      const profData   = AppState._latestProfData?.[phase];
-      const eacCostSAR = profData?.eacCostSAR || cumCostSAR;
+      const totalMDs = Object.values(mMDs).reduce((s,v)=>s+v, 0);
+      const avgCPMD  = totalMDs > 0 ? cumCostSAR / totalMDs : 0;
+      // EAC from profitability data if available
+      const profData = AppState._latestProfData?.[phase];
+      const eacCostSAR = profData?.eacMDs ? cumCostSAR + profData.eacMDs * avgCPMD : cumCostSAR;
       totalEACSAR += eacCostSAR;
 
-      let pre = phase === 'support' ? 'Sup' : phase === 'development' ? 'Dev' : 'Con';
+      // Map phase to element prefix: services→Con, support→Sup, development→Dev, consultation→Con
+      let pre = 'Con';
+      if (phase === 'support') pre = 'Sup';
+      else if (phase === 'development') pre = 'Dev';
+      else if (phase === 'consultation') pre = 'Con';
+      else if (phase === 'services') pre = 'Con';
       set(`kpi${pre}Cost`, fSAR(cumCostSAR));
       set(`kpi${pre}EAC`,  fSAR(eacCostSAR));
     } catch(e) {
@@ -760,12 +756,6 @@ async function _loadPhaseCostKPIs() {
   if (tcEl) tcEl.textContent = totalCostSAR ? fSAR(totalCostSAR) : '—';
   const teEl = document.getElementById('kpiTotalEAC');
   if (teEl) teEl.textContent = totalEACSAR  ? fSAR(totalEACSAR)  : '—';
-
-  // "as of" + "% complete" from same variance month
-  const asOfText = latestMonth ? `as of ${latestMonth}` : '';
-  const pctText  = avgComp > 0 ? `${avgComp}% complete` : '';
-  ['kpiCostAsOf','kpiEACAsOf'].forEach(id => { const el=document.getElementById(id); if(el) el.textContent=asOfText; });
-  ['kpiCostPct', 'kpiEACPct' ].forEach(id => { const el=document.getElementById(id); if(el) el.textContent=pctText; });
 }
 
 
@@ -819,7 +809,7 @@ async function _loadModalTeamTab(phase) {
   try {
     let employees = AppState._effortEmployees?.[phase];
     if (!employees) {
-      const res = await fetch(`/api/effort/${phase}/all-months`);
+      const res = await _fetchEffortCached(phase);
       const d   = await res.json();
       if (!AppState._effortEmployees) AppState._effortEmployees = {};
       AppState._effortEmployees[phase] = d.employees || [];
