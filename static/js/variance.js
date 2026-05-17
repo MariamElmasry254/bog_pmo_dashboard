@@ -462,7 +462,7 @@ function renderBudget(data, phaseKey) {
 }
 
 // ── Budget Changes state ──
-const _budgetChanges = {};  // { phaseKey: [{id, reason, plan_id, delta_cost, delta_rev}] }
+if (typeof _budgetChanges === 'undefined') var _budgetChanges = {};  // { phaseKey: [...] }
 
 async function loadBudgetChanges(phaseKey) {
   // Load changes
@@ -1783,9 +1783,9 @@ function renderEstimated(data, phaseKey) {
   </div>`;
 }
 
-let _estPositions = [];
-let _estRows = [];
-let _estPhase = '';
+if (typeof _estPositions === 'undefined') var _estPositions = [];
+if (typeof _estRows === 'undefined') var _estRows = [];
+if (typeof _estPhase === 'undefined') var _estPhase = '';
 
 // Format number with exact 2 decimal places + thousand separators, no rounding
 function fmtExact(n) {
@@ -2023,7 +2023,7 @@ async function estSave() {
   } catch (e) { console.warn('estSave failed:', e); }
 }
 
-let _estSaveTimer = null;
+if (typeof _estSaveTimer === 'undefined') var _estSaveTimer = null;
 function estScheduleSave() {
   clearTimeout(_estSaveTimer);
   _estSaveTimer = setTimeout(async () => {
