@@ -1,19 +1,36 @@
-// Instantly correct nav tabs before Odoo API (reads session only, fast)
+// Keep BOG tabs hidden — re-apply whenever DOM changes (handles index.html JS race)
 (function(){
-  async function _fixTabs(){
-    try{
-      const d = await fetch('/api/project-info').then(r=>r.json());
-      const bog = d.is_bog !== false;
-      if(window.AppState){ if(!AppState._overviewData) AppState._overviewData={}; AppState._overviewData.is_bog=bog; }
-      ['services','missing','risks','roadmap'].forEach(function(t){
-        var el = document.querySelector('.exec-tab[data-tab="'+t+'"]');
-        if(el) el.style.display = bog ? '' : 'none';
-      });
-      console.log('[tabs] is_bog='+bog+' → tabs fixed instantly');
-    }catch(e){ console.warn('[tabs] error',e); }
+  var _isBog = null; // null = not fetched yet
+
+  function _applyTabs(bog) {
+    ['services','missing','risks','roadmap'].forEach(function(t){
+      var el = document.querySelector('.exec-tab[data-tab="'+t+'"]');
+      if(el) el.style.display = bog ? '' : 'none';
+    });
   }
-  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', _fixTabs);
-  else _fixTabs();
+
+  async function _fetchAndApply() {
+    try {
+      var d = await fetch('/api/project-info').then(function(r){return r.json();});
+      _isBog = d.is_bog !== false;
+      if(window.AppState){ if(!AppState._overviewData) AppState._overviewData={}; AppState._overviewData.is_bog=_isBog; }
+      _applyTabs(_isBog);
+    } catch(e) {}
+  }
+
+  // Fetch immediately
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', _fetchAndApply);
+  else _fetchAndApply();
+
+  // Also watch for DOM changes that might re-show tabs
+  var obs = new MutationObserver(function(){
+    if(_isBog !== null && !_isBog) _applyTabs(false);
+  });
+  function startObs() {
+    obs.observe(document.body||document.documentElement, {childList:true, subtree:true, attributes:true, attributeFilter:['style']});
+  }
+  if(document.body) startObs();
+  else document.addEventListener('DOMContentLoaded', startObs);
 })();
 
 /* Overview tab — Roadmap KPIs + Tasks Analysis with multi-phase + employee filter */
@@ -939,20 +956,28 @@ function renderPhaseFilters(phaseGroup, available) {
   const cont = document.getElementById('ovPhaseFilters');
   if (!cont) return;
   if (!available.length) { cont.innerHTML = ''; return; }
-
   const total = available.length;
+
+  // Force container to not stretch (min-width:280px in HTML makes dropdown expand)
+  cont.style.position = 'relative';
+  cont.style.display  = 'inline-flex';
+  cont.style.flexDirection = 'column';
+  cont.style.minWidth = '';
+
   let html = '<label class="filter-label">PHASES (multi-select)</label>';
-  html += '<div class="phase-dropdown" id="ovPhaseDropdown">';
-  html += '<button type="button" class="phase-toggle" id="ovPhaseToggle">';
+  // Wrapper with position:relative so menu positions correctly
+  html += '<div style="position:relative;display:inline-block;" id="ovPhaseDropdown">';
+  html += '<button type="button" class="phase-toggle" id="ovPhaseToggle" style="min-width:200px;max-width:320px;">';
   html += `<span id="ovPhaseLabel">${phaseLabel(AppState.activePhases || [], total)}</span>`;
-  html += '<span style="margin-left:8px; color: var(--text-muted);">▼</span>';
+  html += '<span style="margin-left:8px;color:var(--text-muted);">▼</span>';
   html += '</button>';
-  html += '<div class="phase-menu" id="ovPhaseMenu" style="display:none;">';
+  // Menu: position absolute so it drops down correctly
+  html += '<div id="ovPhaseMenu" style="display:none;position:absolute;top:100%;left:0;z-index:200;min-width:280px;max-width:420px;max-height:360px;overflow-y:auto;background:var(--bg-card,white);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);margin-top:2px;">';
   html += '<div class="phase-menu-actions"><a id="ovPhaseAll">Select all</a><a id="ovPhaseNone">Clear</a></div>';
   available.filter(p => p && p !== 'undefined' && p !== 'null').forEach(p => {
     const checked = (AppState.activePhases || []).includes(p);
     const label = p === 'No Phase' ? '📭 No Phase' : p;
-    html += `<label class="phase-option ${checked ? 'selected' : ''}" data-phase="${encodeURIComponent(p)}">
+    html += `<label class="phase-option ${checked ? 'selected' : ''}" data-phase="${encodeURIComponent(p)}" style="display:flex;align-items:center;gap:8px;padding:6px 12px;cursor:pointer;white-space:nowrap;">
       <input type="checkbox" ${checked ? 'checked' : ''}><span dir="auto">${label}</span>
     </label>`;
   });
@@ -963,15 +988,16 @@ function renderPhaseFilters(phaseGroup, available) {
   const menu   = document.getElementById('ovPhaseMenu');
   toggle.addEventListener('click', (e) => {
     e.stopPropagation();
-    menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
-    toggle.classList.toggle('open', menu.style.display === 'block');
+    const open = menu.style.display === 'none';
+    menu.style.display = open ? 'block' : 'none';
+    toggle.classList.toggle('open', open);
   });
   document.addEventListener('click', (e) => {
     if (!document.getElementById('ovPhaseDropdown')?.contains(e.target)) {
       menu.style.display = 'none';
       toggle.classList.remove('open');
     }
-  });
+  }, { passive: true });
   menu.querySelectorAll('.phase-option').forEach(opt => {
     opt.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1315,49 +1341,30 @@ function renderTaskList(phaseGroup) {
 
   rootTasks.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
-  // Pagination: 10 at a time, reset on filter change, can collapse back
-  const fKey = [search, typeFilter, statusFilter,
-    (AppState.activeEmployees||[]).join(','),
-    (AppState.activePhases||[]).join(',')].join('|');
-  if (AppState._taskFilterKey !== fKey) {
-    AppState._taskFilterKey = fKey;
-    AppState._taskPage = 0;
-  }
+  // Pagination 10+10
+  const fKey = [search,typeFilter,statusFilter,(AppState.activeEmployees||[]).join(','),(AppState.activePhases||[]).join(',')].join('|');
+  if (AppState._taskFilterKey !== fKey) { AppState._taskFilterKey = fKey; AppState._taskPage = 0; }
   if (!AppState._taskPage) AppState._taskPage = 0;
   AppState._lastPhaseGroup = phaseGroup;
-
-  const PAGE     = 10;
-  const showN    = (AppState._taskPage + 1) * PAGE;
-  const shown    = rootTasks.slice(0, showN);
-  const remaining = Math.max(0, rootTasks.length - showN);
-  const canCollapse = AppState._taskPage > 0;
+  const showN = (AppState._taskPage + 1) * 10;
+  const shown = rootTasks.slice(0, showN);
+  const rem   = Math.max(0, rootTasks.length - showN);
 
   let html = `<div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-      <h3 class="card-title" style="margin:0;">Tasks
-        <span class="muted-text">— ${matchedIds.size} match${matchedIds.size!==1?'es':''}${matchedIds.size<tasks.length?` · ${tasks.length-matchedIds.size} parent context`:''}</span>
-      </h3>
+      <h3 class="card-title" style="margin:0;">Tasks <span class="muted-text">— ${matchedIds.size} match${matchedIds.size!==1?'es':''}${matchedIds.size<tasks.length?` · ${tasks.length-matchedIds.size} parent context`:''}</span></h3>
       <span class="muted-text" style="font-size:11px;">Click parent to expand · Live from Odoo</span>
     </div>
     <div class="task-analysis-list">`;
 
   shown.forEach(t => { html += renderTaskBranch(t, 0); });
 
-  // Show more / collapse buttons
-  if (remaining > 0 || canCollapse) {
+  if (rem > 0 || AppState._taskPage > 0) {
     html += `<div style="display:flex;gap:8px;justify-content:center;padding:14px 0 4px;">`;
-    if (remaining > 0) {
-      html += `<button onclick="_ovLoadMore()" style="padding:6px 20px;border:1px solid var(--border);
-        border-radius:6px;background:var(--bg-subtle);cursor:pointer;font-size:13px;font-weight:600;color:var(--navy);">
-        Show 10 more <span style="color:var(--muted);font-weight:400;font-size:12px;">(${remaining} remaining)</span>
-      </button>`;
-    }
-    if (canCollapse) {
-      html += `<button onclick="_ovCollapse()" style="padding:6px 16px;border:1px solid var(--border);
-        border-radius:6px;background:transparent;cursor:pointer;font-size:12px;color:var(--muted);">
-        ↑ Collapse to 10
-      </button>`;
-    }
+    if (rem > 0)
+      html += `<button onclick="_ovLoadMore()" style="padding:6px 20px;border:1px solid var(--border);border-radius:6px;background:var(--bg-subtle);cursor:pointer;font-size:13px;font-weight:600;color:var(--navy);">Show 10 more <span style="color:var(--muted);font-size:12px;">(${rem} remaining)</span></button>`;
+    if (AppState._taskPage > 0)
+      html += `<button onclick="_ovCollapse()" style="padding:6px 16px;border:1px solid var(--border);border-radius:6px;background:transparent;cursor:pointer;font-size:12px;color:var(--muted);">↑ Collapse to 10</button>`;
     html += `</div>`;
   }
 
@@ -1374,17 +1381,8 @@ function renderTaskList(phaseGroup) {
     });
   });
 }
-
-window._ovLoadMore = function() {
-  if (!AppState._taskPage) AppState._taskPage = 0;
-  AppState._taskPage += 1;
-  renderTaskList(AppState._lastPhaseGroup);
-};
-
-window._ovCollapse = function() {
-  AppState._taskPage = 0;
-  renderTaskList(AppState._lastPhaseGroup);
-};
+window._ovLoadMore  = () => { AppState._taskPage = (AppState._taskPage||0)+1; renderTaskList(AppState._lastPhaseGroup); };
+window._ovCollapse  = () => { AppState._taskPage = 0; renderTaskList(AppState._lastPhaseGroup); };
 
 function renderTaskCard(t, childCount, depth, isMatched) {
   const hasChildren = childCount > 0;
