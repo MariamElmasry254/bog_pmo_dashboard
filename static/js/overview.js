@@ -1,13 +1,3 @@
-(function(){
-  var _b=null;
-  function _a(b){['services','missing','risks','roadmap'].forEach(function(t){var e=document.querySelector('.exec-tab[data-tab="'+t+'"]');if(e)e.style.display=b?'':'none';});}
-  async function _f(){try{var d=await fetch('/api/project-info').then(function(r){return r.json();});_b=d.is_bog!==false;if(window.AppState){if(!AppState._overviewData)AppState._overviewData={};AppState._overviewData.is_bog=_b;}_a(_b);}catch(e){}}
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',_f);else _f();
-  var o=new MutationObserver(function(){if(_b===false)_a(false);});
-  function s(){o.observe(document.body||document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['style']});}
-  if(document.body)s();else document.addEventListener('DOMContentLoaded',s);
-})();
-
 /* Overview tab — Roadmap KPIs + Tasks Analysis with multi-phase + employee filter */
 
 window.loadOverview = async function() {
@@ -540,6 +530,7 @@ async function _loadPhaseProgress() {
     const res = await fetch('/api/overview/phase-progress');
     if (!res.ok) return;
     const d = await res.json();
+    AppState._phaseProgressData = d;  // cache for cost KPIs
     const fmtN = n => n ? new Intl.NumberFormat('en-US',{maximumFractionDigits:1}).format(n) : '—';
     const setEl = (id, val) => { const el=document.getElementById(id); if(el) el.textContent=val; };
 
@@ -694,6 +685,9 @@ async function _loadPhaseCostKPIs() {
 
   let totalCostSAR = 0;
   let totalEACSAR  = 0;
+  let latestMonth  = '';      // track latest month with data
+  let totalMDsAll  = 0;
+  let totalCompAll = 0;       // weighted completion
 
   const isBogCost = AppState._overviewData?.is_bog !== false;
   const phases = isBogCost ? ['consultation', 'development'] : ['services', 'support'];
@@ -718,19 +712,33 @@ async function _loadPhaseCostKPIs() {
         AppState._effortMonthMDs[phase]   = mMDs;
       }
 
+      // Find latest month with cost data
+      for (let i = months.length - 1; i >= 0; i--) {
+        if ((mCosts[months[i].key] || 0) > 0) {
+          if (!latestMonth || months[i].key > latestMonth) latestMonth = months[i].key;
+          break;
+        }
+      }
+
       let cumCostUSD = 0;
       months.forEach(m => { cumCostUSD += mCosts[m.key] || 0; });
       const cumCostSAR = cumCostUSD * 3.75;
       totalCostSAR += cumCostSAR;
 
       const totalMDs = Object.values(mMDs).reduce((s,v)=>s+v, 0);
+      totalMDsAll   += totalMDs;
       const avgCPMD  = totalMDs > 0 ? cumCostSAR / totalMDs : 0;
+
       // EAC from profitability data if available
       const profData = AppState._latestProfData?.[phase];
       const eacCostSAR = profData?.eacMDs ? cumCostSAR + profData.eacMDs * avgCPMD : cumCostSAR;
       totalEACSAR += eacCostSAR;
 
-      // Map phase to element prefix: services→Con, support→Sup, development→Dev, consultation→Con
+      // Weighted completion contribution
+      if (profData?.completionPct && totalMDs > 0) {
+        totalCompAll += profData.completionPct * totalMDs;
+      }
+
       let pre = 'Con';
       if (phase === 'support') pre = 'Sup';
       else if (phase === 'development') pre = 'Dev';
@@ -748,6 +756,28 @@ async function _loadPhaseCostKPIs() {
   if (tcEl) tcEl.textContent = totalCostSAR ? fSAR(totalCostSAR) : '—';
   const teEl = document.getElementById('kpiTotalEAC');
   if (teEl) teEl.textContent = totalEACSAR  ? fSAR(totalEACSAR)  : '—';
+
+  // "as of YYYY-MM" footer under both cost cards
+  const asOfText = latestMonth ? `as of ${latestMonth}` : '';
+  ['kpiCostAsOf', 'kpiEACAsOf'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = asOfText;
+  });
+
+  // % complete under cost cards (from phase progress if available)
+  const phaseData = AppState._phaseProgressData;
+  if (phaseData) {
+    let totalComp = 0, totalRem = 0, count = 0;
+    for (const [ph, d] of Object.entries(phaseData.phases || {})) {
+      if (d.completion > 0) { totalComp += d.completion; count++; }
+      if (d.remaining  > 0) totalRem += d.remaining;
+    }
+    const avgComp = count > 0 ? Math.round(totalComp / count) : 0;
+    ['kpiCostPct', 'kpiEACPct'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = avgComp > 0 ? `${avgComp}% complete` : '';
+    });
+  }
 }
 
 
@@ -930,34 +960,35 @@ async function loadTaskAnalysis(phaseGroup) {
 function renderPhaseFilters(phaseGroup, available) {
   const cont = document.getElementById('ovPhaseFilters');
   if (!cont) return;
-  if (!available.length) { cont.innerHTML = ''; return; }
-  const total  = available.length;
-  const active = AppState.activePhases || [];
-  const lbl    = active.length === 0 || active.length === total
-    ? `All phases (${total})`
-    : active.length === 1 ? active[0]
-    : `${active.length} phases selected`;
-
+  if (!available.length) {
+    cont.innerHTML = '';
+    return;
+  }
   let html = '<label class="filter-label">PHASES (multi-select)</label>';
   html += '<div class="phase-dropdown" id="ovPhaseDropdown">';
   html += '<button type="button" class="phase-toggle" id="ovPhaseToggle">';
-  html += `<span id="ovPhaseLabel">${lbl}</span>`;
-  html += '<span style="margin-left:8px;color:var(--text-muted);">▼</span>';
+  html += `<span id="ovPhaseLabel">${phaseLabel(AppState.activePhases || [])}</span>`;
+  html += '<span style="margin-left:8px; color: var(--text-muted);">▼</span>';
   html += '</button>';
-  html += '<div class="phase-menu" id="ovPhaseMenu" style="display:none;max-height:360px;">';
-  html += '<div class="phase-menu-actions"><a id="ovPhaseAll">Select all</a><a id="ovPhaseNone">Clear</a></div>';
+  html += '<div class="phase-menu" id="ovPhaseMenu" style="display:none;">';
+  html += '<div class="phase-menu-actions">';
+  html += '<a id="ovPhaseAll">Select all</a>';
+  html += '<a id="ovPhaseNone">Clear</a>';
+  html += '</div>';
   available.filter(p => p && p !== 'undefined' && p !== 'null').forEach(p => {
-    const checked = active.includes(p);
-    const label   = p === 'No Phase' ? '📭 No Phase' : p;
+    const checked = (AppState.activePhases || []).includes(p);
+    const label = p === 'No Phase' ? '📭 No Phase' : p;
     html += `<label class="phase-option ${checked ? 'selected' : ''}" data-phase="${encodeURIComponent(p)}">
-      <input type="checkbox" ${checked ? 'checked' : ''}><span dir="auto">${label}</span>
+      <input type="checkbox" ${checked ? 'checked' : ''}>
+      <span dir="auto">${label}</span>
     </label>`;
   });
   html += '</div></div>';
   cont.innerHTML = html;
 
+  // Wire dropdown toggle
   const toggle = document.getElementById('ovPhaseToggle');
-  const menu   = document.getElementById('ovPhaseMenu');
+  const menu = document.getElementById('ovPhaseMenu');
   toggle.addEventListener('click', (e) => {
     e.stopPropagation();
     menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
@@ -969,6 +1000,8 @@ function renderPhaseFilters(phaseGroup, available) {
       toggle.classList.remove('open');
     }
   });
+
+  // Wire checkboxes
   menu.querySelectorAll('.phase-option').forEach(opt => {
     opt.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -983,33 +1016,28 @@ function renderPhaseFilters(phaseGroup, available) {
         AppState.activePhases = AppState.activePhases.filter(p => p !== phase);
         opt.classList.remove('selected');
       }
-      document.getElementById('ovPhaseLabel').textContent =
-        AppState.activePhases.length === 0 || AppState.activePhases.length === total
-          ? `All phases (${total})`
-          : AppState.activePhases.length === 1 ? AppState.activePhases[0]
-          : `${AppState.activePhases.length} phases selected`;
+      document.getElementById('ovPhaseLabel').textContent = phaseLabel(AppState.activePhases);
+      // Reload data with new filter
       loadTaskAnalysis(phaseGroup);
     });
   });
-  document.getElementById('ovPhaseAll').addEventListener('click', (e) => {
+  menu.querySelector('#ovPhaseAll').addEventListener('click', (e) => {
     e.stopPropagation();
     AppState.activePhases = [...available];
-    renderPhaseFilters(phaseGroup, available);
     loadTaskAnalysis(phaseGroup);
   });
-  document.getElementById('ovPhaseNone').addEventListener('click', (e) => {
+  menu.querySelector('#ovPhaseNone').addEventListener('click', (e) => {
     e.stopPropagation();
     AppState.activePhases = [];
-    renderPhaseFilters(phaseGroup, available);
     loadTaskAnalysis(phaseGroup);
   });
 }
 
-function phaseLabel(phases, total) {
-  const t = total || (AppState.ovAnalysisData?.phases_available || []).length;
-  if (!phases || phases.length === 0) return `All phases (${t})`;
-  if (phases.length === t) return `All phases (${t})`;
+function phaseLabel(phases) {
+  const total = (AppState.ovAnalysisData?.phases_available || []).length;
+  if (!phases || phases.length === 0) return 'No phase selected';
   if (phases.length === 1) return phases[0];
+  if (phases.length === total) return `All phases (${total})`;
   return `${phases.length} phases selected`;
 }
 
@@ -1315,19 +1343,18 @@ function renderTaskList(phaseGroup) {
   }
 
   rootTasks.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-  const fKey=[search,typeFilter,statusFilter,(AppState.activeEmployees||[]).join(','),(AppState.activePhases||[]).join(',')].join('|');
-  if(AppState._taskFilterKey!==fKey){AppState._taskFilterKey=fKey;AppState._taskPage=0;}
-  if(!AppState._taskPage)AppState._taskPage=0;
-  AppState._lastPhaseGroup=phaseGroup;
-  const showN=(AppState._taskPage+1)*10, shown=rootTasks.slice(0,showN), rem=Math.max(0,rootTasks.length-showN);
-  let html = `<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;"><h3 class="card-title" style="margin:0;">Tasks <span class="muted-text">— ${matchedIds.size} match${matchedIds.size!==1?'es':''}${matchedIds.size<tasks.length?` · ${tasks.length-matchedIds.size} parent context`:''}</span></h3><span class="muted-text" style="font-size:11px;">Click parent to expand · Live from Odoo</span></div><div class="task-analysis-list">`;
-  shown.forEach(t=>{html+=renderTaskBranch(t,0);});
-  if(rem>0||AppState._taskPage>0){
-    html+=`<div style="display:flex;gap:8px;justify-content:center;padding:14px 0;">`;
-    if(rem>0)html+=`<button onclick="_ovLoadMore()" style="padding:6px 20px;border:1px solid var(--border);border-radius:6px;background:var(--bg-subtle);cursor:pointer;font-size:13px;font-weight:600;color:var(--navy);">Show 10 more <span style="color:var(--muted);font-size:12px;">(${rem} remaining)</span></button>`;
-    if(AppState._taskPage>0)html+=`<button onclick="_ovCollapse()" style="padding:6px 16px;border:1px solid var(--border);border-radius:6px;background:transparent;cursor:pointer;font-size:12px;color:var(--muted);">↑ Collapse to 10</button>`;
-    html+=`</div>`;
-  }
+
+  let html = `<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+      <h3 class="card-title" style="margin:0;">Tasks <span class="muted-text">— ${matchedIds.size} match${matchedIds.size !== 1 ? 'es' : ''}${matchedIds.size < tasks.length ? ` · ${tasks.length - matchedIds.size} parent context` : ''}</span></h3>
+      <span class="muted-text" style="font-size: 11px;">Click parent to expand · Live from Odoo</span>
+    </div>
+    <div class="task-analysis-list">`;
+
+  rootTasks.forEach(t => {
+    html += renderTaskBranch(t, 0);
+  });
+
   html += `</div></div>`;
   cont.innerHTML = html;
 
@@ -1341,8 +1368,7 @@ function renderTaskList(phaseGroup) {
     });
   });
 }
-window._ovLoadMore=()=>{AppState._taskPage=(AppState._taskPage||0)+1;renderTaskList(AppState._lastPhaseGroup);};
-window._ovCollapse=()=>{AppState._taskPage=0;renderTaskList(AppState._lastPhaseGroup);};
+
 function renderTaskCard(t, childCount, depth, isMatched) {
   const hasChildren = childCount > 0;
   const stageLower = (t.stage || '').toLowerCase().trim();
