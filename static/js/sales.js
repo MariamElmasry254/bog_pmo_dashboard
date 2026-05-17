@@ -33,15 +33,17 @@ window.loadSalesOrders = async function() {
     if (mapRes.ok) {
       const mapData = await mapRes.json();
       const soMap = mapData.plan_overrides?.so_line_map || {};
-      for (const [rawKey, val] of Object.entries(soMap)) {
-        // Saved as key='12345.var_tab', value='support'
-        if (rawKey.endsWith('.var_tab')) {
-          const lineId = rawKey.slice(0, -'.var_tab'.length);
-          if (typeof val === 'string' && val) window.AppState._soLineVarMap[lineId] = val;
-        } else if (val && typeof val === 'object' && val.var_tab) {
-          window.AppState._soLineVarMap[rawKey] = val.var_tab;
-        } else if (typeof val === 'string' && val) {
-          window.AppState._soLineVarMap[rawKey] = val;
+      for (const [key, val] of Object.entries(soMap)) {
+        // New format: key='12345', value='support'
+        if (typeof val === 'string' && val && !key.endsWith('.var_tab')) {
+          window.AppState._soLineVarMap[key] = val;
+        }
+        // Old format fallback: key='12345.var_tab', value='support'
+        else if (key.endsWith('.var_tab') && typeof val === 'string' && val) {
+          window.AppState._soLineVarMap[key.slice(0, -'.var_tab'.length)] = val;
+        }
+        else if (val && typeof val === 'object' && val.var_tab) {
+          window.AppState._soLineVarMap[key] = val.var_tab;
         }
       }
     }
