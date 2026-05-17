@@ -114,7 +114,7 @@ tr:hover td{background:#FAFAFA;}
       ⚙️ Phase Config
     </button>
     <button class="tab-btn" id="tabBtnUsers" onclick="switchTab('users')" style="display:none;">
-      👥 Users
+      Users
     </button>
   </div>
 
@@ -376,7 +376,7 @@ function switchTab(tab) {
   if (tab === 'travel') loadTravel();
   else if (tab === 'promotions') loadPromos();
   else if (tab === 'phaseconfig') loadPhaseConfig();
-  else if (tab === 'users') initUsersTab();
+  else if (tab === 'users') window.initUsersTab && window.initUsersTab();
 }
 
 function toggleForm(id) {
@@ -1497,55 +1497,41 @@ loadTravel();
 
 <div id="tab-users" class="tab-panel">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-    <h3 style="margin:0;font-size:16px;font-weight:700;color:var(--navy);">&#128101; Users</h3>
+    <h3 style="margin:0;font-size:16px;font-weight:700;color:var(--navy);">Users</h3>
     <button class="btn btn-primary" onclick="showAddUser()">+ Add User</button>
   </div>
-
   <div id="userFormWrap" style="display:none;background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:16px;">
-    <h4 id="userFormTitle" style="margin:0 0 14px;font-size:14px;font-weight:600;color:var(--navy);"></h4>
+    <h4 id="userFormTitle" style="margin:0 0 14px;font-size:14px;font-weight:600;"></h4>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-      <div>
-        <label class="filter-label">USERNAME</label>
-        <input id="uUsername" placeholder="esraa.pmo" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;box-sizing:border-box;">
-      </div>
-      <div>
-        <label class="filter-label">PASSWORD</label>
-        <input id="uPassword" type="password" placeholder="leave blank to keep" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;box-sizing:border-box;">
-      </div>
-      <div>
-        <label class="filter-label">DISPLAY NAME</label>
-        <input id="uDisplayName" placeholder="Esraa Ahmed" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;box-sizing:border-box;">
-      </div>
-      <div>
-        <label class="filter-label">ROLE</label>
+      <div><label class="filter-label">USERNAME</label>
+        <input id="uUsername" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;box-sizing:border-box;"></div>
+      <div><label class="filter-label">PASSWORD</label>
+        <input id="uPassword" type="password" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;box-sizing:border-box;"></div>
+      <div><label class="filter-label">DISPLAY NAME</label>
+        <input id="uDisplayName" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;box-sizing:border-box;"></div>
+      <div><label class="filter-label">ROLE</label>
         <select id="uRole" onchange="onRoleChange()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
           <option value="pmo">PMO Coordinator</option>
           <option value="management">Management</option>
           <option value="admin">Admin</option>
-        </select>
-      </div>
-      <div id="coordPickerRow" style="grid-column:span 2;">
-        <label class="filter-label">ODOO COORDINATOR
-          <span style="font-weight:400;color:var(--muted);text-transform:none;font-size:10px;">select to link projects</span>
-        </label>
-        <button type="button" id="coordLoadBtn" onclick="loadCoordinators()" style="font-size:12px;color:var(--blue);background:none;border:none;cursor:pointer;padding:4px 0;display:block;margin-bottom:6px;">
-          &#8635; Load from Odoo
-        </button>
-        <div id="coordList" style="display:flex;flex-wrap:wrap;gap:8px;max-height:200px;overflow-y:auto;"></div>
+        </select></div>
+      <div id="coordRow" style="grid-column:span 2;">
+        <label class="filter-label">ODOO COORDINATOR</label>
+        <button type="button" onclick="loadCoords()" id="coordBtn" style="display:block;font-size:12px;color:var(--blue);background:none;border:none;cursor:pointer;padding:3px 0;margin-bottom:6px;">Load from Odoo</button>
+        <div id="coordCards" style="display:flex;flex-wrap:wrap;gap:8px;max-height:180px;overflow-y:auto;"></div>
         <input type="hidden" id="uOdooName">
-        <div id="selectedCoordInfo" style="display:none;margin-top:8px;padding:10px;background:#EFF6FF;border-radius:8px;font-size:12px;color:#1E40AF;">
-          <strong id="selCoordName"></strong><span id="selCoordJob" style="margin-left:6px;color:#64748B;"></span>
-          <div id="selCoordProjects" style="margin-top:4px;"></div>
+        <div id="coordInfo" style="display:none;margin-top:8px;padding:8px 12px;background:#EFF6FF;border-radius:8px;font-size:12px;color:#1E40AF;">
+          <b id="coordInfoName"></b> <span id="coordInfoJob" style="color:#64748B;"></span>
+          <div id="coordInfoProjects" style="margin-top:4px;"></div>
         </div>
       </div>
     </div>
     <div style="display:flex;gap:8px;margin-top:14px;align-items:center;">
       <button class="btn btn-primary" onclick="saveUser()">Save</button>
-      <button class="btn btn-ghost" onclick="cancelUserForm()">Cancel</button>
-      <span id="userFormMsg" style="font-size:12px;"></span>
+      <button class="btn btn-ghost" onclick="cancelUser()">Cancel</button>
+      <span id="uMsg" style="font-size:12px;"></span>
     </div>
   </div>
-
   <div class="tbl-wrap">
     <table style="width:100%;border-collapse:collapse;">
       <thead><tr style="background:var(--navy);color:white;">
@@ -1555,183 +1541,206 @@ loadTravel();
         <th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:600;">PROJECTS</th>
         <th style="text-align:center;padding:10px 14px;font-size:11px;font-weight:600;">ACTIONS</th>
       </tr></thead>
-      <tbody id="usersTableBody">
-        <tr><td colspan="5" style="padding:20px;text-align:center;color:var(--muted);">Click Users tab to load</td></tr>
-      </tbody>
+      <tbody id="uTbody"><tr><td colspan="5" style="padding:20px;text-align:center;color:var(--muted);">Loading...</td></tr></tbody>
     </table>
   </div>
 </div>
 
-
 <script>
-(function() {
-  var ROLE_ST = {admin:'background:#FEF3C7;color:#92400E;',management:'background:#DBEAFE;color:#1E40AF;',pmo:'background:#D1FAE5;color:#065F46;'};
-  var ROLE_LB = {admin:'Admin',management:'Management',pmo:'PMO Coordinator'};
-  var _editing = null;
-  var _coords  = [];
+var _USR_EDIT = null;
+var _USR_COORDS = [];
+var URST = {admin:'background:#FEF3C7;color:#92400E;',management:'background:#DBEAFE;color:#1E40AF;',pmo:'background:#D1FAE5;color:#065F46;'};
+var URLB = {admin:'Admin',management:'Management',pmo:'PMO Coordinator'};
 
-  window.initUsersTab = function() {
-    document.getElementById('tabBtnUsers').style.display = '';
-    loadUsers();
-  };
+window.initUsersTab = function() {
+  var b = document.getElementById('tabBtnUsers');
+  if (b) b.style.display = '';
+  usrLoad();
+};
 
-  window.loadCoordinators = function() {
-    var btn = document.getElementById('coordLoadBtn');
-    btn.textContent = 'Loading...'; btn.disabled = true;
-    fetch('/api/odoo/coordinators').then(function(r){return r.json();}).then(function(d) {
-      _coords = d.employees || [];
-      renderCards();
-      btn.textContent = _coords.length + ' coordinators loaded';
-    }).catch(function(e) {
-      btn.textContent = 'Retry'; btn.disabled = false;
-    });
-  };
+window.loadCoords = function() {
+  var btn = document.getElementById('coordBtn');
+  btn.textContent = 'Loading...';
+  fetch('/api/odoo/coordinators').then(function(r) {
+    return r.json();
+  }).then(function(d) {
+    _USR_COORDS = d.employees || [];
+    usrRenderCoords();
+    btn.textContent = _USR_COORDS.length + ' loaded';
+  }).catch(function() {
+    btn.textContent = 'Retry - click to reload';
+  });
+};
 
-  function renderCards() {
-    var sel = document.getElementById('uOdooName').value;
-    document.getElementById('coordList').innerHTML = _coords.map(function(e) {
-      var isSel = sel === e.name;
-      var d = document.createElement('div');
-      d.style.cssText = 'padding:8px 14px;border:2px solid ' + (isSel ? '#3B82F6' : 'var(--border)') + ';border-radius:8px;background:' + (isSel ? '#EFF6FF' : 'white') + ';cursor:pointer;font-size:12px;';
-      d.innerHTML = '<div style="font-weight:' + (isSel?700:500) + ';color:' + (isSel?'#1E40AF':'var(--navy)') + ';">' + esc(e.name) + '</div>' +
-        (e.job ? '<div style="font-size:10px;color:var(--muted);">' + esc(e.job) + '</div>' : '') +
-        '<div style="font-size:10px;color:#3B82F6;">' + e.projects.length + ' project' + (e.projects.length !== 1 ? 's' : '') + '</div>';
-      d.onclick = function() { selectCoord(e.name, e.job, e.projects); };
-      return d.outerHTML;
-    }).join('');
+function usrRenderCoords() {
+  var sel = document.getElementById('uOdooName').value;
+  var cont = document.getElementById('coordCards');
+  var html = '';
+  for (var i = 0; i < _USR_COORDS.length; i++) {
+    var e = _USR_COORDS[i];
+    var isSel = (sel === e.name);
+    var border = isSel ? '#3B82F6' : 'var(--border)';
+    var bg = isSel ? '#EFF6FF' : 'white';
+    var fw = isSel ? '700' : '500';
+    var col = isSel ? '#1E40AF' : 'var(--navy)';
+    html += '<div onclick="usrSelCoord(' + i + ')" style="padding:8px 14px;border:2px solid ' + border + ';border-radius:8px;background:' + bg + ';cursor:pointer;font-size:12px;">';
+    html += '<div style="font-weight:' + fw + ';color:' + col + ';">' + esc(e.name) + '</div>';
+    if (e.job) html += '<div style="font-size:10px;color:var(--muted);">' + esc(e.job) + '</div>';
+    html += '<div style="font-size:10px;color:#3B82F6;">' + e.projects.length + ' project' + (e.projects.length !== 1 ? 's' : '') + '</div>';
+    html += '</div>';
   }
+  cont.innerHTML = html;
+}
 
-  window.selectCoord = function(name, job, projects) {
-    document.getElementById('uOdooName').value = name;
-    if (!document.getElementById('uDisplayName').value) document.getElementById('uDisplayName').value = name;
-    document.getElementById('selCoordName').textContent = name;
-    document.getElementById('selCoordJob').textContent  = job ? '(' + job + ')' : '';
-    var ph = document.getElementById('selCoordProjects');
-    if (projects.length) {
-      ph.innerHTML = projects.map(function(p) {
-        return '<span style="display:inline-block;margin:2px 3px 0 0;padding:1px 7px;background:#DBEAFE;border-radius:10px;font-size:10px;color:#1E40AF;">' + esc(p.name) + '</span>';
-      }).join('');
-    } else {
-      ph.innerHTML = '<span style="color:var(--muted);">No projects as coordinator</span>';
-    }
-    document.getElementById('selectedCoordInfo').style.display = '';
-    renderCards();
-  };
+window.usrSelCoord = function(idx) {
+  var e = _USR_COORDS[idx];
+  document.getElementById('uOdooName').value = e.name;
+  if (!document.getElementById('uDisplayName').value) document.getElementById('uDisplayName').value = e.name;
+  document.getElementById('coordInfoName').textContent = e.name;
+  document.getElementById('coordInfoJob').textContent = e.job ? '(' + e.job + ')' : '';
+  var ph = '';
+  for (var i = 0; i < e.projects.length; i++) {
+    ph += '<span style="display:inline-block;margin:2px 3px 0 0;padding:1px 7px;background:#DBEAFE;border-radius:10px;font-size:10px;color:#1E40AF;">' + esc(e.projects[i].name) + '</span>';
+  }
+  document.getElementById('coordInfoProjects').innerHTML = ph || '<span style="color:var(--muted);">No projects</span>';
+  document.getElementById('coordInfo').style.display = '';
+  usrRenderCoords();
+};
 
-  window.onRoleChange = function() {
-    document.getElementById('coordPickerRow').style.display = document.getElementById('uRole').value === 'pmo' ? '' : 'none';
-  };
+window.onRoleChange = function() {
+  document.getElementById('coordRow').style.display = document.getElementById('uRole').value === 'pmo' ? '' : 'none';
+};
 
-  window.showAddUser = function() {
-    _editing = null;
-    document.getElementById('userFormTitle').textContent = 'Add New User';
-    ['uUsername','uPassword','uDisplayName','uOdooName'].forEach(function(id) {
-      var el = document.getElementById(id); if(el){el.value='';el.disabled=false;}
-    });
-    document.getElementById('uRole').value = 'pmo';
-    document.getElementById('selectedCoordInfo').style.display = 'none';
-    document.getElementById('coordList').innerHTML = '';
-    document.getElementById('userFormMsg').textContent = '';
-    var btn = document.getElementById('coordLoadBtn');
-    btn.textContent = 'Load from Odoo'; btn.disabled = false;
+window.showAddUser = function() {
+  _USR_EDIT = null;
+  document.getElementById('userFormTitle').textContent = 'Add New User';
+  var ids = ['uUsername','uPassword','uDisplayName','uOdooName'];
+  for (var i = 0; i < ids.length; i++) {
+    var el = document.getElementById(ids[i]);
+    if (el) { el.value = ''; el.disabled = false; }
+  }
+  document.getElementById('uRole').value = 'pmo';
+  document.getElementById('coordInfo').style.display = 'none';
+  document.getElementById('coordCards').innerHTML = '';
+  document.getElementById('uMsg').textContent = '';
+  document.getElementById('coordBtn').textContent = 'Load from Odoo';
+  onRoleChange();
+  document.getElementById('userFormWrap').style.display = '';
+};
+
+window.editUser = function(uname) {
+  fetch('/api/users').then(function(r) {
+    return r.json();
+  }).then(function(d) {
+    var u = d.users && d.users[uname];
+    if (!u) return;
+    _USR_EDIT = uname;
+    document.getElementById('userFormTitle').textContent = 'Edit ' + uname;
+    document.getElementById('uUsername').value = uname;
+    document.getElementById('uUsername').disabled = true;
+    document.getElementById('uPassword').value = '';
+    document.getElementById('uDisplayName').value = u.display_name || '';
+    document.getElementById('uRole').value = u.role || 'pmo';
+    document.getElementById('uOdooName').value = u.odoo_name || '';
+    document.getElementById('coordInfo').style.display = 'none';
+    document.getElementById('uMsg').textContent = '';
+    document.getElementById('coordBtn').textContent = 'Load from Odoo';
     onRoleChange();
     document.getElementById('userFormWrap').style.display = '';
-  };
+  });
+};
 
-  window.editUser = function(uname) {
-    fetch('/api/users').then(function(r){return r.json();}).then(function(d) {
-      var u = d.users && d.users[uname]; if(!u) return;
-      _editing = uname;
-      document.getElementById('userFormTitle').textContent = 'Edit ' + uname;
-      document.getElementById('uUsername').value = uname; document.getElementById('uUsername').disabled = true;
-      document.getElementById('uPassword').value = '';
-      document.getElementById('uDisplayName').value = u.display_name || '';
-      document.getElementById('uRole').value = u.role || 'pmo';
-      document.getElementById('uOdooName').value = u.odoo_name || '';
-      document.getElementById('selectedCoordInfo').style.display = 'none';
-      document.getElementById('userFormMsg').textContent = '';
-      var btn = document.getElementById('coordLoadBtn');
-      btn.textContent = 'Load from Odoo'; btn.disabled = false;
-      onRoleChange();
-      document.getElementById('userFormWrap').style.display = '';
-    });
-  };
+window.cancelUser = function() {
+  document.getElementById('userFormWrap').style.display = 'none';
+  _USR_EDIT = null;
+};
 
-  window.cancelUserForm = function() {
-    document.getElementById('userFormWrap').style.display = 'none';
-    _editing = null;
-  };
+window.saveUser = function() {
+  var msg = document.getElementById('uMsg');
+  var un = document.getElementById('uUsername').value.trim().toLowerCase();
+  var pw = document.getElementById('uPassword').value.trim();
+  var dn = document.getElementById('uDisplayName').value.trim();
+  var role = document.getElementById('uRole').value;
+  var on2 = document.getElementById('uOdooName').value.trim();
+  if (!un) { msg.textContent = 'Username required'; msg.style.color = 'red'; return; }
+  if (!_USR_EDIT && !pw) { msg.textContent = 'Password required'; msg.style.color = 'red'; return; }
+  var body = {username: un, role: role, display_name: dn || un, odoo_name: on2};
+  if (pw) body.password = pw;
+  var url = _USR_EDIT ? '/api/users/' + _USR_EDIT : '/api/users';
+  var meth = _USR_EDIT ? 'PUT' : 'POST';
+  fetch(url, {method: meth, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)})
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.error) { msg.textContent = d.error; msg.style.color = 'red'; return; }
+      msg.textContent = 'Saved!'; msg.style.color = 'green';
+      setTimeout(function() { window.cancelUser(); usrLoad(); }, 700);
+    }).catch(function(e) { msg.textContent = e.message; msg.style.color = 'red'; });
+};
 
-  window.saveUser = function() {
-    var msg  = document.getElementById('userFormMsg');
-    var un   = document.getElementById('uUsername').value.trim().toLowerCase();
-    var pw   = document.getElementById('uPassword').value.trim();
-    var dn   = document.getElementById('uDisplayName').value.trim();
-    var role = document.getElementById('uRole').value;
-    var on   = document.getElementById('uOdooName').value.trim();
-    if (!un) { msg.textContent='Username required'; msg.style.color='red'; return; }
-    if (!_editing && !pw) { msg.textContent='Password required'; msg.style.color='red'; return; }
-    var body = {username:un, role:role, display_name:dn||un, odoo_name:on};
-    if (pw) body.password = pw;
-    var url = _editing ? '/api/users/' + _editing : '/api/users';
-    var method = _editing ? 'PUT' : 'POST';
-    fetch(url, {method:method, headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
-      .then(function(r){return r.json();}).then(function(d) {
-        if (d.error) { msg.textContent=d.error; msg.style.color='red'; return; }
-        msg.textContent='Saved!'; msg.style.color='green';
-        setTimeout(function(){ cancelUserForm(); loadUsers(); }, 700);
-      }).catch(function(e){ msg.textContent=e.message; msg.style.color='red'; });
-  };
+window.deleteUser = function(uname) {
+  if (!confirm('Delete ' + uname + '?')) return;
+  fetch('/api/users/' + uname, {method: 'DELETE'})
+    .then(function(r) { return r.json(); })
+    .then(function(d) { if (d.ok) usrLoad(); else alert(d.error); });
+};
 
-  window.deleteUser = function(uname) {
-    if (!confirm('Delete "' + uname + '"?')) return;
-    fetch('/api/users/' + uname, {method:'DELETE'}).then(function(r){return r.json();})
-      .then(function(d){ if(d.ok) loadUsers(); else alert(d.error); });
-  };
-
-  function loadUsers() {
-    var tbody = document.getElementById('usersTableBody');
-    tbody.innerHTML = '<tr><td colspan="5" style="padding:20px;text-align:center;color:var(--muted);">Loading...</td></tr>';
-    fetch('/api/users').then(function(r){return r.json();}).then(function(d) {
-      var users = d.users || {};
-      var keys = Object.keys(users);
-      if (!keys.length) {
-        tbody.innerHTML = '<tr><td colspan="5" style="padding:20px;text-align:center;color:var(--muted);">No users yet</td></tr>';
-        return;
+function usrLoad() {
+  var tbody = document.getElementById('uTbody');
+  tbody.innerHTML = '<tr><td colspan="5" style="padding:20px;text-align:center;color:var(--muted);">Loading...</td></tr>';
+  fetch('/api/users').then(function(r) {
+    return r.json();
+  }).then(function(d) {
+    var users = d.users || {};
+    var keys = Object.keys(users);
+    if (!keys.length) {
+      tbody.innerHTML = '<tr><td colspan="5" style="padding:20px;text-align:center;color:var(--muted);">No users yet</td></tr>';
+      return;
+    }
+    fetch('/api/odoo/coordinators').then(function(r) {
+      return r.json();
+    }).then(function(cr) {
+      var cd = {};
+      if (cr.ok) {
+        for (var i = 0; i < cr.employees.length; i++) {
+          cd[cr.employees[i].name] = cr.employees[i].projects;
+        }
       }
-      fetch('/api/odoo/coordinators').then(function(r){return r.json();}).then(function(cr) {
-        var coordData = {};
-        if (cr.ok) cr.employees.forEach(function(e){ coordData[e.name] = e.projects; });
-        tbody.innerHTML = keys.map(function(uname) {
-          var u = users[uname];
-          var projs = u.odoo_name && coordData[u.odoo_name] ? coordData[u.odoo_name] : [];
-          var pHtml = projs.length
-            ? projs.map(function(p){return '<span style="display:inline-block;margin:1px 3px 1px 0;padding:1px 7px;background:#DBEAFE;border-radius:10px;font-size:10px;color:#1E40AF;">' + esc(p.name) + '</span>';}).join('')
-            : (u.role === 'pmo' ? '<span style="color:var(--muted);font-size:11px;">-</span>' : '-');
-          return '<tr style="border-bottom:1px solid var(--border);">' +
-            '<td style="padding:10px 14px;"><div style="font-weight:600;font-size:13px;">' + esc(u.display_name||uname) + '</div>' +
-            '<div style="font-size:11px;color:var(--muted);">' + esc(uname) + '</div></td>' +
-            '<td style="padding:10px 14px;"><span style="font-size:11px;font-weight:600;padding:2px 10px;border-radius:10px;' + (ROLE_ST[u.role]||'') + '">' + (ROLE_LB[u.role]||u.role) + '</span></td>' +
-            '<td style="padding:10px 14px;font-size:12px;color:var(--muted);">' + esc(u.odoo_name||'-') + '</td>' +
-            '<td style="padding:10px 14px;">' + pHtml + '</td>' +
-            '<td style="padding:10px 14px;text-align:center;white-space:nowrap;">' +
-            '<button onclick="editUser(' + JSON.stringify(uname) + ')" style="padding:4px 12px;border:1px solid var(--border);border-radius:5px;background:white;cursor:pointer;font-size:12px;margin-right:6px;">Edit</button>' +
-            '<button onclick="deleteUser(' + JSON.stringify(uname) + ')" style="padding:4px 12px;border:1px solid #FCA5A5;border-radius:5px;background:#FEF2F2;cursor:pointer;font-size:12px;color:#DC2626;">Delete</button>' +
-            '</td></tr>';
-        }).join('');
-      }).catch(function() {
-        tbody.innerHTML = '<tr><td colspan="5" style="padding:20px;text-align:center;color:var(--muted);">Could not load coordinator data</td></tr>';
-      });
-    }).catch(function(e) {
-      tbody.innerHTML = '<tr><td colspan="5" style="padding:20px;text-align:center;color:red;">' + e.message + '</td></tr>';
-    });
-  }
+      var rows = '';
+      for (var k = 0; k < keys.length; k++) {
+        var uname = keys[k];
+        var u = users[uname];
+        var projs = u.odoo_name && cd[u.odoo_name] ? cd[u.odoo_name] : [];
+        var ph = '';
+        for (var j = 0; j < projs.length; j++) {
+          ph += '<span style="display:inline-block;margin:1px 3px 1px 0;padding:1px 7px;background:#DBEAFE;border-radius:10px;font-size:10px;color:#1E40AF;">' + esc(projs[j].name) + '</span>';
+        }
+        if (!ph) ph = '<span style="color:var(--muted);font-size:11px;">-</span>';
+        rows += '<tr style="border-bottom:1px solid var(--border);">';
+        rows += '<td style="padding:10px 14px;"><div style="font-weight:600;font-size:13px;">' + esc(u.display_name || uname) + '</div><div style="font-size:11px;color:var(--muted);">' + esc(uname) + '</div></td>';
+        rows += '<td style="padding:10px 14px;"><span style="font-size:11px;font-weight:600;padding:2px 10px;border-radius:10px;' + (URST[u.role] || '') + '">' + (URLB[u.role] || u.role) + '</span></td>';
+        rows += '<td style="padding:10px 14px;font-size:12px;color:var(--muted);">' + esc(u.odoo_name || '-') + '</td>';
+        rows += '<td style="padding:10px 14px;">' + ph + '</td>';
+        rows += '<td style="padding:10px 14px;text-align:center;white-space:nowrap;">';
+        rows += '<button onclick="editUser(' + JSON.stringify(uname) + ')" style="padding:4px 12px;border:1px solid var(--border);border-radius:5px;background:white;cursor:pointer;font-size:12px;margin-right:6px;">Edit</button>';
+        rows += '<button onclick="deleteUser(' + JSON.stringify(uname) + ')" style="padding:4px 12px;border:1px solid #FCA5A5;border-radius:5px;background:#FEF2F2;cursor:pointer;font-size:12px;color:#DC2626;">Delete</button>';
+        rows += '</td></tr>';
+      }
+      tbody.innerHTML = rows;
+    }).catch(function() {});
+  }).catch(function(e) {
+    tbody.innerHTML = '<tr><td colspan="5" style="padding:20px;text-align:center;color:red;">' + e.message + '</td></tr>';
+  });
+}
 
-  fetch('/api/me').then(function(r){return r.json();}).then(function(d) {
-    window._currentRole = d.role;
-    if (d.role === 'admin') document.getElementById('tabBtnUsers').style.display = '';
-  }).catch(function(){});
-})();
+fetch('/api/me').then(function(r) {
+  return r.json();
+}).then(function(d) {
+  window._currentRole = d.role;
+  if (d.role === 'admin') {
+    var b = document.getElementById('tabBtnUsers');
+    if (b) b.style.display = '';
+  }
+}).catch(function() {});
 </script>
 </body>
 </html>
