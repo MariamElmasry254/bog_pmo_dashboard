@@ -92,10 +92,7 @@ function profFillFromTasks(phaseKey) {
 
 function fetchEffortCached(phaseKey) {
   var ckey='_eff_'+phaseKey+'_'+(window._activeProjectId||'');
-  try{
-    var hit=sessionStorage.getItem(ckey);
-    if(hit){var d=JSON.parse(hit);if(d&&d.months&&d.months.length)return Promise.resolve(d);}
-  }catch(e){}
+  try{var hit=sessionStorage.getItem(ckey);if(hit){var d=JSON.parse(hit);if(d&&d.months&&d.months.length)return Promise.resolve(d);}}catch(e){}
   return fetch('/api/effort/'+phaseKey+'/all-months')
     .then(function(res){if(!res.ok)throw new Error('Effort API '+res.status);return res.json();})
     .then(function(d){try{sessionStorage.setItem(ckey,JSON.stringify(d));}catch(e){}return d;});
@@ -106,16 +103,16 @@ window.loadVariance = async function() {
   if (!AppState.loaded.variance) {
     AppState.loaded.variance = true;
     setTimeout(async function(){
-      var isBog2=!AppState._overviewData||AppState._overviewData.is_bog!==false;
-      var all2=isBog2?['development','consultation']:['services','support'];
-      var curTab=document.querySelector('.sub-tab.active');
-      var curKey=curTab?curTab.dataset.subtab:all2[0];
-      for(var ii=0;ii<all2.length;ii++){
-        if(all2[ii]!==curKey&&(!AppState._varianceMonthData||!AppState._varianceMonthData[all2[ii]])){
-          try{await switchSubTab(all2[ii]);}catch(e){}
+      var _isBog2=!AppState._overviewData||AppState._overviewData.is_bog!==false;
+      var _all2=_isBog2?['development','consultation']:['services','support'];
+      var _curTab=document.querySelector('.sub-tab.active');
+      var _curKey=_curTab?_curTab.dataset.subtab:_all2[0];
+      for(var _ii=0;_ii<_all2.length;_ii++){
+        if(_all2[_ii]!==_curKey&&(!AppState._varianceMonthData||!AppState._varianceMonthData[_all2[_ii]])){
+          try{await switchSubTab(_all2[_ii]);}catch(_e){}
         }
       }
-      try{await switchSubTab(curKey);}catch(e){}
+      try{await switchSubTab(_curKey);}catch(_e){}
     },2000);
     var _vBtn=document.getElementById('varianceExport');
     if(!_vBtn){_vBtn=document.createElement('button');_vBtn.id='varianceExport';_vBtn.textContent='⬇ Export Excel';_vBtn.style.cssText='position:fixed;bottom:24px;right:24px;z-index:999;padding:10px 20px;background:#1B2A4E;color:white;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.3)';document.body.appendChild(_vBtn);}
@@ -462,7 +459,7 @@ function renderBudget(data, phaseKey) {
 }
 
 // ── Budget Changes state ──
-if (typeof _budgetChanges === 'undefined') var _budgetChanges = {};  // { phaseKey: [...] }
+if (typeof _budgetChanges === 'undefined') var _budgetChanges = {};
 
 async function loadBudgetChanges(phaseKey) {
   // Load changes
@@ -1783,9 +1780,9 @@ function renderEstimated(data, phaseKey) {
   </div>`;
 }
 
-if (typeof _estPositions === 'undefined') var _estPositions = [];
-if (typeof _estRows === 'undefined') var _estRows = [];
-if (typeof _estPhase === 'undefined') var _estPhase = '';
+if (typeof _estPositions==='undefined') var _estPositions=[];
+if (typeof _estRows==='undefined') var _estRows=[];
+if (typeof _estPhase==='undefined') var _estPhase='';
 
 // Format number with exact 2 decimal places + thousand separators, no rounding
 function fmtExact(n) {
@@ -2023,7 +2020,7 @@ async function estSave() {
   } catch (e) { console.warn('estSave failed:', e); }
 }
 
-if (typeof _estSaveTimer === 'undefined') var _estSaveTimer = null;
+if (typeof _estSaveTimer==='undefined') var _estSaveTimer=null;
 function estScheduleSave() {
   clearTimeout(_estSaveTimer);
   _estSaveTimer = setTimeout(async () => {
