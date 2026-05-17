@@ -810,6 +810,7 @@ function renderProfitability(data, phaseKey) {
             title="Fill Remaining MDs from Tasks Analysis tab"
             onclick="profFillFromTasks('${phaseKey}')">📋 Fill from Tasks</button>
           <button class="btn-primary" style="font-size:12px;padding:6px 16px;" onclick="profBuildTable('${phaseKey}')">↻ Recalculate</button>
+          <button class="btn-ghost" style="font-size:12px;padding:6px 14px;" onclick="exportProjectVariance()">⬇ Export Excel</button>
         </div>
       </div>
       <div id="prof-table-wrap-${phaseKey}">
@@ -1152,116 +1153,48 @@ async function profRecomputeAll(phaseKey) {
   // ── 4. Issued Invoices: load monthly_cumulative per phase (once, cached) ──
   if (!AppState._invoiceCumulative) AppState._invoiceCumulative = {};
   if (!AppState._invoiceCumulative[phaseKey]) {
+    // Load invoices from sales API grouped by variance tab
     try {
-      // Fetch fresh every time — don't use stale cache
-      const salesRes = await fetch('/api/sales-orders');
-      if (salesRes.ok) {
-        const salesData = await salesRes.json();
-
-        const _SUPP_KWS = ['support','operation','maintenance','hypercare',
-                           'production','دعم','الدعم','تشغيل'];
-
-        // Build invoices_by_phase from orders (works regardless of backend version)
-        const byPhase = {};
-
-        const addToPhase = (ph, mk, amt) => {
-          if (!byPhase[ph]) byPhase[ph] = {};
-          byPhase[ph][mk] = (byPhase[ph][mk] || 0) + amt;
-        };
-
-        if (salesData.orders && salesData.orders.length) {
-          salesData.orders.forEach(o => {
-            // Build invoice→phase map from SO lines
-            const invPhase = {};  // inv_name → phase
-            (o.lines || []).forEach(l => {
-              const prod = (Array.isArray(l.product_id) ? l.product_id[1] : (l.name||'')).toLowerCase();
-              let ph = 'development';
-              if (_SUPP_KWS.some(k => prod.includes(k))) ph = 'support';
-              else if (prod.includes('license') || prod.includes('3rd party')) ph = 'license';
-              const saved = (AppState._soLineVarMap || {})[String(l.id)];
-              if (saved) ph = saved;
-              (l.line_invoices || []).forEach(li => {
-                if (li.move_name) invPhase[li.move_name] = ph;
-              });
-            });
-
-            (o.invoices || []).forEach(inv => {
-              if (inv.state !== 'posted') return;
-              const mk = (inv.date || '').substring(0, 7);
-              if (!mk) return;
-              // Phase: from line mapping, else derive from SO lines majority
-              let ph = invPhase[inv.name];
-              if (!ph) {
-                const phases = (o.lines||[]).map(l => {
-                  const p2 = (Array.isArray(l.product_id)?l.product_id[1]:(l.name||'')).toLowerCase();
-                  if (_SUPP_KWS.some(k=>p2.includes(k))) return 'support';
-                  if (p2.includes('license')||p2.includes('3rd party')) return 'license';
-                  return (AppState._soLineVarMap||{})[String(l.id)] || 'development';
-                });
-                ph = phases.includes('support') ? 'support'
-                   : phases.every(p=>p==='license') ? 'license'
-                   : 'development';
-              }
-              if (ph !== 'license') addToPhase(ph, mk, inv.amount_untaxed || 0);
-            });
-          });
-        }
-
-        // Also use backend invoices_by_phase if available (merge)
-        if (salesData.invoices_by_phase) {
-          Object.entries(salesData.invoices_by_phase).forEach(([ph, months]) => {
-            if (ph === 'license') return;
-            Object.entries(months).forEach(([mk, v]) => {
-              const amt = typeof v === 'object' ? (v.month || 0) : (v || 0);
-              addToPhase(ph, mk, amt);
-            });
-          });
-        }
-
-        // Direct invoices (no SOs)
-        if (salesData.direct_invoices) {
-          (salesData.direct_invoices).forEach(inv => {
-            if (inv.state !== 'posted' || inv.phase === 'license') return;
-            const mk = (inv.date || '').substring(0, 7);
-            if (mk) addToPhase(inv.phase || 'services', mk, inv.amount_untaxed || 0);
-          });
-        }
-
-        // Store merged result
-        if (Object.keys(byPhase).length) {
-          // Convert to cumulative format {phase: {YYYY-MM: {month, cumulative}}}
-          const cum2 = {};
-          Object.keys(byPhase).forEach(ph => {
-            let r = 0; cum2[ph] = {};
-            Object.keys(byPhase[ph]).sort().forEach(mk => {
-              r += byPhase[ph][mk];
-              cum2[ph][mk] = { month: byPhase[ph][mk], cumulative: r };
-            });
-          });
-          AppState._salesInvoicesByPhase = cum2;
+      if (!AppState._salesInvoicesByPhase) {
+        const salesRes = await fetch('/api/sales-orders');
+        if (salesRes.ok) {
+          const salesData = await salesRes.json();
+          if (salesData.invoices_by_phase) {
+            AppState._salesInvoicesByPhase = salesData.invoices_by_phase;
+          }
         }
       }
-
-      // Build cumulative for this phaseKey
       if (AppState._salesInvoicesByPhase) {
+        // Map variance tab → sales phase keys
+        // BOG: development & consultation → 'development', support → 'support', license excluded
+        // Non-BOG: services → 'development', support → 'support'
         const phaseMapping = {
           development:  ['development'],
           consultation: ['consultation'],
-          services:     ['services', 'development', 'consultation'],
+          services:     ['development', 'consultation'],  // non-BOG: services gets dev+consult
           support:      ['support'],
         };
         const matchPhases = phaseMapping[phaseKey] || [phaseKey];
+
         const monthly = {};
-        Object.entries(AppState._salesInvoicesByPhase).forEach(([srcPh, phData]) => {
-          if (!matchPhases.includes(srcPh)) return;
-          Object.entries(phData).forEach(([mk, v]) => {
-            monthly[mk] = (monthly[mk] || 0) + (typeof v === 'object' ? (v.month||0) : (v||0));
-          });
-        });
+        for (const [srcPhase, phaseData] of Object.entries(AppState._salesInvoicesByPhase)) {
+          // Skip license — not part of variance profitability
+          if (srcPhase === 'license') continue;
+          if (!matchPhases.includes(srcPhase)) continue;
+          for (const [mk, v] of Object.entries(phaseData)) {
+            monthly[mk] = (monthly[mk] || 0) + (v.month || 0);
+          }
+        }
+        // Build cumulative
         let running = 0;
         const cum = {};
-        Object.keys(monthly).sort().forEach(mk => { running += monthly[mk]; cum[mk] = running; });
-        if (Object.keys(cum).length) AppState._invoiceCumulative[phaseKey] = cum;
+        for (const mk of Object.keys(monthly).sort()) {
+          running += monthly[mk];
+          cum[mk] = running;
+        }
+        if (Object.keys(cum).length) {
+          AppState._invoiceCumulative[phaseKey] = cum;
+        }
       }
     } catch(e) { console.warn('Sales invoice load error:', e); }
 
@@ -2384,4 +2317,289 @@ async function deletePromo(id) {
   renderPromotionsSubTab();
 }
 
+}
+
+// ── Project Variance Excel Export ─────────────────────────────────────────
+async function exportProjectVariance() {
+  const btn = document.querySelector('[onclick="exportProjectVariance()"]');
+  if (btn) { btn.textContent = '⏳ Exporting…'; btn.disabled = true; }
+
+  try {
+    if (!window.XLSX) {
+      await new Promise((res, rej) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+        s.onload = res; s.onerror = rej;
+        document.head.appendChild(s);
+      });
+    }
+
+    const isBog     = AppState._overviewData?.is_bog !== false;
+    const projName  = document.querySelector('.project-title, h1, .hdr h1')?.textContent?.trim() || 'Project';
+    const phases    = isBog ? ['development','consultation','support'] : ['services','support'];
+    const phaseLabels = {development:'Development',consultation:'Consultation',support:'Support',services:'Services'};
+    const now       = new Date().toISOString().slice(0,10);
+
+    const wb = XLSX.utils.book_new();
+
+    for (const phaseKey of phases) {
+      const table = document.getElementById(`profit-table-${phaseKey}`);
+      if (!table) continue;
+      const rows  = table.querySelectorAll('tr[data-month-key]');
+      if (!rows.length) continue;
+
+      const pLabel = phaseLabels[phaseKey] || phaseKey;
+
+      // ── Budget figures ──
+      const totalRevSAR     = AppState._savedRevenue?.[phaseKey] || 0;
+      const totalEstCostSAR = AppState._budgetFinalCost?.[phaseKey] || 0;
+      const totalEstMDs     = AppState._budgetFinalMDs?.[phaseKey] || 0;
+      const plannedProfit   = totalRevSAR - totalEstCostSAR;
+      const plannedProfPct  = totalRevSAR > 0 ? plannedProfit / totalRevSAR : 0;
+
+      // Row indices (1-based for Excel formulas)
+      // Title block: rows 1-5
+      // Budget block: rows 6-9 (header=7, data=8)
+      // Monthly header: row 11
+      // Data starts: row 12
+      const DATA_START = 12;
+
+      // ── Collect monthly data ──
+      const monthRows = [];
+      for (const tr of rows) {
+        const mk = tr.dataset.monthKey;
+        if (!mk) continue;
+
+        const compInp = tr.querySelector('.completion-input');
+        const remInp  = tr.querySelector('.remaining-input');
+        const compPct  = parseFloat(compInp?.value) || 0;
+        const remMDs   = parseFloat(remInp?.value)  || 0;
+
+        const spanNum = (cls) => {
+          const el = tr.querySelector(`.${cls}`);
+          if (!el) return null;
+          const t = el.textContent.replace(/,/g,'').replace(/[^\d.+-]/g,'').trim();
+          return t === '' || t === '—' ? null : parseFloat(t);
+        };
+        const spanPct = (cls) => {
+          const el = tr.querySelector(`.${cls}`);
+          if (!el) return null;
+          const t = el.textContent.replace(/[^0-9.-]/g,'').trim();
+          return t === '' ? null : parseFloat(t) / 100;
+        };
+
+        const thisMDs  = spanNum(`prof-thismonth-${phaseKey}`);
+        const actMDs   = spanNum(`prof-actual-${phaseKey}`);
+        const revSAR   = spanNum(`prof-rev-${phaseKey}`);
+        const estCost  = spanNum(`prof-estcost-${phaseKey}`);
+        const estMDs2  = spanNum(`prof-estmds-${phaseKey}`);
+
+        monthRows.push({
+          mk, compPct, remMDs, revSAR, estCost, estMDs2,
+          thisMDs, actMDs,
+          currCost:  spanNum(`pc-currcost-${mk}`),
+          eacMDs:    spanNum(`pc-eac-${mk}`),
+          eacCost:   spanNum(`pc-eac-cost-${mk}`),
+          cpi:       spanNum(`pc-cpi-${mk}`),
+          varSAR:    spanNum(`pc-variance-${mk}`),
+          profComp:  spanNum(`pc-profit-comp-${mk}`),
+          profPct:   spanPct(`pc-profit-pct-${mk}`),
+          profVar:   spanNum(`pc-prof-var-${mk}`),
+          profVarPct:spanPct(`pc-prof-var-pct-${mk}`),
+          recogRev:  spanNum(`pc-rev-todate-${mk}`),
+          progress:  spanPct(`pc-progress-${mk}`),
+          production:spanNum(`pc-production-${mk}`),
+          issued:    spanNum(`pc-issued-${mk}`),
+          accVI:     spanNum(`pc-vi-acc-${mk}`),
+          thisMoVI:  spanNum(`pc-vi-month-${mk}`),
+        });
+      }
+
+      // ── Column definitions (label, width, formula or value fn) ──
+      // Columns: A=Month B=%Comp C=RemMDs D=RevSAR E=EstCost F=EstMDs
+      //          G=ThisMoMDs H=ActualMDs I=CurrCost J=EACMDs K=EACCost
+      //          L=CPI  M=VarSAR  N=ProfAtComp O=Profit% P=PlannedProfit
+      //          Q=ProfVar R=ProfVar% S=RecogRev T=Progress% U=Production
+      //          V=TotalIssued W=AccVI X=ThisMoVI
+
+      const cols = [
+        {h:'Month',               w:10},
+        {h:'% Completion',        w:12},
+        {h:'Remaining MDs',       w:13},
+        {h:'Revenue SAR',         w:14},
+        {h:'Est. Cost SAR',       w:14},
+        {h:'Est. MDs',            w:10},
+        {h:'This Month MDs',      w:13},
+        {h:'Actual MDs to Date',  w:16},
+        {h:'Current Cost SAR',    w:15},
+        {h:'EAC MDs',             w:10},
+        {h:'Est. at Completion SAR', w:18},
+        {h:'CPI',                 w:8},
+        {h:'Variance SAR',        w:14},
+        {h:'Profit at Comp SAR',  w:16},
+        {h:'Profit %',            w:10},
+        {h:'Planned Profit SAR',  w:16},
+        {h:'Prof. Var SAR',       w:14},
+        {h:'Prof. Var %',         w:11},
+        {h:'Total Recog. Revenue',w:18},
+        {h:'Progress %',          w:11},
+        {h:'Production',          w:13},
+        {h:'Total Issued SAR',    w:15},
+        {h:'Acc. VI SAR',         w:13},
+        {h:'This Month VI SAR',   w:16},
+      ];
+
+      // ── Build sheet data ──
+      const wsData = [];
+
+      // Row 1: Title
+      wsData.push([`Monthly Profitability Variance — ${projName} — ${pLabel}`]);
+      wsData.push([`Generated: ${now}`]);
+      wsData.push([]);
+
+      // Row 4-5: Budget summary header + data
+      wsData.push(['BUDGET SUMMARY','','','','']);
+      wsData.push(['Revenue SAR','Est. Cost SAR','Est. MDs','Planned Profit SAR','Planned Profit %']);
+
+      // Row 6: Budget data (with formula for Planned Profit)
+      // A6=revSAR, B6=estCost, C6=estMDs, D6=A6-B6, E6=D6/A6
+      const BUD_ROW = 6; // 1-based
+      wsData.push([totalRevSAR, totalEstCostSAR, totalEstMDs, {f:`A${BUD_ROW}-B${BUD_ROW}`}, {f:`IF(A${BUD_ROW}>0,D${BUD_ROW}/A${BUD_ROW},0)`}]);
+      wsData.push([]);
+
+      // Row 8: Column headers
+      wsData.push(['EQUATION GUIDE:','CPI = Est.Cost / EAC Cost','EAC MDs = Actual + Remaining','EAC Cost = CostToComplete + CurrentCost','Profit% = ProfitAtComp / Revenue','VI = RecogRev - TotalIssued']);
+      wsData.push([]);
+
+      // Row 10: Column headers
+      wsData.push(cols.map(c => c.h));
+
+      // DATA_START = row 11 (0-indexed: push index 10)
+      const DATA_ROW_OFFSET = wsData.length + 1; // 1-based row number of first data row
+
+      // Data rows with Excel formulas
+      monthRows.forEach((r, i) => {
+        const row = DATA_ROW_OFFSET + i; // 1-based
+        // Column letters: A=1, B=2...
+        // A=Month, B=%Comp, C=RemMDs, D=RevSAR, E=EstCost, F=EstMDs,
+        // G=ThisMoMDs, H=ActualMDs, I=CurrCost, J=EACMDs, K=EAC Cost SAR
+        // L=CPI, M=VarSAR, N=ProfAtComp, O=Profit%, P=PlannedProfit
+        // Q=ProfVar, R=ProfVar%, S=RecogRev, T=Progress%, U=Production
+        // V=TotalIssued, W=AccVI, X=ThisMoVI
+
+        const EAC_MDs_COL   = 'J';
+        const EAC_COST_COL  = 'K';
+        const REV_COL       = 'D';
+        const EST_COST_COL  = 'E';
+        const CURR_COST_COL = 'I';
+        const COMP_COL      = 'B';
+        const RECOG_COL     = 'S';
+        const ISSUED_COL    = 'V';
+
+        wsData.push([
+          r.mk,                         // A: Month
+          r.compPct / 100,              // B: % Completion (decimal)
+          r.remMDs,                     // C: Remaining MDs
+          r.revSAR,                     // D: Revenue SAR
+          r.estCost,                    // E: Est. Cost SAR
+          r.estMDs2,                    // F: Est. MDs
+          r.thisMDs,                    // G: This Month MDs
+          r.actMDs,                     // H: Actual MDs to Date
+          r.currCost,                   // I: Current Cost SAR
+          r.eacMDs ?? {f:`H${row}+C${row}`},                              // J: EAC MDs = Actual + Remaining
+          r.eacCost ?? {f:`I${row}+(C${row}*IF(H${row}>0,I${row}/H${row},E${row}/IF(F${row}>0,F${row},1)))`}, // K: EAC Cost
+          r.cpi     ?? {f:`IF(${EAC_COST_COL}${row}>0,${EST_COST_COL}${row}/${EAC_COST_COL}${row},"")`},     // L: CPI
+          r.varSAR  ?? {f:`${EST_COST_COL}${row}-${EAC_COST_COL}${row}`},                                     // M: Variance SAR
+          r.profComp?? {f:`${REV_COL}${row}-${EAC_COST_COL}${row}`},                                          // N: Profit at Comp
+          r.profPct ?? {f:`IF(${REV_COL}${row}>0,N${row}/${REV_COL}${row},"")`},                              // O: Profit %
+          {f:`A$${BUD_ROW}*(A$${BUD_ROW}>0) * (IF(A$${BUD_ROW}>0,(A$${BUD_ROW}-B$${BUD_ROW})/A$${BUD_ROW},0))`}, // P: Planned Profit SAR (= rev * planned%)  simplified:
+          r.profVar ?? {f:`N${row}-P${row}`},                                                                   // Q: Prof Var
+          r.profVarPct?? {f:`IF(${REV_COL}${row}>0,Q${row}/${REV_COL}${row},"")`},                            // R: Prof Var %
+          r.recogRev?? {f:`${REV_COL}${row}*${COMP_COL}${row}`},                                              // S: Recog Revenue = Rev * %Comp
+          r.progress ?? {f:`IF(${EAC_COST_COL}${row}>0,${CURR_COST_COL}${row}/${EAC_COST_COL}${row},"")`},   // T: Progress %
+          r.production,                 // U: Production
+          r.issued,                     // V: Total Issued SAR
+          r.accVI   ?? {f:`S${row}-V${row}`},                                                                   // W: Acc. VI = RecogRev - Issued
+          r.thisMoVI,                   // X: This Month VI
+        ]);
+      });
+
+      // Total row
+      const lastDataRow = DATA_ROW_OFFSET + monthRows.length - 1;
+      wsData.push([
+        'TOTAL','','',
+        {f:`SUM(D${DATA_ROW_OFFSET}:D${lastDataRow})`},
+        {f:`SUM(E${DATA_ROW_OFFSET}:E${lastDataRow})`},
+        '',
+        {f:`SUM(G${DATA_ROW_OFFSET}:G${lastDataRow})`},
+        '',
+        {f:`SUM(I${DATA_ROW_OFFSET}:I${lastDataRow})`},
+        '','','','',
+        {f:`SUM(N${DATA_ROW_OFFSET}:N${lastDataRow})`},
+        '','','','','','','',
+        {f:`SUM(V${DATA_ROW_OFFSET}:V${lastDataRow})`},
+        '','',
+      ]);
+
+      // ── Create worksheet ──
+      const ws = XLSX.utils.aoa_to_sheet(wsData, {cellDates: false});
+
+      // Merges
+      ws['!merges'] = [
+        {s:{r:0,c:0}, e:{r:0,c:5}},   // Title
+        {s:{r:3,c:0}, e:{r:3,c:4}},   // Budget Summary label
+        {s:{r:7,c:0}, e:{r:7,c:5}},   // Equation guide label (partial)
+      ];
+
+      // Column widths
+      ws['!cols'] = cols.map(c => ({wch: c.w}));
+
+      // Format percentage columns as % in Excel
+      const pctCols = [1, 14, 17, 19]; // B, O, R, T (0-indexed)
+      for (let ri = DATA_ROW_OFFSET - 1; ri <= DATA_ROW_OFFSET + monthRows.length - 1; ri++) {
+        pctCols.forEach(ci => {
+          const cellAddr = XLSX.utils.encode_cell({r: ri, c: ci});
+          if (ws[cellAddr]) ws[cellAddr].z = '0.0%';
+        });
+      }
+      // Format budget profit % cell
+      const budPctCell = XLSX.utils.encode_cell({r: BUD_ROW - 1, c: 4});
+      if (ws[budPctCell]) ws[budPctCell].z = '0.0%';
+
+      XLSX.utils.book_append_sheet(wb, ws, pLabel);
+    }
+
+    // ── Budget Changes sheet (if any) ──
+    const allChanges = [];
+    for (const phaseKey of phases) {
+      const changes = window._budgetChanges?.[phaseKey] || [];
+      changes.forEach(ch => allChanges.push([
+        phaseLabels[phaseKey] || phaseKey,
+        ch.change_date || '',
+        ch.description || '',
+        parseFloat(ch.delta_rev)  || 0,
+        parseFloat(ch.delta_cost) || 0,
+        parseFloat(ch.delta_mds)  || 0,
+      ]));
+    }
+    if (allChanges.length) {
+      const ws3 = XLSX.utils.aoa_to_sheet([
+        ['Budget Changes'],
+        [],
+        ['Phase','Date','Description','Delta Rev SAR','Delta Cost SAR','Delta MDs'],
+        ...allChanges,
+      ]);
+      ws3['!cols'] = [{wch:14},{wch:12},{wch:44},{wch:15},{wch:16},{wch:12}];
+      XLSX.utils.book_append_sheet(wb, ws3, 'Budget Changes');
+    }
+
+    const filename = `variance_${projName.replace(/[^a-zA-Z0-9]/g,'_')}_${now}.xlsx`;
+    XLSX.writeFile(wb, filename);
+
+  } catch(e) {
+    alert('Export failed: ' + e.message);
+    console.error(e);
+  } finally {
+    if (btn) { btn.textContent = '⬇ Export Excel'; btn.disabled = false; }
+  }
 }
