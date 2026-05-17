@@ -1813,138 +1813,114 @@ def api_me():
         try:
             if not odoo.uid: odoo.connect()
             nm = info['odoo_name'].lower().strip()
-            # Get projects where coordinator matches
-            try:
-                ext = odoo.models.execute_kw(
-                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                    'project.project', 'search_read',
-                    [[('active','=',True)]],
-                    {'fields':['id','name','coordinator_id'], 'limit':200}
-                )
-                for p in ext:
-                    coord = p.get('coordinator_id')
-                    coord_nm = (coord[1] if isinstance(coord,list) and len(coord)>1 else '').lower()
-                    if nm in coord_nm or coord_nm in nm:
-                        projects.append({'id':p['id'],'name':p['name']})
-            except:
-                pass
-        except:
-            pass
+            ext = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.project', 'search_read',
+                [[('active','=',True)]],
+                {'fields':['id','name','coordinator_id'], 'limit':200}
+            )
+            for p in ext:
+                coord = p.get('coordinator_id')
+                coord_nm = (coord[1] if isinstance(coord,list) and len(coord)>1 else '').lower()
+                if nm in coord_nm or coord_nm in nm:
+                    projects.append({'id':p['id'],'name':p['name']})
+        except: pass
     return jsonify({'ok':True, **info, 'projects': projects})
 
 @app.route('/api/odoo/coordinators')
 @login_required
 def api_odoo_coordinators():
-    """Employees with job_position = Project Coordinator, with their projects."""
     if current_role() != 'admin':
         return jsonify({'error':'Admin only'}), 403
     try:
         if not odoo.uid: odoo.connect()
-
-        # Step 1: Get employees with "Project Coordinator" job position
-        employees = odoo.models.execute_kw(
+        # Employees with coordinator in job title OR in PMO dept
+        emps_coord = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'hr.employee', 'search_read',
-            [[('job_id.name', 'ilike', 'coordinator'), ('active','=',True)]],
+            [[('job_id.name','ilike','coordinator'),('active','=',True)]],
             {'fields':['id','name','job_id','work_email'], 'limit':100}
         )
-
-        # Also get PMO department employees
-        pmo_emps = odoo.models.execute_kw(
+        emps_pmo = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'hr.employee', 'search_read',
-            [[('department_id.name','ilike','pmo'), ('active','=',True)]],
+            [[('department_id.name','ilike','pmo'),('active','=',True)]],
             {'fields':['id','name','job_id','work_email'], 'limit':100}
         )
-
-        # Merge, deduplicate
-        all_emp = {e['id']:e for e in employees}
-        for e in pmo_emps:
-            all_emp[e['id']] = e
+        all_emp = {e['id']:e for e in emps_coord}
+        for e in emps_pmo: all_emp[e['id']] = e
         emp_list = list(all_emp.values())
 
-        # Step 2: Get all projects with coordinator_id
+        # Get all projects with coordinator_id
         projects = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'project.project', 'search_read',
             [[('active','=',True)]],
             {'fields':['id','name','coordinator_id'], 'limit':300}
         )
-
-        # Build coordinator → projects map (matching by name)
-        coord_projects = {}  # emp_name → [project names]
+        coord_projects = {}
         for p in projects:
             coord = p.get('coordinator_id')
-            if coord and isinstance(coord, list) and len(coord) > 1:
+            if coord and isinstance(coord,list) and len(coord)>1:
                 cname = coord[1]
-                if cname not in coord_projects:
-                    coord_projects[cname] = []
-                coord_projects[cname].append({'id': p['id'], 'name': p['name']})
+                if cname not in coord_projects: coord_projects[cname] = []
+                coord_projects[cname].append({'id':p['id'],'name':p['name']})
 
         result = []
-        for e in emp_list:
+        for e in sorted(emp_list, key=lambda x: x['name']):
             job = e['job_id'][1] if isinstance(e.get('job_id'),list) else ''
-            my_projects = []
+            my_projs = []
             for cname, projs in coord_projects.items():
                 if e['name'].lower() in cname.lower() or cname.lower() in e['name'].lower():
-                    my_projects.extend(projs)
-            result.append({
-                'id':       e['id'],
-                'name':     e['name'],
-                'job':      job,
-                'email':    e.get('work_email',''),
-                'projects': my_projects,
-            })
-
-        result.sort(key=lambda x: x['name'])
-        return jsonify({'ok':True, 'employees': result})
-
+                    my_projs.extend(projs)
+            result.append({'id':e['id'],'name':e['name'],'job':job,
+                           'email':e.get('work_email',''),'projects':my_projs})
+        return jsonify({'ok':True,'employees':result})
     except Exception as e:
-        return jsonify({'ok':False,'error':str(e),'trace':traceback.format_exc()}), 500
+        return jsonify({'ok':False,'error':str(e),'trace':traceback.format_exc()}),500
 
 @app.route('/api/users', methods=['GET'])
 @login_required
 def api_users_list():
-    if current_role() != 'admin': return jsonify({'error':'Admin only'}),403
-    users = get_all_users()
-    safe = {u:{k:v for k,v in d.items() if k!='password'} for u,d in users.items()}
+    if current_role()!='admin': return jsonify({'error':'Admin only'}),403
+    users=get_all_users()
+    safe={u:{k:v for k,v in d.items() if k!='password'} for u,d in users.items()}
     return jsonify({'ok':True,'users':safe})
 
 @app.route('/api/users', methods=['POST'])
 @login_required
 def api_users_create():
-    if current_role() != 'admin': return jsonify({'error':'Admin only'}),403
-    data = request.get_json() or {}
-    username = (data.get('username') or '').strip().lower()
-    password = (data.get('password') or '').strip()
-    role     = data.get('role','pmo')
-    if not username or not password: return jsonify({'error':'username+password required'}),400
+    if current_role()!='admin': return jsonify({'error':'Admin only'}),403
+    data=request.get_json() or {}
+    un=(data.get('username') or '').strip().lower()
+    pw=(data.get('password') or '').strip()
+    role=data.get('role','pmo')
+    if not un or not pw: return jsonify({'error':'username+password required'}),400
     if role not in ('admin','management','pmo'): return jsonify({'error':'invalid role'}),400
-    users = get_all_users()
-    if username in users: return jsonify({'error':f'{username} already exists'}),409
-    users[username] = {'password':password,'role':role,
-                       'odoo_name':(data.get('odoo_name') or '').strip(),
-                       'display_name':(data.get('display_name') or username).strip()}
+    users=get_all_users()
+    if un in users: return jsonify({'error':f'{un} already exists'}),409
+    users[un]={'password':pw,'role':role,'odoo_name':(data.get('odoo_name') or '').strip(),
+               'display_name':(data.get('display_name') or un).strip()}
     db.set_override('system','global','pmo_users',users)
     return jsonify({'ok':True})
 
 @app.route('/api/users/<username>', methods=['PUT'])
 @login_required
 def api_users_update(username):
-    if current_role() != 'admin': return jsonify({'error':'Admin only'}),403
-    users = get_all_users()
+    if current_role()!='admin': return jsonify({'error':'Admin only'}),403
+    users=get_all_users()
     if username not in users: return jsonify({'error':'Not found'}),404
-    data = request.get_json() or {}
+    data=request.get_json() or {}
     for k in ('password','role','odoo_name','display_name'):
-        if k in data and data[k] is not None: users[username][k] = data[k]
+        if k in data and data[k] is not None: users[username][k]=data[k]
     db.set_override('system','global','pmo_users',users)
     return jsonify({'ok':True})
 
 @app.route('/api/users/<username>', methods=['DELETE'])
 @login_required
 def api_users_delete(username):
-    if current_role() != 'admin': return jsonify({'error':'Admin only'}),403
-    users = get_all_users()
+    if current_role()!='admin': return jsonify({'error':'Admin only'}),403
+    users=get_all_users()
     if username not in users: return jsonify({'error':'Not found'}),404
     del users[username]
     db.set_override('system','global','pmo_users',users)
@@ -1956,26 +1932,23 @@ def api_projects_inprogress():
     try:
         if not odoo.uid: odoo.connect()
         from datetime import datetime, timedelta
-        cutoff = (datetime.now()-timedelta(days=10)).strftime('%Y-%m-%d')
-        ts_list = odoo.models.execute_kw(
-            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+        cutoff=(datetime.now()-timedelta(days=10)).strftime('%Y-%m-%d')
+        ts=odoo.models.execute_kw(ODOO_DB,odoo.uid,ODOO_PASSWORD,
             'account.analytic.line','search_read',
             [[('date','>=',cutoff),('project_id','!=',False)]],
-            {'fields':['project_id','employee_id','date','unit_amount'],'limit':5000}
-        )
-        proj_map = {}
-        for ts in ts_list:
-            pid = ts['project_id'][0] if isinstance(ts['project_id'],list) else ts['project_id']
-            pnm = ts['project_id'][1] if isinstance(ts['project_id'],list) else ''
-            emp = ts['employee_id'][1] if isinstance(ts['employee_id'],list) else ''
-            hrs = float(ts.get('unit_amount') or 0)
-            if pid not in proj_map:
-                proj_map[pid]={'id':pid,'name':pnm,'total_hours':0,'employees':set(),'last_date':''}
-            proj_map[pid]['total_hours']+=hrs; proj_map[pid]['employees'].add(emp)
-            if ts['date']>proj_map[pid]['last_date']: proj_map[pid]['last_date']=ts['date']
+            {'fields':['project_id','employee_id','date','unit_amount'],'limit':5000})
+        pm={}
+        for t in ts:
+            pid=t['project_id'][0] if isinstance(t['project_id'],list) else t['project_id']
+            pnm=t['project_id'][1] if isinstance(t['project_id'],list) else ''
+            emp=t['employee_id'][1] if isinstance(t['employee_id'],list) else ''
+            hrs=float(t.get('unit_amount') or 0)
+            if pid not in pm: pm[pid]={'id':pid,'name':pnm,'total_hours':0,'employees':set(),'last_date':''}
+            pm[pid]['total_hours']+=hrs; pm[pid]['employees'].add(emp)
+            if t['date']>pm[pid]['last_date']: pm[pid]['last_date']=t['date']
         result=[{'id':p['id'],'name':p['name'],'total_hours':round(p['total_hours'],1),
                  'employee_count':len(p['employees']),'employees':sorted(p['employees']),'last_date':p['last_date']}
-                for p in sorted(proj_map.values(),key=lambda x:x['last_date'],reverse=True)]
+                for p in sorted(pm.values(),key=lambda x:x['last_date'],reverse=True)]
         return jsonify({'ok':True,'projects':result,'cutoff':cutoff})
     except Exception as e:
         return jsonify({'ok':False,'error':str(e),'trace':traceback.format_exc()}),500
@@ -2487,7 +2460,6 @@ def debug_projects_raw():
 
 @app.route('/api/projects/list')
 def api_projects_list():
-    _role=session.get('user_role','admin'); _odoo_nm=session.get('odoo_name','')
     """Fetch all projects from Odoo with stage, PM, dates, value."""
     try:
         if not odoo.uid:
@@ -2547,9 +2519,16 @@ def api_projects_list():
                 'stage_name':  stage_name,
                 'value':       float(ex.get('value') or 0),
             })
-        if _role=='pmo' and _odoo_nm:
-            result=[p for p in result if _odoo_nm.lower() in p.get('coordinator','').lower() or p.get('coordinator','').lower() in _odoo_nm.lower()]
-        return jsonify({'projects':result,'role':_role,'total':len(result)})
+        # ── PMO role: filter to coordinator's projects only ──────────────
+        role     = session.get('user_role', 'admin')
+        odoo_nm  = (session.get('odoo_name') or '').strip().lower()
+        if role == 'pmo' and odoo_nm:
+            result = [p for p in result
+                      if odoo_nm in (p.get('coordinator') or '').lower()
+                      or (p.get('coordinator') or '').lower() in odoo_nm]
+        return jsonify({'projects': result, 'role': role,
+                        'display_name': session.get('display_name',''),
+                        'total': len(result)})
     except Exception as e:
         logger.error(f"Projects list error: {e}", exc_info=True)
         return jsonify({'error': str(e), 'projects': []}), 500
