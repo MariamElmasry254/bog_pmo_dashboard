@@ -34,12 +34,10 @@ window.loadSalesOrders = async function() {
       const mapData = await mapRes.json();
       const soMap = mapData.plan_overrides?.so_line_map || {};
       for (const [lineId, fields] of Object.entries(soMap)) {
-        // load_plan_overrides returns: {lineId: {var_tab: 'support'}}
-        if (fields && typeof fields === 'object' && fields.var_tab) {
+        if (fields && typeof fields === 'object' && fields.var_tab)
           window.AppState._soLineVarMap[lineId] = fields.var_tab;
-        } else if (typeof fields === 'string' && fields) {
+        else if (typeof fields === 'string' && fields)
           window.AppState._soLineVarMap[lineId] = fields;
-        }
       }
     }
   } catch(e) {}
@@ -400,7 +398,7 @@ window.setSoLineVarTab = function(lineId, varTab) {
     headers: {'Content-Type':'application/json'},
     body: JSON.stringify({phase: 'so_line_map', month_key: String(lineId), field: 'var_tab', value: varTab})
   }).catch(()=>{});
-  // Clear full invoice cache so profitability reloads with new mapping from API
+  // Clear full invoice cache so variance reloads with new mapping
   if (window.AppState) {
     window.AppState._invoiceCumulative    = {};
     window.AppState._salesInvoicesByPhase = null;
