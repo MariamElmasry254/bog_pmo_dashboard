@@ -1,18 +1,18 @@
-// Hide BOG tabs instantly before Odoo API responds
+// Instantly hide wrong nav tabs before Odoo API responds
 (function(){
-  async function _setTabs(){
+  async function _fixTabs(){
     try{
       const d=await fetch('/api/project-info').then(r=>r.json());
       const bog=d.is_bog!==false;
       if(window.AppState){if(!AppState._overviewData)AppState._overviewData={};AppState._overviewData.is_bog=bog;}
-      ['services','missing','risks','roadmap'].forEach(t=>{
-        const el=document.querySelector('.exec-tab[data-tab="'+t+'"]');
+      ['services','missing','risks','roadmap'].forEach(function(t){
+        var el=document.querySelector('.exec-tab[data-tab="'+t+'"]');
         if(el)el.style.display=bog?'':'none';
       });
     }catch(e){}
   }
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',_setTabs);
-  else _setTabs();
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',_fixTabs);
+  else _fixTabs();
 })();
 
 /* Overview tab — Roadmap KPIs + Tasks Analysis with multi-phase + employee filter */
@@ -953,7 +953,8 @@ function renderPhaseFilters(phaseGroup, available) {
     const checked = (AppState.activePhases || []).includes(p);
     const label = p === 'No Phase' ? '📭 No Phase' : p;
     html += `<label class="phase-option ${checked ? 'selected' : ''}" data-phase="${encodeURIComponent(p)}">
-      <input type="checkbox" ${checked ? 'checked' : ''}><span dir="auto">${label}</span>
+      <input type="checkbox" ${checked ? 'checked' : ''}>
+      <span dir="auto">${label}</span>
     </label>`;
   });
   html += '</div></div>';
@@ -1319,33 +1320,36 @@ function renderTaskList(phaseGroup) {
 
   rootTasks.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
-  // Pagination: 10 default, 50 filtered
-  const isFiltered = !!(search || (typeFilter && typeFilter !== 'all') ||
-    (statusFilter && statusFilter !== 'all') || empFilterActive ||
-    (AppState.activePhases && AppState.activePhases.length));
-  const PAGE_SIZE = isFiltered ? 50 : 10;
-  const fKey = [search,typeFilter,statusFilter,(AppState.activeEmployees||[]).join(','),(AppState.activePhases||[]).join(',')].join('|');
-  if (AppState._lastFilterKey !== fKey) { AppState._taskPage = 0; AppState._lastFilterKey = fKey; }
+  // Pagination: show 10, load 10 more each time
+  const fKey = [search, typeFilter, statusFilter,
+    (AppState.activeEmployees||[]).join(','),
+    (AppState.activePhases||[]).join(',')].join('|');
+  if (AppState._taskFilterKey !== fKey) {
+    AppState._taskFilterKey = fKey;
+    AppState._taskPage = 0;
+  }
   if (!AppState._taskPage) AppState._taskPage = 0;
   AppState._lastPhaseGroup = phaseGroup;
-  const pageEnd = (AppState._taskPage + 1) * PAGE_SIZE;
-  const shownRoots = rootTasks.slice(0, pageEnd);
-  const hasMore = rootTasks.length > pageEnd;
+  const PAGE = 10;
+  const showN = (AppState._taskPage + 1) * PAGE;
+  const shownRoots = rootTasks.slice(0, showN);
+  const remaining  = rootTasks.length - showN;
 
   let html = `<div class="card">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-      <h3 class="card-title" style="margin:0;">Tasks <span class="muted-text">— ${matchedIds.size} match${matchedIds.size !== 1 ? 'es' : ''}${matchedIds.size < tasks.length ? ` · ${tasks.length - matchedIds.size} parent context` : ''}</span></h3>
-      <span class="muted-text" style="font-size: 11px;">Click parent to expand · Live from Odoo</span>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <h3 class="card-title" style="margin:0;">Tasks <span class="muted-text">— ${matchedIds.size} match${matchedIds.size!==1?'es':''}${matchedIds.size<tasks.length?` · ${tasks.length-matchedIds.size} parent context`:''}</span></h3>
+      <span class="muted-text" style="font-size:11px;">Click parent to expand · Live from Odoo</span>
     </div>
     <div class="task-analysis-list">`;
 
   shownRoots.forEach(t => { html += renderTaskBranch(t, 0); });
 
-  if (hasMore) {
-    html += `<div style="text-align:center;padding:16px 0;">
-      <button onclick="_ovLoadMore()" style="padding:7px 22px;border:1px solid var(--border);
-        border-radius:6px;background:var(--bg-subtle);cursor:pointer;font-size:13px;font-weight:600;color:var(--navy);">
-        Show more — ${rootTasks.length - pageEnd} remaining
+  if (remaining > 0) {
+    html += `<div style="text-align:center;padding:14px 0 4px;">
+      <button onclick="_ovLoadMore()" style="padding:7px 24px;border:1px solid var(--border);
+        border-radius:6px;background:var(--bg-subtle);cursor:pointer;font-size:13px;
+        font-weight:600;color:var(--navy);">
+        Show 10 more <span style="color:var(--muted);font-weight:400;">(${remaining} remaining)</span>
       </button></div>`;
   }
 
