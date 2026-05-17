@@ -82,14 +82,27 @@ window.loadVariance = async function() {
   const cont = document.getElementById('varianceContent');
   cont.innerHTML = '<div class="loading">Loading variance data…</div>';
 
-  // Check if this is BOG project (has variance.xlsx) or another project
-  const isBog = AppState._overviewData?.is_bog !== false;
+  // Always fetch is_bog fresh from API — don't rely on _overviewData which may not be loaded yet
+  let isBog = true;
+  try {
+    const cfgRes = await fetch('/api/project-phases-available');
+    if (cfgRes.ok) {
+      const cfgData = await cfgRes.json();
+      isBog = cfgData.is_bog !== false;
+      // Also store in AppState so other parts can use it
+      if (!AppState._overviewData) AppState._overviewData = {};
+      AppState._overviewData.is_bog = isBog;
+    }
+  } catch(e) {}
+
+  // Clear any stale invoice cache from previous project
+  AppState._invoiceCumulative    = {};
+  AppState._salesInvoicesByPhase = null;
 
   // Update sub-tab buttons based on project type
   const subTabBar = document.querySelector('#variance .sub-tabs-bar');
   if (subTabBar) {
     if (isBog) {
-      // BOG: Development / Consultation / Support / Travel / Promotions
       subTabBar.innerHTML = `
         <button class="sub-tab active" data-subtab="development">Development</button>
         <button class="sub-tab" data-subtab="consultation">Consultation</button>
@@ -97,12 +110,10 @@ window.loadVariance = async function() {
         <button class="sub-tab" data-subtab="travel">Travel &amp; Onsite</button>
         <button class="sub-tab" data-subtab="promotions">🎯 Promotions</button>`;
     } else {
-      // Non-BOG: Services / Support (support shown after phase check)
       subTabBar.innerHTML = `
         <button class="sub-tab active" data-subtab="services">Services</button>
         <button class="sub-tab" data-subtab="support">Support</button>`;
     }
-    // Re-wire tab click handlers
     subTabBar.querySelectorAll('.sub-tab').forEach(b => {
       b.addEventListener('click', () => {
         subTabBar.querySelectorAll('.sub-tab').forEach(x => x.classList.remove('active'));
@@ -1399,7 +1410,8 @@ async function profRecomputeAll(phaseKey) {
 
     // Only update latestData if this month has a % completion or remaining entry
     if (completionPct || remainingMDs) {
-      latestData = { completionPct, remainingMDs, eacMDs, cpi, profitAtComp, totalRevSAR, monthKey };
+      latestData = { completionPct, remainingMDs, eacMDs, cpi, profitAtComp, totalRevSAR, monthKey,
+                     eacCostSAR: estAtCompletion, currentCostSAR };
     }
     prevViAcc = viAcc;
   }  // end for..of rows
@@ -1419,12 +1431,14 @@ async function profRecomputeAll(phaseKey) {
   if (latestData.monthKey) {
     if (!AppState._latestProfData) AppState._latestProfData = {};
     AppState._latestProfData[phaseKey] = {
-      completionPct: latestData.completionPct,
-      remainingMDs:  latestData.remainingMDs,
-      eacMDs:        latestData.eacMDs,
-      cpi:           latestData.cpi,
-      profitAtComp:  latestData.profitAtComp,
-      monthKey:      latestData.monthKey,
+      completionPct:  latestData.completionPct,
+      remainingMDs:   latestData.remainingMDs,
+      eacMDs:         latestData.eacMDs,
+      eacCostSAR:     latestData.eacCostSAR,
+      currentCostSAR: latestData.currentCostSAR,
+      cpi:            latestData.cpi,
+      profitAtComp:   latestData.profitAtComp,
+      monthKey:       latestData.monthKey,
     };
     // Notify Overview to update its KPIs
     if (window._overviewUpdateProfKPIs) window._overviewUpdateProfKPIs(phaseKey);
