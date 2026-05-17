@@ -517,6 +517,25 @@ def handle_error(e):
 # ════════════════════════════════════════════════════════════════════
 DASHBOARD_USER = os.environ.get('DASHBOARD_USER', 'codelab')
 DASHBOARD_PASS = os.environ.get('DASHBOARD_PASS', 'pmo2026')
+ADMIN_USER = os.environ.get('ADMIN_USER', DASHBOARD_USER)
+ADMIN_PASS = os.environ.get('ADMIN_PASS', DASHBOARD_PASS)
+
+def get_all_users():
+    try: return db.get_override('system', 'global', 'pmo_users') or {}
+    except: return {}
+
+def authenticate_user(username, password):
+    if username == ADMIN_USER and password == ADMIN_PASS:
+        return 'admin', {'username':username,'display_name':'Admin','role':'admin','odoo_name':''}
+    u = get_all_users().get(username)
+    if u and u.get('password') == password:
+        return u.get('role','pmo'), u
+    return None, None
+
+def current_role(): return session.get('user_role', 'admin')
+def current_user_info():
+    return {'username':session.get('username',''), 'display_name':session.get('display_name',''),
+            'role':session.get('user_role','admin'), 'odoo_name':session.get('odoo_name','')}
 
 
 def login_required(f):
@@ -536,10 +555,20 @@ def login():
         data = request.get_json(silent=True) or {}
         username = data.get('username') or request.form.get('username', '')
         password = data.get('password') or request.form.get('password', '')
-        if username == DASHBOARD_USER and password == DASHBOARD_PASS:
-            session['logged_in'] = True
+        role, user_info = authenticate_user(username, password)
+        if role:
+            session['logged_in']    = True
+            session['user_role']    = role
+            session['username']     = username
+            session['display_name'] = user_info.get('display_name', username)
+            session['odoo_name']    = user_info.get('odoo_name', '')
             session.permanent = True
-            return jsonify({'ok': True, 'redirect': '/projects'}) if request.is_json else redirect('/projects')
+            if request.is_json:
+                resp = jsonify({'ok':True,'redirect':'/projects','role':role})
+            else:
+                resp = redirect('/projects')
+            resp.set_cookie('pmo_role', role, max_age=86400*30, samesite='Lax')
+            return resp
         error = 'Invalid credentials'
         if request.is_json:
             return jsonify({'ok': False, 'error': error}), 401
@@ -549,7 +578,9 @@ def login():
 @app.route('/logout')
 def logout():
     session.clear()
-    return redirect('/login')
+    resp = redirect('/login')
+    resp.set_cookie('pmo_role', '', expires=0)
+    return resp
 
 
 @app.route('/')
@@ -569,7 +600,9 @@ def projects_list():
     # Try both locations
     import os
     tmpl_dir = app.template_folder
-    return render_template('partials/projects.html')
+    display_name=session.get('display_name','')
+    role=session.get('user_role','admin')
+    return render_template('partials/projects.html', display_name=display_name, role=role)
 
 
 @app.route('/project/select', methods=['POST'])
@@ -1773,6 +1806,140 @@ def api_overview_phase_progress():
     return jsonify({'ok': True, 'phases': result})
 
 
+@app.route('/api/project-info')
+def api_project_info():
+    proj_id = session.get('project_id')
+    is_bog  = not proj_id or str(proj_id) == '228'
+    return jsonify({'ok':True,'project_id':proj_id,
+                    'project_name':session.get('project_name',''),'is_bog':is_bog})
+
+@app.route('/api/me')
+@login_required
+def api_me():
+    info = current_user_info()
+    projects = []
+    if info['role'] == 'pmo' and info['odoo_name']:
+        try:
+            if not odoo.uid: odoo.connect()
+            nm = info['odoo_name'].lower().strip()
+            ext = odoo.models.execute_kw(ODOO_DB,odoo.uid,ODOO_PASSWORD,
+                'project.project','search_read',[[('active','=',True)]],
+                {'fields':['id','name','coordinator_id'],'limit':200})
+            for p in ext:
+                coord = p.get('coordinator_id')
+                cn = (coord[1] if isinstance(coord,list) and len(coord)>1 else '').lower()
+                if nm in cn or cn in nm: projects.append({'id':p['id'],'name':p['name']})
+        except: pass
+    return jsonify({'ok':True,**info,'projects':projects})
+
+@app.route('/api/odoo/coordinators')
+@login_required
+def api_odoo_coordinators():
+    if current_role()!='admin': return jsonify({'error':'Admin only'}),403
+    try:
+        if not odoo.uid: odoo.connect()
+        e1=odoo.models.execute_kw(ODOO_DB,odoo.uid,ODOO_PASSWORD,'hr.employee','search_read',
+            [[('job_id.name','ilike','coordinator'),('active','=',True)]],
+            {'fields':['id','name','job_id','work_email'],'limit':100})
+        e2=odoo.models.execute_kw(ODOO_DB,odoo.uid,ODOO_PASSWORD,'hr.employee','search_read',
+            [[('department_id.name','ilike','pmo'),('active','=',True)]],
+            {'fields':['id','name','job_id','work_email'],'limit':100})
+        all_e={e['id']:e for e in e1}
+        for e in e2: all_e[e['id']]=e
+        projs=odoo.models.execute_kw(ODOO_DB,odoo.uid,ODOO_PASSWORD,'project.project','search_read',
+            [[('active','=',True)]],{'fields':['id','name','coordinator_id'],'limit':300})
+        cp={}
+        for p in projs:
+            coord=p.get('coordinator_id')
+            if coord and isinstance(coord,list) and len(coord)>1:
+                cn=coord[1]
+                if cn not in cp: cp[cn]=[]
+                cp[cn].append({'id':p['id'],'name':p['name']})
+        result=[]
+        for e in sorted(all_e.values(),key=lambda x:x['name']):
+            job=e['job_id'][1] if isinstance(e.get('job_id'),list) else ''
+            mp=[]
+            for cn,plist in cp.items():
+                if e['name'].lower() in cn.lower() or cn.lower() in e['name'].lower(): mp.extend(plist)
+            result.append({'id':e['id'],'name':e['name'],'job':job,'email':e.get('work_email',''),'projects':mp})
+        return jsonify({'ok':True,'employees':result})
+    except Exception as ex:
+        return jsonify({'ok':False,'error':str(ex),'trace':traceback.format_exc()}),500
+
+@app.route('/api/users',methods=['GET'])
+@login_required
+def api_users_list():
+    if current_role()!='admin': return jsonify({'error':'Admin only'}),403
+    users=get_all_users()
+    return jsonify({'ok':True,'users':{u:{k:v for k,v in d.items() if k!='password'} for u,d in users.items()}})
+
+@app.route('/api/users',methods=['POST'])
+@login_required
+def api_users_create():
+    if current_role()!='admin': return jsonify({'error':'Admin only'}),403
+    data=request.get_json() or {}
+    un=(data.get('username') or '').strip().lower()
+    pw=(data.get('password') or '').strip()
+    role=data.get('role','pmo')
+    if not un or not pw: return jsonify({'error':'username+password required'}),400
+    if role not in ('admin','management','pmo'): return jsonify({'error':'invalid role'}),400
+    users=get_all_users()
+    if un in users: return jsonify({'error':f'{un} already exists'}),409
+    users[un]={'password':pw,'role':role,
+               'odoo_name':(data.get('odoo_name') or '').strip(),
+               'display_name':(data.get('display_name') or un).strip()}
+    db.set_override('system','global','pmo_users',users)
+    return jsonify({'ok':True})
+
+@app.route('/api/users/<username>',methods=['PUT'])
+@login_required
+def api_users_update(username):
+    if current_role()!='admin': return jsonify({'error':'Admin only'}),403
+    users=get_all_users()
+    if username not in users: return jsonify({'error':'Not found'}),404
+    data=request.get_json() or {}
+    for k in ('password','role','odoo_name','display_name'):
+        if k in data and data[k] is not None: users[username][k]=data[k]
+    db.set_override('system','global','pmo_users',users)
+    return jsonify({'ok':True})
+
+@app.route('/api/users/<username>',methods=['DELETE'])
+@login_required
+def api_users_delete(username):
+    if current_role()!='admin': return jsonify({'error':'Admin only'}),403
+    users=get_all_users()
+    if username not in users: return jsonify({'error':'Not found'}),404
+    del users[username]
+    db.set_override('system','global','pmo_users',users)
+    return jsonify({'ok':True})
+
+@app.route('/api/projects/inprogress')
+@login_required
+def api_projects_inprogress():
+    try:
+        if not odoo.uid: odoo.connect()
+        from datetime import datetime,timedelta
+        cutoff=(datetime.now()-timedelta(days=10)).strftime('%Y-%m-%d')
+        ts=odoo.models.execute_kw(ODOO_DB,odoo.uid,ODOO_PASSWORD,
+            'account.analytic.line','search_read',
+            [[('date','>=',cutoff),('project_id','!=',False)]],
+            {'fields':['project_id','employee_id','date','unit_amount'],'limit':5000})
+        pm={}
+        for t in ts:
+            pid=t['project_id'][0] if isinstance(t['project_id'],list) else t['project_id']
+            pnm=t['project_id'][1] if isinstance(t['project_id'],list) else ''
+            emp=t['employee_id'][1] if isinstance(t['employee_id'],list) else ''
+            hrs=float(t.get('unit_amount') or 0)
+            if pid not in pm: pm[pid]={'id':pid,'name':pnm,'total_hours':0,'employees':set(),'last_date':''}
+            pm[pid]['total_hours']+=hrs; pm[pid]['employees'].add(emp)
+            if t['date']>pm[pid]['last_date']: pm[pid]['last_date']=t['date']
+        result=[{'id':p['id'],'name':p['name'],'total_hours':round(p['total_hours'],1),
+                 'employee_count':len(p['employees']),'employees':sorted(p['employees']),'last_date':p['last_date']}
+                for p in sorted(pm.values(),key=lambda x:x['last_date'],reverse=True)]
+        return jsonify({'ok':True,'projects':result,'cutoff':cutoff})
+    except Exception as ex:
+        return jsonify({'ok':False,'error':str(ex),'trace':traceback.format_exc()}),500
+
 @app.route('/api/project-phases-available')
 def api_project_phases_available():
     """Check which phase groups exist for this project — uses Excel config first."""
@@ -2285,12 +2452,38 @@ def api_projects_list():
         if not odoo.uid:
             if not odoo.connect():
                 return jsonify({'error': 'Odoo not connected', 'projects': []}), 503
-        # Fetch projects — use minimal safe fields first, then try optional ones
-        safe_fields = ['id', 'name', 'user_id', 'date_start', 'end_date', 'stage_id']
+        safe_fields = ['id', 'name', 'user_id', 'date_start', 'end_date', 'stage_id', 'coordinator_id']
+        _role    = session.get('user_role', 'admin')
+        _odoo_nm = (session.get('odoo_name') or '').strip()
+        pmo_proj_ids = None
+        if _role == 'pmo' and _odoo_nm:
+            try:
+                users_found = odoo.models.execute_kw(ODOO_DB,odoo.uid,ODOO_PASSWORD,
+                    'res.users','search_read',[[('name','ilike',_odoo_nm)]],
+                    {'fields':['id','name'],'limit':5})
+                if not users_found:
+                    emps = odoo.models.execute_kw(ODOO_DB,odoo.uid,ODOO_PASSWORD,
+                        'hr.employee','search_read',
+                        [[('name','ilike',_odoo_nm),('active','=',True)]],
+                        {'fields':['id','name','user_id'],'limit':5})
+                    uid_list = [e['user_id'][0] for e in emps if isinstance(e.get('user_id'),list)]
+                else:
+                    uid_list = [u['id'] for u in users_found]
+                if uid_list:
+                    cp = odoo.models.execute_kw(ODOO_DB,odoo.uid,ODOO_PASSWORD,
+                        'project.project','search_read',
+                        [[('coordinator_id','in',uid_list)]],
+                        {'fields':['id'],'limit':200})
+                    pmo_proj_ids = [p['id'] for p in cp]
+                else:
+                    pmo_proj_ids = []
+            except Exception as _pe:
+                logger.warning(f"PMO filter error: {_pe}")
+        domain = [('id','in',pmo_proj_ids)] if pmo_proj_ids is not None else []
         projects = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'project.project', 'search_read',
-            [[]],   # all projects (active filter may differ by Odoo version)
+            [domain],
             {'fields': safe_fields, 'limit': 300, 'order': 'name asc'}
         )
 
@@ -2311,7 +2504,7 @@ def api_projects_list():
         for p in projects:
             pm    = p.get('user_id')
             ex    = extra_map.get(p['id'], {})
-            coord = ex.get('coordinator_id') or []
+            coord = p.get('coordinator_id') or ex.get('coordinator_id') or []
             stage = p.get('stage_id')
             stage_name = (stage[1] if isinstance(stage, list) and len(stage) > 1 else '') or ''
 
@@ -2339,7 +2532,7 @@ def api_projects_list():
                 'stage_name':  stage_name,
                 'value':       float(ex.get('value') or 0),
             })
-        return jsonify({'projects': result})
+        return jsonify({'projects':result,'role':_role if '_role' in dir() else 'admin','display_name':session.get('display_name',''),'total':len(result)})
     except Exception as e:
         logger.error(f"Projects list error: {e}", exc_info=True)
         return jsonify({'error': str(e), 'projects': []}), 500
@@ -6419,8 +6612,11 @@ def api_plan_overrides_get():
         value     = body.get('value')
         if not phase or not month_key or not field:
             return jsonify({'error': 'phase, month_key, field required'}), 400
-        # Save: namespace=plan, subkey=phase, key=month_key.field
-        proj_set_override('plan', phase, f'{month_key}.{field}', value)
+        if phase in ('so_line_map', 'direct_inv_phase'):
+            proj_set_override('plan', phase, month_key, value)
+            proj_set_override('plan', phase, f'{month_key}.{field}', value)
+        else:
+            proj_set_override('plan', phase, f'{month_key}.{field}', value)
         return jsonify({'ok': True, 'phase': phase, 'month_key': month_key, 'field': field})
     return jsonify(load_plan_overrides())
 
@@ -7729,15 +7925,12 @@ def api_sales_orders():
         plan_ns = f'{pfx}_plan' if pfx else 'plan'
         so_map_raw = db.get_namespace_overrides(plan_ns, 'so_line_map') or {}
         for raw_key, val in so_map_raw.items():
-            # POST saves as key='12345.var_tab', value='support'
-            if raw_key.endswith('.var_tab'):
-                line_id = raw_key[:-len('.var_tab')]
-                if isinstance(val, str) and val:
-                    line_var_map[line_id] = val
-            elif isinstance(val, dict) and val.get('var_tab'):
+            if isinstance(val,str) and val and not raw_key.endswith('.var_tab'):
+                line_var_map[raw_key] = val
+            elif raw_key.endswith('.var_tab') and isinstance(val,str) and val:
+                line_var_map[raw_key[:-len('.var_tab')]] = val
+            elif isinstance(val,dict) and val.get('var_tab'):
                 line_var_map[str(raw_key)] = val['var_tab']
-            elif isinstance(val, str) and val:
-                line_var_map[str(raw_key)] = val
     except Exception:
         pass
     try:
@@ -7850,14 +8043,11 @@ def api_sales_orders():
             # Classify each direct invoice by saved override or auto-detection
             def classify_direct_inv(inv_id, inv_name=''):
                 key = (inv_name or '').replace('/', '_')
-                # POST saves as key='INV_2025_0057.phase', value='support'
-                phase_val = dir_inv_overrides.get(f'{key}.phase')
-                if phase_val and isinstance(phase_val, str):
-                    return phase_val
-                # Fallback: legacy dict format
-                override = dir_inv_overrides.get(key, {})
-                if isinstance(override, dict) and override.get('phase'):
-                    return override['phase']
+                v = dir_inv_overrides.get(key)
+                if v and isinstance(v, str): return v
+                v2 = dir_inv_overrides.get(f'{key}.phase')
+                if v2 and isinstance(v2, str): return v2
+                if isinstance(v, dict) and v.get('phase'): return v['phase']
                 inv_lines_for = [l for l in dir_inv_lines
                                  if (l['move_id'][0] if isinstance(l['move_id'],list) else l['move_id']) == inv_id]
                 for l in inv_lines_for:
@@ -8118,169 +8308,158 @@ def api_sales_orders():
         return jsonify({'ok': False, 'error': str(e), 'trace': traceback.format_exc()}), 500
 
 
-@app.route('/api/all-sales-orders')
-def api_all_sales_orders():
-    """Return all confirmed/done SOs with their invoices, detecting project via analytic account."""
-    try:
-        if not odoo.uid: odoo.connect()
+@app.route('/api/variance/export-pmo', methods=['POST'])
+@login_required
+def api_variance_export_pmo():
+    from flask import send_file
+    import io, openpyxl
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
 
-        # Step 1: Get all confirmed + done SOs
-        sos = odoo.models.execute_kw(
-            ODOO_DB, odoo.uid, ODOO_PASSWORD,
-            'sale.order', 'search_read',
-            [[('state', 'in', ['sale', 'done'])]],
-            {'fields': ['id', 'name', 'partner_id', 'date_order', 'state',
-                        'amount_untaxed', 'amount_tax', 'amount_total',
-                        'invoice_status', 'invoice_ids'],
-             'limit': 500, 'order': 'date_order desc'}
-        )
-        if not sos:
-            return jsonify({'ok': True, 'orders': [], 'summary': {}})
+    data      = request.get_json() or {}
+    proj_name = data.get('project_name', active_project_name() or 'Project')
+    phases    = data.get('phases', [])
+    gen_date  = data.get('generated', date.today().isoformat())
 
-        so_ids    = [s['id'] for s in sos]
-        inv_ids_all = []
-        so_inv_map  = {}  # so_id -> [inv_id]
-        for s in sos:
-            ids = s.get('invoice_ids') or []
-            so_inv_map[s['id']] = ids
-            inv_ids_all.extend(ids)
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
 
-        # Step 2: Get posted invoices + their analytic accounts
-        project_by_inv = {}   # inv_id -> project_name
-        analytic_by_inv = {}  # inv_id -> analytic_account_name
+    NAVY='1B2A4E'; ACCENT='1E3A5F'; MID='2D5F8A'; GREEN='065F46'; RED='991B1B'
+    AMBER='92400E'; LGRAY='F8FAFC'; WHITE='FFFFFF'; DKBLUE='0C1E3C'
 
-        if inv_ids_all:
-            # Get invoice basic info
-            invoices = odoo.models.execute_kw(
-                ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                'account.move', 'search_read',
-                [[('id', 'in', inv_ids_all),
-                  ('state', '=', 'posted'),
-                  ('move_type', '=', 'out_invoice')]],
-                {'fields': ['id', 'name', 'invoice_date', 'invoice_date_due',
-                            'amount_untaxed', 'amount_tax', 'amount_total',
-                            'state', 'payment_state', 'narration', 'ref',
-                            'invoice_line_ids'],
-                 'limit': 2000}
-            )
-            inv_map = {i['id']: i for i in invoices}
+    def fill(h): return PatternFill('solid',fgColor=h)
+    def font(h='1E293B',bold=False,sz=10,italic=False):
+        return Font(name='Arial',color=h,bold=bold,size=sz,italic=italic)
+    def al(h='left',v='center',wrap=False): return Alignment(horizontal=h,vertical=v,wrap_text=wrap)
+    def thin(c='CBD5E1'): s=Side(style='thin',color=c); return Border(left=s,right=s,top=s,bottom=s)
+    def btm(c='CBD5E1'): return Border(bottom=Side(style='thin',color=c))
+    def sc(ws,r,col,v,f=None,fn=None,a=None,b=None,nf=None):
+        cell=ws.cell(row=r,column=col,value=v)
+        if f: cell.fill=f
+        if fn: cell.font=fn
+        if a: cell.alignment=a
+        if b: cell.border=b
+        if nf: cell.number_format=nf
+        return cell
 
-            # Get analytic accounts from invoice lines
-            all_line_ids = []
-            for inv in invoices:
-                all_line_ids.extend(inv.get('invoice_line_ids', []))
+    PHASE_INFO={'services':('Services',NAVY,ACCENT),'support':('Support',MID,ACCENT),
+                'development':('Development',NAVY,ACCENT),'consultation':('Consultation',MID,ACCENT)}
 
-            if all_line_ids:
-                inv_lines = odoo.models.execute_kw(
-                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                    'account.move.line', 'search_read',
-                    [[('id', 'in', all_line_ids),
-                      ('display_type', 'not in', ['line_section', 'line_note'])]],
-                    {'fields': ['move_id', 'analytic_account_id'], 'limit': 5000}
-                )
-                # Map invoice -> analytic account
-                inv_analytic = {}  # inv_id -> analytic_account_id
-                for l in inv_lines:
-                    mid = l['move_id'][0] if isinstance(l['move_id'], list) else l['move_id']
-                    aa  = l.get('analytic_account_id')
-                    if aa and isinstance(aa, list) and aa[0]:
-                        inv_analytic[mid] = aa  # [id, name]
+    COL_GROUPS=[
+        ('Month',14,None,'left','General',NAVY),
+        ('Variance %',10,'0.0%','center','General',NAVY),
+        ('Total Revenue (SAR)',16,'#,##0','right','Budget',ACCENT),
+        ('Total Est. Cost (SAR)',16,'#,##0','right','Budget',ACCENT),
+        ('Est. Effort MDs',13,'#,##0.0','center','Budget',ACCENT),
+        ('This Month MDs',13,'#,##0.0','center','Current Month',MID),
+        ('Actual Effort to Date (MD)',16,'#,##0.0','center','Current Month',MID),
+        ('% Completion',13,'0.0%','center','Current Month',MID),
+        ('Current Cost (SAR)',16,'#,##0','right','Current Month',MID),
+        ('Est. Remaining (MD)',14,'#,##0.0','center','Profitability','334155'),
+        ('EAC MDs',12,'#,##0.0','center','Profitability','334155'),
+        ('Est. Cost to Complete SAR',16,'#,##0','right','Profitability','334155'),
+        ('Est. at Completion SAR',17,'#,##0','right','Profitability','334155'),
+        ('CPI',10,'0.00','center','Profitability','334155'),
+        ('Cost Variance SAR',15,'#,##0','right','Profitability','334155'),
+        ('Profit at Comp SAR',15,'#,##0','right','Profitability','334155'),
+        ('Progress %',12,'0.0%','center','Progress & VI','1E3A5F'),
+        ('Virtual Invoice SAR',16,'#,##0','right','Progress & VI','1E3A5F'),
+    ]
+    NCOLS=len(COL_GROUPS)
 
-                # Get project names from analytic accounts
-                analytic_ids = list({aa[0] for aa in inv_analytic.values()})
-                if analytic_ids:
-                    projects = odoo.models.execute_kw(
-                        ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                        'project.project', 'search_read',
-                        [[('analytic_account_id', 'in', analytic_ids)]],
-                        {'fields': ['id', 'name', 'analytic_account_id'], 'limit': 300}
-                    )
-                    analytic_to_proj = {
-                        p['analytic_account_id'][0]: p['name']
-                        for p in projects if p.get('analytic_account_id')
-                    }
-                    for inv_id, aa in inv_analytic.items():
-                        proj_name = analytic_to_proj.get(aa[0])
-                        if proj_name:
-                            project_by_inv[inv_id]  = proj_name
-                        analytic_by_inv[inv_id] = aa[1] if len(aa) > 1 else ''
-        else:
-            inv_map = {}
+    # Summary sheet
+    ws=wb.create_sheet('Summary'); ws.sheet_view.showGridLines=False
+    for ci,w in enumerate([26,20,20,14,14,14],1):
+        ws.column_dimensions[get_column_letter(ci)].width=w
+    ws.row_dimensions[1].height=44; ws.merge_cells('A1:F1')
+    sc(ws,1,1,'ENVNT.',fill(NAVY),font(WHITE,True,18),al('left','center'))
+    ws.row_dimensions[2].height=28; ws.merge_cells('A2:F2')
+    sc(ws,2,1,proj_name,fill(ACCENT),font(WHITE,True,14),al('left','center'))
+    ws.row_dimensions[3].height=18; ws.merge_cells('A3:F3')
+    sc(ws,3,1,f'Variance Report  ·  Generated {gen_date}',
+       fill(DKBLUE),font('93C5FD',False,9,True),al('left','center'))
+    ws.row_dimensions[5].height=20
+    for ci,(h,a) in enumerate(zip(['Phase','Current Cost (SAR)','EAC (SAR)','% Complete','Remaining MDs','As of'],
+                                   ['left','right','right','center','center','center']),1):
+        sc(ws,5,ci,h,fill(NAVY),font(WHITE,True,9),al(a,'center'),thin())
+    total_cost=total_eac=0; row=6
+    for ph in phases:
+        ph_key=ph.get('phase',''); ph_label,ph_color,ph_dark=PHASE_INFO.get(ph_key,(ph_key.title(),NAVY,ACCENT))
+        latest=ph.get('latestData',{})
+        cost=latest.get('currentCostSAR',0) or 0; eac=latest.get('eacCostSAR',0) or cost
+        pct=latest.get('completionPct',0) or 0; rem=latest.get('remainingMDs',0) or 0
+        mk=latest.get('monthKey',''); total_cost+=cost; total_eac+=eac
+        ws.row_dimensions[row].height=20
+        sc(ws,row,1,ph_label,fill(ph_color),font(WHITE,True,10),al('left','center'))
+        sc(ws,row,2,cost,fill(LGRAY),font(bold=True),al('right','center'),nf='#,##0')
+        sc(ws,row,3,eac,fill(LGRAY),font(bold=True),al('right','center'),nf='#,##0')
+        sc(ws,row,4,pct/100 if pct else 0,fill(LGRAY),font(bold=True),al('center','center'),nf='0.0%')
+        sc(ws,row,5,rem,fill(LGRAY),font(bold=True),al('center','center'),nf='#,##0.0')
+        sc(ws,row,6,mk,fill(LGRAY),font('64748B'),al('center','center')); row+=1
+    ws.row_dimensions[row].height=24
+    sc(ws,row,1,'TOTAL',fill(NAVY),font(WHITE,True,11),al('left','center'))
+    sc(ws,row,2,total_cost,fill(NAVY),font(WHITE,True),al('right','center'),nf='#,##0')
+    sc(ws,row,3,total_eac,fill(NAVY),font(WHITE,True),al('right','center'),nf='#,##0')
+    for ci in [4,5,6]: sc(ws,row,ci,'',fill(NAVY))
 
-        # Step 3: Build response
-        fSAR = lambda v: round(float(v or 0), 2)
-        orders = []
-        total_untaxed = 0
-        total_invoiced = 0
+    # Phase sheets
+    for ph in phases:
+        ph_key=ph.get('phase',''); months=ph.get('months',[])
+        if not months: continue
+        ph_label,ph_color,ph_dark=PHASE_INFO.get(ph_key,(ph_key.title(),NAVY,ACCENT))
+        ws2=wb.create_sheet(ph_label); ws2.sheet_view.showGridLines=False; ws2.freeze_panes='B5'
+        for ci,(_nm,w,*_) in enumerate(COL_GROUPS,1):
+            ws2.column_dimensions[get_column_letter(ci)].width=w
+        ws2.row_dimensions[1].height=40
+        ws2.merge_cells(f'A1:{get_column_letter(NCOLS)}1')
+        sc(ws2,1,1,f'ENVNT.  ·  {proj_name}  ·  {ph_label}',
+           fill(ph_color),font(WHITE,True,14),al('left','center'))
+        latest=ph.get('latestData',{}); mk=latest.get('monthKey','')
+        cost=latest.get('currentCostSAR',0) or 0; eac=latest.get('eacCostSAR',0) or cost
+        pct=latest.get('completionPct',0) or 0; rem=latest.get('remainingMDs',0) or 0
+        ws2.row_dimensions[2].height=22
+        ws2.merge_cells(f'A2:{get_column_letter(NCOLS)}2')
+        sc(ws2,2,1,f'As of {mk}   ·   Current Cost: {cost:,.0f} SAR   ·   EAC: {eac:,.0f} SAR   ·   {pct:.1f}% Complete   ·   {rem:.1f} MDs Remaining',
+           fill(ph_dark),font('BFDBFE',False,9,True),al('left','center'))
+        # Group labels row 3
+        ws2.row_dimensions[3].height=18
+        groups_seen={}
+        for ci,(_,__,___,____,grp,gc) in enumerate(COL_GROUPS,1):
+            if grp not in groups_seen: groups_seen[grp]={'start':ci,'color':gc}
+            groups_seen[grp]['end']=ci
+        for grp,info in groups_seen.items():
+            s,e,gc=info['start'],info['end'],info['color']
+            if s<e: ws2.merge_cells(f'{get_column_letter(s)}3:{get_column_letter(e)}3')
+            sc(ws2,3,s,grp,fill(gc),font(WHITE,True,8),al('center','center'))
+        # Col headers row 4
+        ws2.row_dimensions[4].height=24
+        for ci,(_nm,_w,_nf,_al,_grp,_gc) in enumerate(COL_GROUPS,1):
+            sc(ws2,4,ci,_nm,fill('1E293B'),font(WHITE,True,8),al('center','center',True),thin())
+        # Data
+        for ri,m in enumerate(months,5):
+            ws2.row_dimensions[ri].height=18
+            bg=WHITE if ri%2==1 else 'EFF6FF'
+            cpi_v=m.get('cpi',0) or 0; cv_v=m.get('costVarianceSAR',0) or 0; pr_v=m.get('profitAtComp',0) or 0
+            vals=[m.get('month',''),
+                  (m.get('variancePct',0) or 0)/100,
+                  latest.get('totalRevSAR',0) or 0,0,0,
+                  m.get('actualMDs',0) or 0,m.get('actualMDs',0) or 0,
+                  (m.get('completionPct',0) or 0)/100,m.get('currentCostSAR',0) or 0,
+                  m.get('remainingMDs',0) or 0,m.get('eacMDs',0) or 0,
+                  (m.get('estAtCompletion',0) or 0)-(m.get('currentCostSAR',0) or 0),
+                  m.get('estAtCompletion',0) or 0,cpi_v,cv_v,pr_v,
+                  (m.get('progressPct',0) or 0)/100,m.get('virtualInvoice',0) or 0]
+            for ci,(v,(_nm,_w,nf,_al,_grp,_gc)) in enumerate(zip(vals,COL_GROUPS),1):
+                fc='1E293B'
+                if ci==14: fc=GREEN if cpi_v>=1 else AMBER if cpi_v>0 else RED
+                elif ci in [15,16]: fc=GREEN if (cv_v if ci==15 else pr_v)>=0 else RED
+                sc(ws2,ri,ci,v,fill(bg),font(fc,False,9),al(_al,'center'),btm(),nf)
 
-        for s in sos:
-            inv_ids  = so_inv_map.get(s['id'], [])
-            invoices_for_so = [inv_map[i] for i in inv_ids if i in inv_map]
-
-            # Detect project: majority vote from invoices
-            proj_counts = {}
-            for inv in invoices_for_so:
-                pn = project_by_inv.get(inv['id'])
-                if pn:
-                    proj_counts[pn] = proj_counts.get(pn, 0) + inv.get('amount_untaxed', 0)
-            project_name = max(proj_counts, key=proj_counts.get) if proj_counts else ''
-
-            invoiced_amt = sum(i.get('amount_untaxed', 0) for i in invoices_for_so)
-
-            inv_list = [{
-                'id':            i['id'],
-                'name':          i['name'],
-                'date':          (i.get('invoice_date') or '')[:10],
-                'due_date':      (i.get('invoice_date_due') or '')[:10],
-                'amount_untaxed': fSAR(i.get('amount_untaxed', 0)),
-                'amount_tax':    fSAR(i.get('amount_tax', 0)),
-                'amount_total':  fSAR(i.get('amount_total', 0)),
-                'state':         i.get('state', ''),
-                'payment_state': i.get('payment_state', ''),
-                'purpose':       i.get('narration') or i.get('ref') or '',
-                'project':       project_by_inv.get(i['id'], ''),
-            } for i in invoices_for_so]
-
-            amt = fSAR(s.get('amount_untaxed', 0))
-            total_untaxed  += amt
-            total_invoiced += invoiced_amt
-            remaining = round(amt - invoiced_amt, 2)
-
-            orders.append({
-                'id':             s['id'],
-                'name':           s['name'],
-                'partner':        s['partner_id'][1] if s.get('partner_id') else '',
-                'date':           (s.get('date_order') or '')[:10],
-                'state':          s.get('state', ''),
-                'amount_untaxed': amt,
-                'amount_tax':     fSAR(s.get('amount_tax', 0)),
-                'amount_total':   fSAR(s.get('amount_total', 0)),
-                'invoice_status': s.get('invoice_status', ''),
-                'invoiced_amt':   round(invoiced_amt, 2),
-                'remaining':      remaining,
-                'invoiced_pct':   round(invoiced_amt / amt * 100, 1) if amt > 0 else 0,
-                'project':        project_name,
-                'invoices':       inv_list,
-            })
-
-        total_remaining = round(total_untaxed - total_invoiced, 2)
-        overall_pct     = round(total_invoiced / total_untaxed * 100, 1) if total_untaxed > 0 else 0
-
-        return jsonify({
-            'ok': True,
-            'orders': orders,
-            'summary': {
-                'total_orders':    len(orders),
-                'total_untaxed':   round(total_untaxed, 2),
-                'total_invoiced':  round(total_invoiced, 2),
-                'total_remaining': total_remaining,
-                'overall_pct':     overall_pct,
-            }
-        })
-
-    except Exception as e:
-        import traceback
-        return jsonify({'ok': False, 'error': str(e), 'trace': traceback.format_exc()}), 500
+    buf=io.BytesIO(); wb.save(buf); buf.seek(0)
+    fn=f'{proj_name.replace(" ","_")}_Variance_{date.today().isoformat()}.xlsx'
+    return send_file(buf,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True, download_name=fn)
 
 
 if __name__ == '__main__':
