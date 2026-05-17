@@ -7728,22 +7728,16 @@ def api_sales_orders():
         pfx = active_db_prefix()
         plan_ns = f'{pfx}_plan' if pfx else 'plan'
         so_map_raw = db.get_namespace_overrides(plan_ns, 'so_line_map') or {}
-        for raw_key, val in so_map_raw.items():
-            # POST saves as key='12345.var_tab', value='support'
-            if raw_key.endswith('.var_tab'):
-                line_id = raw_key[:-len('.var_tab')]
-                if isinstance(val, str) and val:
-                    line_var_map[line_id] = val
-            elif isinstance(val, dict) and val.get('var_tab'):
-                line_var_map[str(raw_key)] = val['var_tab']
-            elif isinstance(val, str) and val:
-                line_var_map[str(raw_key)] = val
+        for line_id_key, fields in so_map_raw.items():
+            if isinstance(fields, dict) and fields.get('var_tab'):
+                line_var_map[str(line_id_key)] = fields['var_tab']
+            elif isinstance(fields, str):
+                line_var_map[str(line_id_key)] = fields
     except Exception:
         pass
     try:
         if not odoo.uid: odoo.connect()
-        _proj_name_override = request.args.get('project_name', '').strip()
-        _proj_name = _proj_name_override if _proj_name_override else active_project_name()
+        _proj_name = active_project_name()
         _proj_id   = session.get('project_id')
 
         # Find project in Odoo
@@ -7820,7 +7814,7 @@ def api_sales_orders():
                         ODOO_DB, odoo.uid, ODOO_PASSWORD,
                         'account.move', 'search_read',
                         [[('move_type', '=', 'out_invoice'),
-                          ('state', '=', 'posted'),
+                          ('state', 'in', ['posted', 'draft']),
                           ('invoice_line_ids.analytic_account_id', '=', analytic_account_id)]],
                         {'fields': ['id', 'name', 'invoice_date', 'invoice_date_due',
                                     'amount_untaxed', 'amount_tax', 'amount_total',
@@ -7851,11 +7845,6 @@ def api_sales_orders():
             # Classify each direct invoice by saved override or auto-detection
             def classify_direct_inv(inv_id, inv_name=''):
                 key = (inv_name or '').replace('/', '_')
-                # POST saves as 'INV_2025_0057.phase' = 'support'
-                phase_val = dir_inv_overrides.get(f'{key}.phase')
-                if phase_val and isinstance(phase_val, str):
-                    return phase_val
-                # Legacy dict format fallback
                 override = dir_inv_overrides.get(key, {})
                 if isinstance(override, dict) and override.get('phase'):
                     return override['phase']
@@ -7911,7 +7900,7 @@ def api_sales_orders():
                 ODOO_DB, odoo.uid, ODOO_PASSWORD,
                 'account.move', 'search_read',
                 [[('move_type', '=', 'out_invoice'),
-                  ('state', '=', 'posted'),
+                  ('state', 'in', ['posted', 'draft']),
                   ('invoice_line_ids.sale_line_ids.order_id', 'in', so_ids)]],
                 {'fields': ['id', 'name', 'invoice_date', 'invoice_date_due',
                             'amount_untaxed', 'amount_tax', 'amount_total',
@@ -8119,112 +8108,403 @@ def api_sales_orders():
         return jsonify({'ok': False, 'error': str(e), 'trace': traceback.format_exc()}), 500
 
 
-@app.route('/api/all-sales-orders')
-def api_all_sales_orders():
-    """All confirmed/done SOs with invoices, detecting project via analytic account."""
-    try:
-        if not odoo.uid: odoo.connect()
-        sos = odoo.models.execute_kw(
-            ODOO_DB, odoo.uid, ODOO_PASSWORD,
-            'sale.order', 'search_read',
-            [[('state', 'in', ['sale', 'done'])]],
-            {'fields': ['id','name','partner_id','date_order','state',
-                        'amount_untaxed','amount_tax','amount_total',
-                        'invoice_status','invoice_ids'],
-             'limit': 500, 'order': 'date_order desc'}
-        )
-        if not sos:
-            return jsonify({'ok': True, 'orders': [], 'summary': {}})
+@app.route('/api/variance/export-pmo', methods=['POST'])
+def api_variance_export_pmo():
+    """Generate styled PMO variance Excel from frontend data using openpyxl."""
+    from flask import send_file
+    import io
+    from openpyxl import Workbook
+    from openpyxl.styles import (PatternFill, Font, Alignment, Border, Side,
+                                  GradientFill)
+    from openpyxl.utils import get_column_letter
+    from openpyxl.drawing.image import Image as XLImage
+    import base64, datetime
 
-        inv_ids_all = []
-        so_inv_map  = {}
-        for s in sos:
-            ids = s.get('invoice_ids') or []
-            so_inv_map[s['id']] = ids
-            inv_ids_all.extend(ids)
+    data      = request.get_json(force=True) or {}
+    proj_name = data.get('project', 'Project')
+    phases    = data.get('phases', [])   # [{label, key, budget:{rev,cost,mds}, rows:[...], changes:[...]}]
+    now_str   = datetime.date.today().isoformat()
 
-        inv_map = {}
-        project_by_inv = {}
-        if inv_ids_all:
-            invoices = odoo.models.execute_kw(
-                ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                'account.move', 'search_read',
-                [[('id', 'in', inv_ids_all), ('state','=','posted'), ('move_type','=','out_invoice')]],
-                {'fields': ['id','name','invoice_date','invoice_date_due',
-                            'amount_untaxed','amount_tax','amount_total',
-                            'state','payment_state','narration','ref','invoice_line_ids'],
-                 'limit': 2000}
-            )
-            inv_map = {i['id']: i for i in invoices}
-            all_line_ids = [lid for inv in invoices for lid in inv.get('invoice_line_ids',[])]
-            if all_line_ids:
-                inv_lines = odoo.models.execute_kw(
-                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                    'account.move.line', 'search_read',
-                    [[('id','in',all_line_ids), ('display_type','not in',['line_section','line_note'])]],
-                    {'fields': ['move_id','analytic_account_id'], 'limit': 5000}
-                )
-                inv_analytic = {}
-                for l in inv_lines:
-                    mid = l['move_id'][0] if isinstance(l['move_id'],list) else l['move_id']
-                    aa  = l.get('analytic_account_id')
-                    if aa and isinstance(aa,list) and aa[0]:
-                        inv_analytic[mid] = aa
-                analytic_ids = list({aa[0] for aa in inv_analytic.values()})
-                if analytic_ids:
-                    projs = odoo.models.execute_kw(
-                        ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                        'project.project', 'search_read',
-                        [[('analytic_account_id','in',analytic_ids)]],
-                        {'fields': ['name','analytic_account_id'], 'limit': 300}
-                    )
-                    aa_to_proj = {p['analytic_account_id'][0]: p['name'] for p in projs if p.get('analytic_account_id')}
-                    for inv_id, aa in inv_analytic.items():
-                        pn = aa_to_proj.get(aa[0])
-                        if pn: project_by_inv[inv_id] = pn
+    # ── Style helpers ────────────────────────────────────────────────────
+    def mkFill(hex6): return PatternFill('solid', fgColor=hex6)
+    def mkFont(bold=False, sz=10, color='000000', name='Calibri'):
+        return Font(name=name, bold=bold, size=sz, color=color)
+    def mkAlign(h='center', v='center', wrap=False):
+        return Alignment(horizontal=h, vertical=v, wrap_text=wrap)
+    def mkBorder(color='D1D5DB'):
+        s = Side(style='thin', color=color)
+        return Border(left=s, right=s, top=s, bottom=s)
+    def mkBorderB(color='1B2A4E'):
+        s = Side(style='medium', color=color)
+        n = Side(style=None)
+        return Border(bottom=s)
 
-        fR = lambda v: round(float(v or 0), 2)
-        orders = []
-        total_untaxed = total_invoiced = 0
-        for s in sos:
-            inv_ids   = so_inv_map.get(s['id'], [])
-            invs      = [inv_map[i] for i in inv_ids if i in inv_map]
-            proj_counts = {}
-            for inv in invs:
-                pn = project_by_inv.get(inv['id'])
-                if pn: proj_counts[pn] = proj_counts.get(pn,0) + inv.get('amount_untaxed',0)
-            project_name = max(proj_counts, key=proj_counts.get) if proj_counts else ''
-            invoiced_amt = sum(i.get('amount_untaxed',0) for i in invs)
-            amt = fR(s.get('amount_untaxed',0))
-            total_untaxed  += amt
-            total_invoiced += invoiced_amt
-            inv_list = [{'id':i['id'],'name':i['name'],
-                'date':(i.get('invoice_date') or '')[:10],
-                'due_date':(i.get('invoice_date_due') or '')[:10],
-                'amount_untaxed':fR(i.get('amount_untaxed',0)),
-                'amount_tax':fR(i.get('amount_tax',0)),
-                'amount_total':fR(i.get('amount_total',0)),
-                'state':i.get('state',''),'payment_state':i.get('payment_state',''),
-                'purpose':i.get('narration') or i.get('ref') or '',
-                'project':project_by_inv.get(i['id'],''),
-            } for i in invs]
-            orders.append({'id':s['id'],'name':s['name'],
-                'partner':s['partner_id'][1] if s.get('partner_id') else '',
-                'date':(s.get('date_order') or '')[:10],
-                'state':s.get('state',''),'invoice_status':s.get('invoice_status',''),
-                'amount_untaxed':amt,'amount_tax':fR(s.get('amount_tax',0)),
-                'amount_total':fR(s.get('amount_total',0)),
-                'invoiced_amt':round(invoiced_amt,2),
-                'remaining':round(amt-invoiced_amt,2),
-                'invoiced_pct':round(invoiced_amt/amt*100,1) if amt>0 else 0,
-                'project':project_name,'invoices':inv_list})
-        return jsonify({'ok':True,'orders':orders,'summary':{
-            'total_orders':len(orders),'total_untaxed':round(total_untaxed,2),
-            'total_invoiced':round(total_invoiced,2),
-            'total_remaining':round(total_untaxed-total_invoiced,2),
-            'overall_pct':round(total_invoiced/total_untaxed*100,1) if total_untaxed else 0}})
-    except Exception as e:
-        return jsonify({'ok':False,'error':str(e),'trace':traceback.format_exc()}),500
+    def styleCell(cell, fill=None, font=None, align=None, border=None, numFmt=None):
+        if fill:   cell.fill      = fill
+        if font:   cell.font      = font
+        if align:  cell.alignment = align
+        if border: cell.border    = border
+        if numFmt: cell.number_format = numFmt
+
+    NAVY     = '1B2A4E'
+    NAVY2    = '2C3E6B'
+    WHITE    = 'FFFFFF'
+    LIGHT    = 'F8FAFF'
+    LIGHTER  = 'FFFFFF'
+    GREEN_BG = 'F0FDF4'
+    GREEN_TX = '065F46'
+    RED_BG   = 'FFF1F2'
+    RED_TX   = '9F1239'
+    AMBER_BG = 'FFF8E1'
+    PHASE_COLORS = {
+        'development': '1E3A5F',
+        'consultation':'0F6E56',
+        'support':     '6D28D9',
+        'services':    '1E3A5F',
+    }
+    SAR_FMT  = '#,##0'
+    PCT_FMT  = '0.0%'
+    MD_FMT   = '0.0'
+    CPI_FMT  = '0.00'
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Variance Report'
+
+    # ── Column layout (exactly BOG order) ────────────────────────────────
+    # A=Month B=ConsumedRev C=TotalRev D=TotEstCost E=EstMDs F=ThisMoMDs
+    # G=ActualMDs H=%Comp I=CurrCost J=EstRem K=EACMDs
+    # L=Overrun% M=RevToDate N=CostToComplete O=EACost
+    # P=CPI Q=Variance R=Variance%
+    # [S empty]
+    # T=ProfitAtComp U=PlannedProfit V=ProfitPct W=ProfVar X=ProfVarPct
+    # Y=TotalIssued Z=Progress% AA=RecogRev AB=Production
+    # AC=AccVI AD=ThisMoVI AE=VI+Issued
+
+    COL_HEADS = [
+        'Month','Consumed Revenue','Total Revenue (SAR)','Total Est. Cost (SAR)','Est. Effort MDs',
+        'This Month MDs','Actual Effort to Date (MD)','% Completion',
+        'Current Cost (SAR)','Est. Remaining (MD)','EAC MDs',
+        'Expected Overrun (%)','Revenue to Date','Est. Cost to Complete','Est. at Completion',
+        'CPI','Variance (SAR)','Variance (%)',
+        '',
+        'Profit at Completion','Planned Profit','Profit at Comp (%)','Profitability Variance','Prof. Var (%)',
+        'Total Issued Invoices','Progress %','Total Recognized Revenue','Production',
+        'Acc. Virtual Invoice','This Month VI','VI + Issued',
+    ]
+    NCOLS = len(COL_HEADS)  # 31
+
+    COL_WIDTHS = [
+        11,14,16,17,12,
+        14,18,11,
+        16,14,10,
+        14,15,17,17,
+        7,14,10,
+        5,
+        16,14,12,16,10,
+        17,10,18,13,
+        15,14,13,
+    ]
+
+    GRP_BANDS = [
+        (0, 0,   'Month',                          NAVY,    WHITE),
+        (1, 4,   'Budget',                          '1E3A5F',WHITE),
+        (5, 7,   'Current Month',                   'D97706',WHITE),
+        (8, 17,  'Cost Variance',                   'DC2626',WHITE),
+        (18,18,  '',                                NAVY,    WHITE),
+        (19,23,  'Profitability',                   '059669',WHITE),
+        (24,30,  'Progress & Virtual Invoices',     '7C3AED',WHITE),
+    ]
+
+    def cl(c0): return get_column_letter(c0 + 1)  # 0-based → Excel letter
+    def addr(r1, c0): return f'{cl(c0)}{r1}'      # 1-based row, 0-based col
+
+    # ── Set column widths ────────────────────────────────────────────────
+    for i, w in enumerate(COL_WIDTHS):
+        ws.column_dimensions[get_column_letter(i+1)].width = w
+
+    R = 1  # current row (1-based openpyxl)
+
+    # ── ROW 1: Header bar ────────────────────────────────────────────────
+    ws.row_dimensions[R].height = 32
+    # ENVNT. logo-text cols A-D
+    ws.merge_cells(f'A{R}:D{R}')
+    c = ws.cell(R, 1, 'ENVNT.')
+    styleCell(c, mkFill(NAVY), mkFont(bold=True, sz=18, color=WHITE, name='Calibri'),
+              mkAlign('left','center'))
+    # Title cols E-V
+    ws.merge_cells(f'E{R}:V{R}')
+    c = ws.cell(R, 5, 'Monthly Profitability Variance Report')
+    styleCell(c, mkFill(NAVY), mkFont(bold=True, sz=13, color=WHITE),
+              mkAlign('center','center'))
+    # Date cols W-AE
+    ws.merge_cells(f'W{R}:AE{R}')
+    c = ws.cell(R, 23, now_str)
+    styleCell(c, mkFill(NAVY), mkFont(sz=10, color='AAB4C8'), mkAlign('right','center'))
+    R += 1
+
+    # ── ROW 2: Project info ──────────────────────────────────────────────
+    ws.row_dimensions[R].height = 18
+    ws.merge_cells(f'A{R}:B{R}')
+    c = ws.cell(R, 1, 'Project')
+    styleCell(c, mkFill('E8EDF5'), mkFont(bold=True, color=NAVY), mkAlign('left'))
+    ws.merge_cells(f'C{R}:K{R}')
+    c = ws.cell(R, 3, proj_name)
+    styleCell(c, mkFill(WHITE), mkFont(bold=True, sz=11, color=NAVY), mkAlign('left'))
+    ws.merge_cells(f'L{R}:M{R}')
+    c = ws.cell(R, 12, 'Phases')
+    styleCell(c, mkFill('E8EDF5'), mkFont(bold=True, color=NAVY), mkAlign('left'))
+    ws.merge_cells(f'N{R}:AE{R}')
+    c = ws.cell(R, 14, ' · '.join(p['label'] for p in phases))
+    styleCell(c, mkFill(WHITE), mkFont(color='374151'), mkAlign('left'))
+    R += 1
+
+    # ── ROW 3: Spacer ────────────────────────────────────────────────────
+    ws.row_dimensions[R].height = 6
+    for ci in range(NCOLS):
+        styleCell(ws.cell(R, ci+1), mkFill('F1F5F9'))
+    R += 1
+
+    # ── PHASES LOOP ──────────────────────────────────────────────────────
+    for ph in phases:
+        pk     = ph.get('key','')
+        pLabel = ph.get('label', pk.title())
+        pColor = PHASE_COLORS.get(pk, NAVY)
+        bud    = ph.get('budget', {})
+        rows   = ph.get('rows', [])
+        changes= ph.get('changes', [])
+
+        rev      = float(bud.get('rev',0) or 0)
+        estCost  = float(bud.get('cost',0) or 0)
+        estMDs   = float(bud.get('mds',0) or 0)
+
+        # ── Phase divider ────────────────────────────────────────────────
+        ws.row_dimensions[R].height = 22
+        ws.merge_cells(f'A{R}:{get_column_letter(NCOLS)}{R}')
+        c = ws.cell(R, 1, f'  {pLabel}')
+        styleCell(c, mkFill(pColor), mkFont(bold=True, sz=12, color=WHITE),
+                  mkAlign('left','center'))
+        R += 1
+
+        # ── Budget summary ───────────────────────────────────────────────
+        ws.row_dimensions[R].height = 16
+        def bCell(col1, label, val, numFmt=SAR_FMT, span=2):
+            ws.merge_cells(f'{get_column_letter(col1)}{R}:{get_column_letter(col1+1)}{R}')
+            c = ws.cell(R, col1, label)
+            styleCell(c, mkFill('E8EDF5'), mkFont(bold=True, color=NAVY, sz=9), mkAlign('left'))
+            ws.merge_cells(f'{get_column_letter(col1+2)}{R}:{get_column_letter(col1+3)}{R}')
+            c2 = ws.cell(R, col1+2, val)
+            styleCell(c2, mkFill('EFF6FF'), mkFont(sz=10), mkAlign('right'), numFmt=numFmt)
+
+        bCell(1,  'Total Revenue SAR',   rev)
+        bCell(5,  'Est. Cost SAR',       estCost)
+        bCell(9,  'Est. MDs',            estMDs, MD_FMT)
+        # Planned profit formula
+        ws.merge_cells(f'M{R}:N{R}')
+        c = ws.cell(R, 13, 'Planned Profit SAR')
+        styleCell(c, mkFill('E8EDF5'), mkFont(bold=True, color=NAVY, sz=9), mkAlign('left'))
+        ws.merge_cells(f'O{R}:P{R}')
+        c2 = ws.cell(R, 15, rev - estCost)
+        styleCell(c2, mkFill(GREEN_BG), mkFont(color=GREEN_TX, sz=10), mkAlign('right'), numFmt=SAR_FMT)
+        ws.merge_cells(f'Q{R}:R{R}')
+        c3 = ws.cell(R, 17, 'Planned Profit %')
+        styleCell(c3, mkFill('E8EDF5'), mkFont(bold=True, color=NAVY, sz=9), mkAlign('left'))
+        ws.merge_cells(f'S{R}:T{R}')
+        pct = (rev-estCost)/rev if rev>0 else 0
+        c4 = ws.cell(R, 19, pct)
+        styleCell(c4, mkFill(GREEN_BG), mkFont(color=GREEN_TX, sz=10), mkAlign('right'), numFmt=PCT_FMT)
+        for ci in range(20, NCOLS):
+            styleCell(ws.cell(R, ci+1), mkFill('EFF6FF'))
+        R += 1
+
+        # ── Group band header ────────────────────────────────────────────
+        ws.row_dimensions[R].height = 18
+        for (cs, ce, lbl, bg, fg) in GRP_BANDS:
+            if cs <= ce:
+                if cs < ce:
+                    ws.merge_cells(f'{get_column_letter(cs+1)}{R}:{get_column_letter(ce+1)}{R}')
+                c = ws.cell(R, cs+1, lbl)
+                styleCell(c, mkFill(bg), mkFont(bold=True, sz=9, color=fg),
+                          mkAlign('center','center'))
+        R += 1
+
+        # ── Column label header ──────────────────────────────────────────
+        ws.row_dimensions[R].height = 30
+        for ci, lbl in enumerate(COL_HEADS):
+            c = ws.cell(R, ci+1, lbl)
+            styleCell(c, mkFill(NAVY2), mkFont(bold=True, sz=8, color=WHITE),
+                      mkAlign('center','center', wrap=True), mkBorder('2C3E6B'))
+        R += 1
+
+        DATA_R0 = R  # first data row
+
+        # ── Data rows ────────────────────────────────────────────────────
+        for i, row in enumerate(rows):
+            ws.row_dimensions[R].height = 15
+            isEven = (i % 2 == 1)
+            bg_n  = 'F8FAFF' if not isEven else LIGHTER
+            bg_mo = 'EDF2FF' if not isEven else 'F5F7FF'
+
+            def nCell(col0, val, numFmt=SAR_FMT, bg=None, fg='111827'):
+                c = ws.cell(R, col0+1, val if val is not None else None)
+                styleCell(c, mkFill(bg or bg_n), mkFont(sz=9, color=fg),
+                          mkAlign('right'), mkBorder(), numFmt)
+
+            def pCell(col0, val):
+                c = ws.cell(R, col0+1, val if val is not None else None)
+                styleCell(c, mkFill(bg_n), mkFont(sz=9),
+                          mkAlign('right'), mkBorder(), PCT_FMT)
+
+            mk      = row.get('month','')
+            compPct = float(row.get('comp_pct', 0) or 0) / 100
+            remMDs  = float(row.get('rem_mds', 0) or 0)
+            thisMDs = row.get('this_mds')
+            actMDs  = row.get('act_mds')
+            currCost= row.get('curr_cost')
+            profComp= row.get('prof_comp')
+            issued  = row.get('issued')
+            recog   = row.get('recog_rev')
+            prod    = row.get('production')
+            accVI   = row.get('acc_vi')
+            thisMoVI= row.get('this_mo_vi')
+
+            def fNum(v): return float(v) if v is not None else None
+
+            # A: Month
+            c = ws.cell(R, 1, mk)
+            styleCell(c, mkFill(bg_mo), mkFont(bold=True, sz=9, color=NAVY),
+                      mkAlign('center'), mkBorder())
+
+            # B: Consumed Revenue = Rev * %Comp
+            nCell(1, rev * compPct if rev else None)
+            nCell(2, rev)       # C: Total Revenue
+            nCell(3, estCost)   # D: Est. Cost
+            nCell(4, estMDs, MD_FMT)  # E: Est MDs
+            nCell(5, fNum(thisMDs), MD_FMT)  # F: This Month MDs
+            nCell(6, fNum(actMDs),  MD_FMT)  # G: Actual MDs
+
+            # H: % Completion
+            pCell(7, compPct)
+
+            nCell(8, fNum(currCost))  # I: Current Cost
+
+            # J: Est Remaining
+            nCell(9, remMDs, MD_FMT)
+
+            # K: EAC MDs = G + J
+            aG = fNum(actMDs); aJ = remMDs
+            nCell(10, (aG + aJ) if aG is not None else None, MD_FMT)
+
+            # L: Expected Overrun % = (G/E)/H - 1
+            if aG and estMDs and compPct:
+                nCell(11, (aG/estMDs)/compPct - 1, PCT_FMT)
+            else:
+                nCell(11, None, PCT_FMT)
+
+            # M: Revenue to date = Rev * %Comp
+            nCell(12, fNum(recog) if recog is not None else (rev * compPct if rev else None))
+
+            # N: Est Cost to Complete = RemMDs * (EstCost/EstMDs)
+            n_ctc = (remMDs * estCost / estMDs) if estMDs else 0
+            nCell(13, n_ctc)
+
+            # O: EAC = CurrCost + CostToComplete
+            o_eac = (fNum(currCost) or 0) + n_ctc
+            nCell(14, o_eac if o_eac else None)
+
+            # P: CPI = EstCost / EAC
+            nCell(15, estCost/o_eac if o_eac else None, CPI_FMT)
+
+            # Q: Variance = EstCost - EAC
+            q_var = estCost - o_eac if o_eac else None
+            bg_q = (GREEN_BG if q_var and q_var >= 0 else RED_BG) if q_var is not None else bg_n
+            fg_q = (GREEN_TX if q_var and q_var >= 0 else RED_TX) if q_var is not None else '111827'
+            nCell(16, q_var, SAR_FMT, bg_q, fg_q)
+
+            # R: Variance %
+            pCell(17, q_var/rev if (q_var is not None and rev) else None)
+
+            # S: empty spacer
+            styleCell(ws.cell(R, 19), mkFill('EEEEEE' if not isEven else 'F5F5F5'))
+
+            # T: Profit at Comp = Revenue - EAC
+            t_prof = fNum(profComp) if profComp is not None else (rev - o_eac if (rev and o_eac) else None)
+            bg_t = (GREEN_BG if t_prof and t_prof >= 0 else RED_BG) if t_prof is not None else bg_n
+            fg_t = (GREEN_TX if t_prof and t_prof >= 0 else RED_TX) if t_prof is not None else '111827'
+            nCell(19, t_prof, SAR_FMT, bg_t, fg_t)
+
+            # U: Planned Profit = Rev - EstCost
+            nCell(20, rev - estCost if rev else None)
+
+            # V: Profit at Comp %
+            pCell(21, t_prof/rev if (t_prof is not None and rev) else None)
+
+            # W: Prof Var = T - U
+            w_pv = (t_prof - (rev - estCost)) if (t_prof is not None and rev) else None
+            nCell(22, w_pv, SAR_FMT, (GREEN_BG if w_pv and w_pv >= 0 else RED_BG) if w_pv else bg_n,
+                  (GREEN_TX if w_pv and w_pv >= 0 else RED_TX) if w_pv else '111827')
+
+            # X: Prof Var %
+            pCell(23, w_pv/rev if (w_pv is not None and rev) else None)
+
+            nCell(24, fNum(issued))   # Y: Total Issued
+
+            # Z: Progress % = CurrCost / EAC
+            pCell(25, (fNum(currCost)/o_eac) if (currCost is not None and o_eac) else None)
+
+            nCell(26, fNum(recog))    # AA: Recog Rev
+            nCell(27, fNum(prod))     # AB: Production
+
+            # AC: Acc VI = RecogRev - Issued
+            r_acc = fNum(accVI) if accVI is not None else ((fNum(recog) or 0) - (fNum(issued) or 0) if recog is not None else None)
+            nCell(28, r_acc)
+
+            nCell(29, fNum(thisMoVI)) # AD: This Month VI
+
+            # AE: VI + Issued
+            nCell(30, (r_acc or 0) + (fNum(issued) or 0) if r_acc is not None else None)
+
+            R += 1
+
+        # ── Total row ────────────────────────────────────────────────────
+        ws.row_dimensions[R].height = 16
+        sum_cols = {1,2,4,5,7,8,18,19,23,25,26,27,28,29,30}  # 0-based
+        for ci in range(NCOLS):
+            c = ws.cell(R, ci+1)
+            if ci == 0:
+                c.value = 'TOTAL'
+                styleCell(c, mkFill(NAVY), mkFont(bold=True, sz=10, color=WHITE),
+                          mkAlign('center'), mkBorder(NAVY))
+            elif ci in sum_cols and len(rows) > 0:
+                col_ltr = get_column_letter(ci+1)
+                c.value = f'=SUM({col_ltr}{DATA_R0}:{col_ltr}{R-1})'
+                styleCell(c, mkFill(NAVY), mkFont(bold=True, sz=9, color=WHITE),
+                          mkAlign('right'), mkBorder(NAVY), SAR_FMT)
+            else:
+                styleCell(c, mkFill(NAVY), mkFont(sz=9, color='AAB4C8'),
+                          mkAlign('right'), mkBorder(NAVY))
+        R += 1
+
+        # ── Spacer ───────────────────────────────────────────────────────
+        ws.row_dimensions[R].height = 8
+        for ci in range(NCOLS):
+            styleCell(ws.cell(R, ci+1), mkFill('F1F5F9'))
+        R += 1
+
+    # ── Freeze panes & sheet view ────────────────────────────────────────
+    ws.freeze_panes = 'B4'
+    ws.sheet_view.showGridLines = False
+
+    # ── Output ───────────────────────────────────────────────────────────
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    fname = f"variance_{proj_name.replace(' ','_')}_{now_str}.xlsx"
+    return send_file(buf,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name=fname)
 
 
 if __name__ == '__main__':
