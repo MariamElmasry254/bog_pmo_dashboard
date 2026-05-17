@@ -1210,7 +1210,7 @@ async function profRecomputeAll(phaseKey) {
         const phaseMapping = {
           development:  ['development'],
           consultation: ['consultation'],
-          services:     ['Services', 'development', 'consultation'],  // non-BOG: services gets dev+consult
+          services:     ['services', 'development', 'consultation'],  // non-BOG: services gets dev+consult
           support:      ['support'],
         };
         const matchPhases = phaseMapping[phaseKey] || [phaseKey];
