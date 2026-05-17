@@ -2320,440 +2320,106 @@ async function deletePromo(id) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// VARIANCE EXCEL EXPORT — BOG Style, Single Sheet, All Phases
+// VARIANCE EXCEL EXPORT — sends data to Python backend for styled Excel
 // ══════════════════════════════════════════════════════════════════════════
 async function exportProjectVariance() {
   const btn = document.querySelector('[onclick="exportProjectVariance()"]');
-  if (btn) { btn.textContent = '⏳ Exporting…'; btn.disabled = true; }
+  if (btn) { btn.textContent = '⏳ Generating…'; btn.disabled = true; }
 
   try {
-    // Load SheetJS
-    if (!window.XLSX) {
-      await new Promise((res, rej) => {
-        const s = document.createElement('script');
-        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
-        s.onload = res; s.onerror = rej;
-        document.head.appendChild(s);
-      });
-    }
-
-    const isBog     = AppState._overviewData?.is_bog !== false;
-    const projName  = document.querySelector('.project-title,.hdr h1,h1')?.textContent?.trim() || 'Project';
+    const isBog    = AppState._overviewData?.is_bog !== false;
+    const projName = document.querySelector('.project-title,.hdr h1,h1')?.textContent?.trim() || 'Project';
     const allPhases = isBog ? ['development','consultation','support'] : ['services','support'];
-    const phaseLabels = {development:'Development', consultation:'Consultation', support:'Support', services:'Services'};
-    const now = new Date().toISOString().slice(0, 10);
+    const phaseLabels = {development:'Development', consultation:'Consultation',
+                         support:'Support', services:'Services'};
 
-    // Only export phases that have loaded tables
-    const phases = allPhases.filter(pk => !!document.getElementById(`profit-table-${pk}`));
-    if (!phases.length) {
+    const availPhases = allPhases.filter(pk => !!document.getElementById(`profit-table-${pk}`));
+    if (!availPhases.length) {
       alert('No data loaded. Please open each phase tab first.');
       return;
     }
 
-    const wb = XLSX.utils.book_new();
-
-    // ── Style helpers ────────────────────────────────────────────────────
-    const fill  = (rgb) => ({ patternType:'solid', fgColor:{rgb} });
-    const font  = (opts) => ({ name:'Calibri', sz:10, ...opts });
-    const align = (h,v='center',wrap=false) => ({ horizontal:h, vertical:v, wrapText:wrap });
-    const border = (color='FF1B2A4E') => ({
-      top:    {style:'thin', color:{rgb:color}},
-      bottom: {style:'thin', color:{rgb:color}},
-      left:   {style:'thin', color:{rgb:color}},
-      right:  {style:'thin', color:{rgb:color}},
-    });
-    const thinB = () => ({
-      top:    {style:'thin', color:{rgb:'FFD1D5DB'}},
-      bottom: {style:'thin', color:{rgb:'FFD1D5DB'}},
-      left:   {style:'thin', color:{rgb:'FFD1D5DB'}},
-      right:  {style:'thin', color:{rgb:'FFD1D5DB'}},
-    });
-
-    // Reusable styles
-    const ST = {
-      // Header section colors (navy)
-      navyFill:  { fill:fill('FF1B2A4E'), font:font({bold:true, sz:11, color:{rgb:'FFFFFFFF'}}), alignment:align('center') },
-      // Phase section divider
-      phaseBand: (color) => ({ fill:fill(color), font:font({bold:true, sz:12, color:{rgb:'FFFFFFFF'}}), alignment:align('left') }),
-      // Project info
-      infoLabel: { fill:fill('FFE8EDF5'), font:font({bold:true, sz:10, color:{rgb:'FF1B2A4E'}}), alignment:align('left') },
-      infoVal:   { fill:fill('FFFFFFFF'), font:font({sz:10}), alignment:align('left') },
-      // Column group headers (colored bands)
-      grpBlue:   { fill:fill('FF1E3A5F'), font:font({bold:true, sz:9,  color:{rgb:'FFFFFFFF'}}), alignment:align('center', 'center', true) },
-      grpAmber:  { fill:fill('FFF59E0B'), font:font({bold:true, sz:9,  color:{rgb:'FF7C3A00'}}), alignment:align('center', 'center', true) },
-      grpGreen:  { fill:fill('FF059669'), font:font({bold:true, sz:9,  color:{rgb:'FFFFFFFF'}}), alignment:align('center', 'center', true) },
-      grpRed:    { fill:fill('FFDC2626'), font:font({bold:true, sz:9,  color:{rgb:'FFFFFFFF'}}), alignment:align('center', 'center', true) },
-      grpPurple: { fill:fill('FF7C3AED'), font:font({bold:true, sz:9,  color:{rgb:'FFFFFFFF'}}), alignment:align('center', 'center', true) },
-      // Column headers
-      colHead:   { fill:fill('FF2C3E6B'), font:font({bold:true, sz:9,  color:{rgb:'FFFFFFFF'}}), alignment:align('center', 'center', true), border:thinB() },
-      colHeadMo: { fill:fill('FF1B2A4E'), font:font({bold:true, sz:9,  color:{rgb:'FFFFFFFF'}}), alignment:align('center') },
-      // Data cells
-      moOdd:  { fill:fill('FFF0F4FA'), font:font({bold:true, sz:10, color:{rgb:'FF1B2A4E'}}), alignment:align('center'), border:thinB() },
-      moEven: { fill:fill('FFFFFFFF'), font:font({bold:true, sz:10, color:{rgb:'FF1B2A4E'}}), alignment:align('center'), border:thinB() },
-      numOdd:  (numFmt) => ({ fill:fill('FFF8FAFF'), font:font({sz:10}), alignment:align('right'), numFmt, border:thinB() }),
-      numEven: (numFmt) => ({ fill:fill('FFFFFFFF'), font:font({sz:10}), alignment:align('right'), numFmt, border:thinB() }),
-      pctOdd:  { fill:fill('FFF8FAFF'), font:font({sz:10}), alignment:align('right'), numFmt:'0.0%', border:thinB() },
-      pctEven: { fill:fill('FFFFFFFF'), font:font({sz:10}), alignment:align('right'), numFmt:'0.0%', border:thinB() },
-      greenOdd:  { fill:fill('FFF0FDF4'), font:font({sz:10, color:{rgb:'FF065F46'}}), alignment:align('right'), numFmt:'#,##0', border:thinB() },
-      greenEven: { fill:fill('FFECFDF5'), font:font({sz:10, color:{rgb:'FF065F46'}}), alignment:align('right'), numFmt:'#,##0', border:thinB() },
-      redOdd:  { fill:fill('FFFFF1F2'), font:font({sz:10, color:{rgb:'FF9F1239'}}), alignment:align('right'), numFmt:'#,##0', border:thinB() },
-      redEven: { fill:fill('FFFEF2F2'), font:font({sz:10, color:{rgb:'FF9F1239'}}), alignment:align('right'), numFmt:'#,##0', border:thinB() },
-      totalRow:{ fill:fill('FF1B2A4E'), font:font({bold:true, sz:10, color:{rgb:'FFFFFFFF'}}), alignment:align('right'), numFmt:'#,##0', border:border() },
-      totalMo: { fill:fill('FF1B2A4E'), font:font({bold:true, sz:10, color:{rgb:'FFFFFFFF'}}), alignment:align('center'), border:border() },
-    };
-
-    // ── Helper: set cell ─────────────────────────────────────────────────
-    function C(ws, r, c, value, style, formula) {
-      const addr = XLSX.utils.encode_cell({r, c});
-      const s = style || {};
-      if (formula) {
-        ws[addr] = { t:'n', f:formula, s };
-      } else if (value === null || value === undefined || value === '') {
-        ws[addr] = { t:'z', s };
-      } else if (typeof value === 'number') {
-        ws[addr] = { t:'n', v:value, s, z: s.numFmt };
-      } else {
-        ws[addr] = { t:'s', v:String(value), s };
-      }
-    }
-
-    function colLetter(c) { return String.fromCharCode(65 + c); }
-
-    // ── Get DOM value ────────────────────────────────────────────────────
     const spanNum = (tr, cls) => {
-      const el = tr ? tr.querySelector(`.${cls}`) : document.querySelector(`.${cls}`);
+      const el = tr ? tr.querySelector(`.${cls}`) : null;
       if (!el) return null;
       const t = el.textContent.replace(/,/g,'').replace(/[^\d.+-]/g,'').trim();
       return (!t || t === '—') ? null : parseFloat(t);
     };
 
-    // ══════════════════════════════════════════════════════════════════════
-    // SINGLE SHEET — ALL PHASES
-    // ══════════════════════════════════════════════════════════════════════
-    const ws = {};
-    const merges = [];
-    let R = 0;
-
-    // ── ROW 0: Logo / Title bar ──────────────────────────────────────────
-    // Envnt name in navy (logo text style)
-    const titleStyle = { fill:fill('FF1B2A4E'), font:{name:'Calibri', sz:20, bold:true, color:{rgb:'FFFFFFFF'}}, alignment:align('left','center') };
-    C(ws, R, 0, 'ENVNT.', titleStyle);
-    merges.push({s:{r:R,c:0}, e:{r:R,c:3}});
-    C(ws, R, 4, 'Monthly Profitability Variance Report', {...ST.navyFill, font:font({sz:13, bold:true, color:{rgb:'FFFFFFFF'}}), alignment:align('center','center')});
-    merges.push({s:{r:R,c:4}, e:{r:R,c:20}});
-    C(ws, R, 21, now, {...ST.navyFill, font:font({sz:10, color:{rgb:'FFAAB4C8'}}), alignment:align('right','center')});
-    merges.push({s:{r:R,c:21}, e:{r:R,c:30}});
-    R++;
-
-    // ── ROW 1: Project info ──────────────────────────────────────────────
-    C(ws, R, 0, 'Project', ST.infoLabel);
-    merges.push({s:{r:R,c:0}, e:{r:R,c:1}});
-    C(ws, R, 2, projName, {...ST.infoVal, font:font({bold:true, sz:11, color:{rgb:'FF1B2A4E'}})});
-    merges.push({s:{r:R,c:2}, e:{r:R,c:10}});
-    C(ws, R, 11, 'Phases', ST.infoLabel);
-    merges.push({s:{r:R,c:11}, e:{r:R,c:12}});
-    C(ws, R, 13, phases.map(p => phaseLabels[p]).join(' · '), ST.infoVal);
-    merges.push({s:{r:R,c:13}, e:{r:R,c:30}});
-    R++;
-
-    // ── ROW 2: Empty spacer ──────────────────────────────────────────────
-    for (let c=0;c<=30;c++) C(ws, R, c, '', {fill:fill('FFF8FAFC')});
-    R++;
-
-    // ── Column layout: exactly matches BOG sheet ─────────────────────────
-    // A=Month B=ConsumedRev C=TotalRev D=TotEstCost E=EstMDs F=ThisMoMDs
-    // G=ActualMDs H=%Comp I=CurrCost J=EstRemaining K=EACMDs
-    // L=ExpectedOverrun M=RevToDate N=EstCostToComplete O=EstAtCompletion
-    // P=CPI Q=Variance R=Variance% [skip S] T=ProfitAtComp U=PlannedProfit
-    // V=ProfitAtComp% W=ProfVar X=ProfVar% Y=TotalIssued Z=Progress%
-    // AA=TotalRecogRev AB=Production AC=AccVI AD=ThisMoVI AE=VI+Issued
-
-    // Column indices (0-based)
-    const CI = {
-      month:0, consRev:1, rev:2, estCost:3, estMDs:4, thisMo:5,
-      actMDs:6, compPct:7, currCost:8, estRem:9, eacMDs:10,
-      overrun:11, revToDate:12, costToComplete:13, eac:14,
-      cpi:15, variance:16, variancePct:17,
-      profComp:19, plannedProfit:20, profPct:21,
-      profVar:22, profVarPct:23,
-      issued:24, progressPct:25, recogRev:26, production:27,
-      accVI:28, thisMoVI:29, viPlusIssued:30,
-    };
-    const NCOLS = 31;
-
-    // ── Column group header labels ────────────────────────────────────────
-    const GRP_HEADS = [
-      { label:'Month', start:0, end:0, style:ST.navyFill },
-      { label:'Budget', start:1, end:4, style:ST.grpBlue },
-      { label:'Current Month', start:5, end:7, style:ST.grpAmber },
-      { label:'Cost Variance', start:8, end:17, style:ST.grpRed },
-      { label:'', start:18, end:18, style:{fill:fill('FF1B2A4E')} },
-      { label:'Profitability', start:19, end:23, style:ST.grpGreen },
-      { label:'Progress & Virtual Invoices', start:24, end:30, style:ST.grpPurple },
-    ];
-
-    // ── Column header labels (row 2 in BOG) ──────────────────────────────
-    const COL_LABELS = [
-      'Month', 'Consumed Revenue', 'Total Revenue (SAR)', 'Total Est. Cost (SAR)', 'Est. Effort MDs',
-      'This Month MDs', 'Actual Effort to Date (MD)', '% Completion',
-      'Current Cost (SAR)', 'Est. Remaining (MD)', 'EAC MDs',
-      'Expected Overrun (%)', 'Revenue to Date', 'Est. Cost to Complete', 'Est. at Completion',
-      'CPI', 'Variance (SAR)', 'Variance (%)',
-      '', // skip col S
-      'Profit at Completion', 'Planned Profit', 'Profit at Comp (%)',
-      'Profitability Variance', 'Prof. Var (%)',
-      'Total Issued Invoices', 'Progress %', 'Total Recognized Revenue', 'Production',
-      'Acc. Virtual Invoice', 'This Month VI', 'VI + Issued',
-    ];
-
-    const COLW = [
-      11,14,16,17,12,
-      14,18,11,
-      16,14,10,
-      14,15,17,17,
-      7,14,10,
-      5,
-      16,14,12,
-      16,10,
-      17,10,18,13,
-      15,14,13,
-    ];
-
-    // ════════════════════════════════════════════════════════════════════
-    // LOOP EACH PHASE
-    // ════════════════════════════════════════════════════════════════════
-    const PHASE_COLORS = {
-      development: 'FF1E3A5F',
-      consultation:'FF0F6E56',
-      support:     'FF7C3AED',
-      services:    'FF1E3A5F',
-    };
-
-    for (const phaseKey of phases) {
-      const table = document.getElementById(`profit-table-${phaseKey}`);
+    // ── Collect data for each phase ──────────────────────────────────────
+    const phases = [];
+    for (const pk of availPhases) {
+      const table = document.getElementById(`profit-table-${pk}`);
+      if (!table) continue;
       const dataRows = [...table.querySelectorAll('tr[data-month-key]')];
-      const pLabel = phaseLabels[phaseKey] || phaseKey;
-      const phColor = PHASE_COLORS[phaseKey] || 'FF1B2A4E';
 
-      const totalRevSAR     = AppState._savedRevenue?.[phaseKey] || 0;
-      const totalEstCostSAR = AppState._budgetFinalCost?.[phaseKey] || 0;
-      const totalEstMDs     = AppState._budgetFinalMDs?.[phaseKey] || 0;
-
-      // ── Phase divider row ──────────────────────────────────────────────
-      const phStyle = ST.phaseBand(phColor);
-      for (let c=0;c<NCOLS;c++) C(ws, R, c, c===0 ? `▌ ${pLabel}` : '', phStyle);
-      merges.push({s:{r:R,c:0}, e:{r:R,c:NCOLS-1}});
-      R++;
-
-      // ── Budget summary row ─────────────────────────────────────────────
-      C(ws, R, 0, 'Total Revenue SAR', ST.infoLabel);
-      merges.push({s:{r:R,c:0},e:{r:R,c:1}});
-      C(ws, R, 2, totalRevSAR, {...ST.numOdd('#,##0'), fill:fill('FFEFF6FF')});
-      merges.push({s:{r:R,c:2},e:{r:R,c:3}});
-      C(ws, R, 4, 'Est. Cost SAR', ST.infoLabel);
-      merges.push({s:{r:R,c:4},e:{r:R,c:5}});
-      C(ws, R, 6, totalEstCostSAR, {...ST.numOdd('#,##0'), fill:fill('FFEFF6FF')});
-      merges.push({s:{r:R,c:6},e:{r:R,c:7}});
-      C(ws, R, 8, 'Est. MDs', ST.infoLabel);
-      merges.push({s:{r:R,c:8},e:{r:R,c:9}});
-      C(ws, R, 10, totalEstMDs, {...ST.numOdd('0.0'), fill:fill('FFEFF6FF')});
-      merges.push({s:{r:R,c:10},e:{r:R,c:11}});
-      // Planned profit formula
-      C(ws, R, 12, 'Planned Profit SAR', ST.infoLabel);
-      merges.push({s:{r:R,c:12},e:{r:R,c:13}});
-      const bR1 = R+1;
-      C(ws, R, 14, null, {...ST.greenOdd, fill:fill('FFF0FDF4')}, `C${bR1}-G${bR1}`);
-      merges.push({s:{r:R,c:14},e:{r:R,c:15}});
-      C(ws, R, 16, 'Planned Profit %', ST.infoLabel);
-      merges.push({s:{r:R,c:16},e:{r:R,c:17}});
-      C(ws, R, 18, null, {...ST.pctOdd, fill:fill('FFF0FDF4')}, `IF(C${bR1}>0,O${bR1}/C${bR1},0)`);
-      merges.push({s:{r:R,c:18},e:{r:R,c:19}});
-      for (let c=20;c<NCOLS;c++) C(ws, R, c, '', {fill:fill('FFEFF6FF')});
-      R++;
-
-      // ── Group header row ───────────────────────────────────────────────
-      GRP_HEADS.forEach(g => {
-        for (let c=g.start; c<=g.end; c++)
-          C(ws, R, c, c===g.start ? g.label : '', g.style);
-        if (g.start < g.end) merges.push({s:{r:R,c:g.start},e:{r:R,c:g.end}});
-      });
-      R++;
-
-      // ── Column label row ───────────────────────────────────────────────
-      COL_LABELS.forEach((lbl, ci) => C(ws, R, ci, lbl, ST.colHead));
-      R++;
-
-      const DATA_R0 = R; // first data row (0-based)
-
-      // ── Data rows ──────────────────────────────────────────────────────
-      dataRows.forEach((tr, i) => {
-        const mk = tr.dataset.monthKey;
-        const isEven = i % 2 === 1;
-        const mo = isEven ? ST.moEven : ST.moOdd;
-        const nS = (fmt) => isEven ? ST.numEven(fmt) : ST.numOdd(fmt);
-        const pS = isEven ? ST.pctEven : ST.pctOdd;
-        const gS = isEven ? ST.greenEven : ST.greenOdd;
-        const rS = isEven ? ST.redEven : ST.redOdd;
-
+      const rows = dataRows.map(tr => {
+        const mk      = tr.dataset.monthKey;
         const compInp = tr.querySelector('.completion-input');
         const remInp  = tr.querySelector('.remaining-input');
-        const compPct = parseFloat(compInp?.value) || 0;
-        const remMDs  = parseFloat(remInp?.value)  || 0;
-
-        const SN = (cls) => spanNum(tr, cls);
-        const thisMDs  = SN(`prof-thismonth-${phaseKey}`);
-        const actMDs   = SN(`prof-actual-${phaseKey}`);
-        const revSAR   = SN(`prof-rev-${phaseKey}`)   || totalRevSAR;
-        const estCost  = SN(`prof-estcost-${phaseKey}`) || totalEstCostSAR;
-        const estMDs2  = SN(`prof-estmds-${phaseKey}`)  || totalEstMDs;
-        const currCost = SN(`pc-currcost-${mk}`);
-        const profComp = SN(`pc-profit-comp-${mk}`);
-        const issued   = SN(`pc-issued-${mk}`);
-        const recog    = SN(`pc-rev-todate-${mk}`);
-        const prod     = SN(`pc-production-${mk}`);
-        const accVI    = SN(`pc-vi-acc-${mk}`);
-        const thisMoVI = SN(`pc-vi-month-${mk}`);
-
-        const r1 = R + 1; // 1-based row for formulas
-
-        C(ws, R, CI.month,       mk,               mo);
-        C(ws, R, CI.consRev,     revSAR * (compPct/100), nS('#,##0'));
-        C(ws, R, CI.rev,         revSAR,           nS('#,##0'));
-        C(ws, R, CI.estCost,     estCost,          nS('#,##0'));
-        C(ws, R, CI.estMDs,      estMDs2,          nS('0.0'));
-        C(ws, R, CI.thisMo,      thisMDs,          nS('0.0'));
-        C(ws, R, CI.actMDs,      actMDs,           nS('0.0'));
-        C(ws, R, CI.compPct,     compPct/100,      pS);
-        C(ws, R, CI.currCost,    currCost,         nS('#,##0'));
-        C(ws, R, CI.estRem,      remMDs,           nS('0.0'));
-
-        // K: EAC MDs = Actual + Remaining
-        C(ws, R, CI.eacMDs, null, nS('0.0'), `G${r1}+J${r1}`);
-
-        // L: Expected Overrun % = (Actual/EstMDs)/CompPct - 1
-        C(ws, R, CI.overrun, null, pS, `IF(AND(E${r1}>0,H${r1}>0),(G${r1}/E${r1})/H${r1}-1,"")`);
-
-        // M: Revenue to date = Revenue * %Comp
-        C(ws, R, CI.revToDate, recog || null, nS('#,##0'),
-          recog ? undefined : `C${r1}*H${r1}`);
-
-        // N: Est Cost to Complete = RemMDs * (EstCost/EstMDs)
-        C(ws, R, CI.costToComplete, null, nS('#,##0'),
-          `IF(E${r1}>0,J${r1}*(D${r1}/E${r1}),0)`);
-
-        // O: Estimate at Completion = CurrentCost + CostToComplete
-        C(ws, R, CI.eac, null, nS('#,##0'), `I${r1}+N${r1}`);
-
-        // P: CPI = EstCost / EAC
-        C(ws, R, CI.cpi, null, {...nS('0.00')}, `IF(O${r1}>0,D${r1}/O${r1},"")`);
-
-        // Q: Variance = EstCost - EAC
-        C(ws, R, CI.variance, null,
-          (profComp !== null && profComp < 0) ? rS : nS('#,##0'),
-          `D${r1}-O${r1}`);
-
-        // R: Variance %
-        C(ws, R, CI.variancePct, null, pS, `IF(C${r1}>0,Q${r1}/C${r1},"")`);
-
-        // skip col S (index 18)
-        C(ws, R, 18, '', {fill: isEven ? fill('FFEEEEEE') : fill('FFF0F0F0')});
-
-        // T: Profit at Completion = Revenue - EAC
-        C(ws, R, CI.profComp, null,
-          profComp !== null ? (profComp >= 0 ? gS : rS) : nS('#,##0'),
-          `C${r1}-O${r1}`);
-
-        // U: Planned Profit = Revenue - EstCost
-        C(ws, R, CI.plannedProfit, null, nS('#,##0'), `C${r1}-D${r1}`);
-
-        // V: Profit at Comp %
-        C(ws, R, CI.profPct, null, pS, `IF(C${r1}>0,T${r1}/C${r1},"")`);
-
-        // W: Profitability Variance = ProfitAtComp - PlannedProfit
-        C(ws, R, CI.profVar, null, nS('#,##0'), `T${r1}-U${r1}`);
-
-        // X: Prof Var %
-        C(ws, R, CI.profVarPct, null, pS, `IF(C${r1}>0,W${r1}/C${r1},"")`);
-
-        C(ws, R, CI.issued,     issued,   nS('#,##0'));
-
-        // Z: Progress % = CurrentCost / EAC
-        C(ws, R, CI.progressPct, null, pS, `IF(O${r1}>0,I${r1}/O${r1},"")`);
-
-        C(ws, R, CI.recogRev,   recog,    nS('#,##0'));
-        C(ws, R, CI.production, prod,     nS('#,##0'));
-
-        // AC: Acc VI = RecogRev - Issued
-        C(ws, R, CI.accVI, null, nS('#,##0'),
-          `IF(AA${r1}>0,AA${r1}-Y${r1},"")`);
-
-        C(ws, R, CI.thisMoVI, thisMoVI, nS('#,##0'));
-
-        // AE: VI + Issued
-        C(ws, R, CI.viPlusIssued, null, nS('#,##0'), `AC${r1}+Y${r1}`);
-
-        R++;
+        return {
+          month:      mk,
+          comp_pct:   parseFloat(compInp?.value) || 0,
+          rem_mds:    parseFloat(remInp?.value)  || 0,
+          this_mds:   spanNum(tr, `prof-thismonth-${pk}`),
+          act_mds:    spanNum(tr, `prof-actual-${pk}`),
+          curr_cost:  spanNum(tr, `pc-currcost-${mk}`),
+          prof_comp:  spanNum(tr, `pc-profit-comp-${mk}`),
+          issued:     spanNum(tr, `pc-issued-${mk}`),
+          recog_rev:  spanNum(tr, `pc-rev-todate-${mk}`),
+          production: spanNum(tr, `pc-production-${mk}`),
+          acc_vi:     spanNum(tr, `pc-vi-acc-${mk}`),
+          this_mo_vi: spanNum(tr, `pc-vi-month-${mk}`),
+        };
       });
 
-      // ── Totals row ────────────────────────────────────────────────────
-      const lastR = R; // 1-based: DATA_R0+1 to lastR
-      const d1 = DATA_R0 + 1;
-      const sumF = (col) => `SUM(${col}${d1}:${col}${lastR})`;
-      COL_LABELS.forEach((_, ci) => {
-        const col = colLetter(ci > 25 ? ci : ci); // A-Z then AA etc
-        const colName = ci < 26 ? String.fromCharCode(65+ci) : 'A'+String.fromCharCode(65+ci-26);
-        if (ci === 0) {
-          C(ws, R, ci, 'TOTAL', ST.totalMo);
-        } else if ([2,3,5,6,8,19,20,24,26,27,28,29,30].includes(ci)) {
-          C(ws, R, ci, null, ST.totalRow, sumF(colName));
-        } else {
-          C(ws, R, ci, '', ST.totalRow);
-        }
+      phases.push({
+        key:     pk,
+        label:   phaseLabels[pk] || pk,
+        budget: {
+          rev:  AppState._savedRevenue?.[pk]      || 0,
+          cost: AppState._budgetFinalCost?.[pk]   || 0,
+          mds:  AppState._budgetFinalMDs?.[pk]    || 0,
+        },
+        rows,
+        changes: (_budgetChanges[pk] || []).filter(ch =>
+          ch.delta_rev || ch.delta_cost || ch.delta_mds
+        ).map(ch => ({
+          date:  ch.change_date || '',
+          desc:  ch.reason || '',
+          plan:  ch.plan_id || '',
+          d_rev: parseFloat(ch.delta_rev)  || 0,
+          d_cost:parseFloat(ch.delta_cost) || 0,
+          d_mds: parseFloat(ch.delta_mds)  || 0,
+        })),
       });
-      R++;
-
-      // ── Spacer between phases ─────────────────────────────────────────
-      for (let c=0;c<NCOLS;c++) C(ws, R, c, '', {fill:fill('FFF1F5F9')});
-      R++;
     }
 
-    // ── Set sheet range & col widths ──────────────────────────────────────
-    ws['!ref']    = XLSX.utils.encode_range({s:{r:0,c:0}, e:{r:R-1,c:NCOLS-1}});
-    ws['!merges'] = merges;
-    ws['!cols']   = COLW.map(w => ({wch:w}));
-
-    // Row heights
-    const rowH = [];
-    rowH[0] = {hpt: 32}; // title
-    ws['!rows'] = rowH;
-
-    XLSX.utils.book_append_sheet(wb, ws, 'Variance Report');
-
-    // ── Budget Changes sheet ──────────────────────────────────────────────
-    const allChanges = [];
-    phases.forEach(pk => {
-      (_budgetChanges[pk] || []).forEach(ch => {
-        if (ch.delta_rev || ch.delta_cost || ch.delta_mds) {
-          allChanges.push([phaseLabels[pk]||pk, ch.change_date||'', ch.reason||'',
-            ch.plan_id||'', parseFloat(ch.delta_rev)||0,
-            parseFloat(ch.delta_cost)||0, parseFloat(ch.delta_mds)||0]);
-        }
-      });
+    // ── POST to backend, receive file ────────────────────────────────────
+    const res = await fetch('/api/variance/export-pmo', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ project: projName, phases }),
     });
-    if (allChanges.length) {
-      const wsC = XLSX.utils.aoa_to_sheet([
-        ['Phase','Date','Description','Plan ID','Delta Rev SAR','Delta Cost SAR','Delta MDs'],
-        ...allChanges,
-      ]);
-      wsC['!cols'] = [{wch:14},{wch:12},{wch:40},{wch:12},{wch:15},{wch:16},{wch:12}];
-      XLSX.utils.book_append_sheet(wb, wsC, 'Budget Changes');
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({error: res.statusText}));
+      throw new Error(err.error || 'Server error');
     }
 
-    XLSX.writeFile(wb, `variance_${projName.replace(/[^a-zA-Z0-9]/g,'_')}_${now}.xlsx`);
+    // ── Trigger download ─────────────────────────────────────────────────
+    const blob = await res.blob();
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `variance_${projName.replace(/[^a-zA-Z0-9]/g,'_')}_${new Date().toISOString().slice(0,10)}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
 
   } catch(e) {
-    console.error(e);
     alert('Export failed: ' + e.message);
+    console.error(e);
   } finally {
     if (btn) { btn.textContent = '⬇ Export Excel'; btn.disabled = false; }
   }
