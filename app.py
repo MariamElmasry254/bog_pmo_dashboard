@@ -5037,7 +5037,7 @@ def get_phase_mapping():
     return {'services': [], 'support': []}
 
 
-SUPPORT_KWS = ['support', 'operation', 'maintenance', 'hypercare', 'production', 'production activities','الدعم الفني', 'دعم فني', 'تشغيل']
+SUPPORT_KWS = ['support', 'operation', 'maintenance', 'hypercare', 'production', 'production activities', 'دعم فني', 'تشغيل']
 
 def auto_detect_phases_for_project(project_id, phase_key):
     """For non-BOG projects: tasks have no phase_id, only stage_id (Kanban).
@@ -8133,36 +8133,22 @@ def api_sales_orders():
             } for i in direct_invoices]
 
             total_inv = sum(i['amount_untaxed'] for i in inv_list if i['state']=='posted')
-
-            # Build invoices_by_phase from direct invoices (same structure as SO path)
-            # Only 'posted' invoices, exclude 'license' phase
             dir_inv_by_phase = {}
             for i in inv_list:
-                if i['state'] != 'posted':
-                    continue
+                if i['state'] != 'posted': continue
                 ph = i.get('phase', 'services')
-                if ph == 'license':
-                    continue
+                if ph == 'license': continue
                 month = (i.get('date') or '')[:7]
-                if not month:
-                    continue
-                if ph not in dir_inv_by_phase:
-                    dir_inv_by_phase[ph] = {}
-                dir_inv_by_phase[ph][month] = (
-                    dir_inv_by_phase[ph].get(month, 0) + float(i.get('amount_untaxed', 0))
-                )
-            # Build cumulative
+                if not month: continue
+                dir_inv_by_phase.setdefault(ph, {})[month] = dir_inv_by_phase.get(ph, {}).get(month, 0) + float(i.get('amount_untaxed', 0))
             dir_inv_by_phase_cum = {}
             for ph, monthly in dir_inv_by_phase.items():
-                running = 0
-                cum = {}
+                running = 0; cum = {}
                 for mk in sorted(monthly.keys()):
                     running += monthly[mk]
                     cum[mk] = {'month': monthly[mk], 'cumulative': round(running, 2)}
                 dir_inv_by_phase_cum[ph] = cum
-
-            logger.info(f"Direct invoices_by_phase: {list(dir_inv_by_phase_cum.keys())}, months: { {k:len(v) for k,v in dir_inv_by_phase_cum.items()} }")
-
+            logger.info(f"Direct inv phases: {list(dir_inv_by_phase_cum.keys())}")
             return jsonify({'ok': True, 'orders': [], 'direct_invoices': inv_list,
                            'invoices_by_phase': dir_inv_by_phase_cum,
                            'summary': {'total_orders': 0, 'total_untaxed': 0,
