@@ -1,26 +1,22 @@
 /* Overview tab — Roadmap KPIs + Tasks Analysis with multi-phase + employee filter */
 
 window.loadOverview = async function() {
-  // ── Fetch project type immediately (fast, no Odoo call) ──────────────
-  // This ensures all tabs show correct nav before slow APIs respond
-  try {
-    const info = await fetch('/api/project-info').then(r=>r.json());
-    if (!AppState._overviewData) AppState._overviewData = {};
-    AppState._overviewData.is_bog      = info.is_bog;
-    AppState._overviewData.project_id  = info.project_id;
-    AppState._overviewData.project_name= info.project_name;
-    // Update exec tabs visibility immediately
-    const isBogFast = info.is_bog !== false;
-    ['services','missing','risks','roadmap'].forEach(tab => {
-      const btn = document.querySelector(`.exec-tab[data-tab="${tab}"]`);
-      if (btn) btn.style.display = isBogFast ? '' : 'none';
-    });
-    // Hide non-BOG tabs for BOG project
-    ['manage'].forEach(tab => {
-      const btn = document.querySelector(`.exec-tab[data-tab="${tab}"]`);
-      if (btn) btn.style.display = '';
-    });
-  } catch(e) {}
+  // ── INSTANT: set correct tabs before ANY slow API calls ──────────────
+  if (!AppState._projectInfoLoaded) {
+    AppState._projectInfoLoaded = true;
+    try {
+      const info = await fetch('/api/project-info').then(r => r.json());
+      const isBogNow = info.is_bog !== false;
+      if (!AppState._overviewData) AppState._overviewData = {};
+      AppState._overviewData.is_bog = isBogNow;
+      // Hide/show tabs instantly — no flicker
+      ['services','missing','risks','roadmap'].forEach(tab => {
+        const btn = document.querySelector(`.exec-tab[data-tab="${tab}"]`);
+        if (btn) btn.style.display = isBogNow ? '' : 'none';
+      });
+      console.log('[project-info] is_bog='+isBogNow+' tabs updated instantly');
+    } catch(e) { console.warn('[project-info] failed:', e); }
+  }
 
   if (!AppState.loaded.overview) {
     AppState.loaded.overview = true;
@@ -46,7 +42,7 @@ window.loadOverview = async function() {
       renderTaskList(AppState.currentOverviewPhase));
     document.getElementById('ovTaskStatus').addEventListener('change', () =>
       renderTaskList(AppState.currentOverviewPhase));
-  } // end if !loaded.overview
+  }
 
   await loadOverviewKPIs();
   await loadTaskAnalysis(AppState.currentOverviewPhase);
@@ -1472,3 +1468,23 @@ function stageColorMap(stage) {
   if (s.includes('review') || s.includes('test')) return '#F59E0B';
   return '#6366F1';
 }
+
+
+// ── Run immediately on script load — hide wrong tabs before user sees them ──
+(async function initProjectTabs() {
+  try {
+    const info = await fetch('/api/project-info').then(r => r.json());
+    const isBog = info.is_bog !== false;
+    if (!AppState) return;
+    if (!AppState._overviewData) AppState._overviewData = {};
+    AppState._overviewData.is_bog      = isBog;
+    AppState._overviewData.project_id  = info.project_id;
+    AppState._overviewData.project_name = info.project_name;
+
+    // Apply tab visibility immediately
+    ['services','missing','risks','roadmap'].forEach(tab => {
+      const btn = document.querySelector(`.exec-tab[data-tab="${tab}"]`);
+      if (btn) btn.style.display = isBog ? '' : 'none';
+    });
+  } catch(e) {}
+})();
