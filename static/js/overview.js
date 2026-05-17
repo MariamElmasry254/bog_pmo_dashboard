@@ -1,36 +1,28 @@
-// Keep BOG tabs hidden — re-apply whenever DOM changes (handles index.html JS race)
+// Instantly correct nav tabs + keep correct via MutationObserver
 (function(){
-  var _isBog = null; // null = not fetched yet
-
+  var _isBog = null;
   function _applyTabs(bog) {
     ['services','missing','risks','roadmap'].forEach(function(t){
       var el = document.querySelector('.exec-tab[data-tab="'+t+'"]');
       if(el) el.style.display = bog ? '' : 'none';
     });
   }
-
-  async function _fetchAndApply() {
+  async function _fetch() {
     try {
       var d = await fetch('/api/project-info').then(function(r){return r.json();});
       _isBog = d.is_bog !== false;
-      if(window.AppState){ if(!AppState._overviewData) AppState._overviewData={}; AppState._overviewData.is_bog=_isBog; }
+      if(window.AppState){ if(!AppState._overviewData)AppState._overviewData={}; AppState._overviewData.is_bog=_isBog; }
       _applyTabs(_isBog);
     } catch(e) {}
   }
-
-  // Fetch immediately
-  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', _fetchAndApply);
-  else _fetchAndApply();
-
-  // Also watch for DOM changes that might re-show tabs
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',_fetch);
+  else _fetch();
+  // Watch DOM for anything that re-shows tabs
   var obs = new MutationObserver(function(){
-    if(_isBog !== null && !_isBog) _applyTabs(false);
+    if(_isBog===false) _applyTabs(false);
   });
-  function startObs() {
-    obs.observe(document.body||document.documentElement, {childList:true, subtree:true, attributes:true, attributeFilter:['style']});
-  }
-  if(document.body) startObs();
-  else document.addEventListener('DOMContentLoaded', startObs);
+  function startObs(){ obs.observe(document.body||document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['style']}); }
+  if(document.body) startObs(); else document.addEventListener('DOMContentLoaded',startObs);
 })();
 
 /* Overview tab — Roadmap KPIs + Tasks Analysis with multi-phase + employee filter */
@@ -956,28 +948,19 @@ function renderPhaseFilters(phaseGroup, available) {
   const cont = document.getElementById('ovPhaseFilters');
   if (!cont) return;
   if (!available.length) { cont.innerHTML = ''; return; }
-  const total = available.length;
-
-  // Force container to not stretch (min-width:280px in HTML makes dropdown expand)
-  cont.style.position = 'relative';
-  cont.style.display  = 'inline-flex';
-  cont.style.flexDirection = 'column';
-  cont.style.minWidth = '';
 
   let html = '<label class="filter-label">PHASES (multi-select)</label>';
-  // Wrapper with position:relative so menu positions correctly
-  html += '<div style="position:relative;display:inline-block;" id="ovPhaseDropdown">';
-  html += '<button type="button" class="phase-toggle" id="ovPhaseToggle" style="min-width:200px;max-width:320px;">';
-  html += `<span id="ovPhaseLabel">${phaseLabel(AppState.activePhases || [], total)}</span>`;
-  html += '<span style="margin-left:8px;color:var(--text-muted);">▼</span>';
+  html += '<div class="phase-dropdown" id="ovPhaseDropdown">';
+  html += '<button type="button" class="phase-toggle" id="ovPhaseToggle">';
+  html += `<span id="ovPhaseLabel">${phaseLabel(AppState.activePhases || [], available.length)}</span>`;
+  html += '<span style="margin-left:8px; color: var(--text-muted);">▼</span>';
   html += '</button>';
-  // Menu: position absolute so it drops down correctly
-  html += '<div id="ovPhaseMenu" style="display:none;position:absolute;top:100%;left:0;z-index:200;min-width:280px;max-width:420px;max-height:360px;overflow-y:auto;background:var(--bg-card,white);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);margin-top:2px;">';
+  html += '<div class="phase-menu" id="ovPhaseMenu" style="display:none;">';
   html += '<div class="phase-menu-actions"><a id="ovPhaseAll">Select all</a><a id="ovPhaseNone">Clear</a></div>';
   available.filter(p => p && p !== 'undefined' && p !== 'null').forEach(p => {
     const checked = (AppState.activePhases || []).includes(p);
     const label = p === 'No Phase' ? '📭 No Phase' : p;
-    html += `<label class="phase-option ${checked ? 'selected' : ''}" data-phase="${encodeURIComponent(p)}" style="display:flex;align-items:center;gap:8px;padding:6px 12px;cursor:pointer;white-space:nowrap;">
+    html += `<label class="phase-option ${checked ? 'selected' : ''}" data-phase="${encodeURIComponent(p)}">
       <input type="checkbox" ${checked ? 'checked' : ''}><span dir="auto">${label}</span>
     </label>`;
   });
@@ -985,19 +968,18 @@ function renderPhaseFilters(phaseGroup, available) {
   cont.innerHTML = html;
 
   const toggle = document.getElementById('ovPhaseToggle');
-  const menu   = document.getElementById('ovPhaseMenu');
+  const menu = document.getElementById('ovPhaseMenu');
   toggle.addEventListener('click', (e) => {
     e.stopPropagation();
-    const open = menu.style.display === 'none';
-    menu.style.display = open ? 'block' : 'none';
-    toggle.classList.toggle('open', open);
+    menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+    toggle.classList.toggle('open', menu.style.display === 'block');
   });
   document.addEventListener('click', (e) => {
     if (!document.getElementById('ovPhaseDropdown')?.contains(e.target)) {
       menu.style.display = 'none';
       toggle.classList.remove('open');
     }
-  }, { passive: true });
+  });
   menu.querySelectorAll('.phase-option').forEach(opt => {
     opt.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1012,7 +994,7 @@ function renderPhaseFilters(phaseGroup, available) {
         AppState.activePhases = AppState.activePhases.filter(p => p !== phase);
         opt.classList.remove('selected');
       }
-      document.getElementById('ovPhaseLabel').textContent = phaseLabel(AppState.activePhases, total);
+      document.getElementById('ovPhaseLabel').textContent = phaseLabel(AppState.activePhases, available.length);
       loadTaskAnalysis(phaseGroup);
     });
   });
@@ -1035,7 +1017,7 @@ function phaseLabel(phases, total) {
   if (!phases || phases.length === 0) return `All phases (${t})`;
   if (phases.length === t) return `All phases (${t})`;
   if (phases.length === 1) return phases[0];
-  return `${phases.length} of ${t} phases`;
+  return `${phases.length} phases selected`;
 }
 
 function renderEmployeeFilter(employees) {
@@ -1341,7 +1323,6 @@ function renderTaskList(phaseGroup) {
 
   rootTasks.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
-  // Pagination 10+10
   const fKey = [search,typeFilter,statusFilter,(AppState.activeEmployees||[]).join(','),(AppState.activePhases||[]).join(',')].join('|');
   if (AppState._taskFilterKey !== fKey) { AppState._taskFilterKey = fKey; AppState._taskPage = 0; }
   if (!AppState._taskPage) AppState._taskPage = 0;
@@ -1381,8 +1362,8 @@ function renderTaskList(phaseGroup) {
     });
   });
 }
-window._ovLoadMore  = () => { AppState._taskPage = (AppState._taskPage||0)+1; renderTaskList(AppState._lastPhaseGroup); };
-window._ovCollapse  = () => { AppState._taskPage = 0; renderTaskList(AppState._lastPhaseGroup); };
+window._ovLoadMore = ()=>{ AppState._taskPage=(AppState._taskPage||0)+1; renderTaskList(AppState._lastPhaseGroup); };
+window._ovCollapse = ()=>{ AppState._taskPage=0; renderTaskList(AppState._lastPhaseGroup); };
 
 function renderTaskCard(t, childCount, depth, isMatched) {
   const hasChildren = childCount > 0;
