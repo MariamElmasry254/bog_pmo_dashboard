@@ -70,6 +70,9 @@ TUNIS_RATES_SEED = [
     {'name': 'Naiim BSILI',               'hour_rate': 21.30},
     {'name': 'IKbel BOUZRATI',            'hour_rate': 31.00},
     {'name': 'Iheb MAATALI RIAHI',        'hour_rate': 26.50},
+    {'name': 'Iheb MAATALI RIAHI',        'hour_rate': 26.50},
+    {'name': 'Mohamed Sehmawy',           'hour_rate': 112.25},
+    
 ]
 
 
