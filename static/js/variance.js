@@ -61,35 +61,37 @@ function profFillFromTasks(phaseKey) {
 /* Variance tab — mirrors variance.xlsx with sub-tabs */
 
 
-// ─── Cached effort fetch — returns parsed JSON directly ──────────────
 async function fetchEffortCached(phaseKey) {
   const ckey = '_eff_' + phaseKey + '_' + (window._activeProjectId || '');
   try {
     const hit = sessionStorage.getItem(ckey);
-    if (hit) {
-      const d = JSON.parse(hit);
-      if (d && d.months && d.months.length) {
-        console.log('[cache] effort:', phaseKey);
-        return d;  // return parsed object directly - NOT a Response
-      }
-    }
+    if (hit) { const d=JSON.parse(hit); if(d&&d.months&&d.months.length) return d; }
   } catch(e) {}
-  // Fetch fresh and cache
   const res = await fetch('/api/effort/' + phaseKey + '/all-months');
   if (!res.ok) throw new Error('Effort API ' + res.status);
   const d = await res.json();
   try { sessionStorage.setItem(ckey, JSON.stringify(d)); } catch(e) {}
-  return d;  // return parsed object directly
+  return d;
 }
 
 window.loadVariance = async function() {
-  if (AppState._overviewData?.project_id) window._activeProjectId = AppState._overviewData.project_id;
+  if(AppState._overviewData?.project_id)window._activeProjectId=AppState._overviewData.project_id;
   if (!AppState.loaded.variance) {
     AppState.loaded.variance = true;
+    // Pre-load all phases for export
+    setTimeout(async () => {
+      const isBog = AppState._overviewData?.is_bog !== false;
+      const allPhases = isBog ? ['development','consultation'] : ['services','support'];
+      for (const ph of allPhases) {
+        if (!AppState._varianceMonthData?.[ph]) {
+          try { await switchSubTab(ph); } catch(e) {}
+        }
+      }
+    }, 500);
     let _vBtn=document.getElementById('varianceExport');
     if(!_vBtn){
       _vBtn=document.createElement('button');_vBtn.id='varianceExport';
-      _vBtn.textContent='⬇ Export Excel';
+      _vBtn.textContent='\u2b07 Export Excel';
       _vBtn.style.cssText='position:fixed;bottom:24px;right:24px;z-index:999;padding:10px 20px;background:#1B2A4E;color:white;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.3)';
       document.body.appendChild(_vBtn);
     }
@@ -1382,15 +1384,41 @@ async function profRecomputeAll(phaseKey) {
       latestData = { completionPct, remainingMDs, eacMDs, cpi, profitAtComp, totalRevSAR, monthKey,
                      eacCostSAR: estAtCompletion, currentCostSAR };
     }
+    // Store ALL data for export
     if(!AppState._varianceMonthData)AppState._varianceMonthData={};
     if(!AppState._varianceMonthData[phaseKey])AppState._varianceMonthData[phaseKey]=[];
-    if(completionPct||remainingMDs||actualMDs){
+    if(completionPct||remainingMDs||actualMDs||thisMonthMDs){
       AppState._varianceMonthData[phaseKey].push({
-        month:monthKey,variancePct:expectedOverrun!==null?expectedOverrun*100:0,
-        actualMDs:actualMDs||0,completionPct:completionPct||0,remainingMDs:remainingMDs||0,
-        eacMDs:eacMDs||0,currentCostSAR:currentCostSAR||0,estAtCompletion:estAtCompletion||0,
-        cpi:cpi||0,costVarianceSAR:costVarianceSAR||0,profitAtComp:profitAtComp||0,
-        progressPct:progressPct||0,virtualInvoice:viAcc||0,
+        month:monthKey,
+        // Budget
+        consumedRevSAR: recognizedRev||0,
+        totalRevSAR: totalRevSAR||0,
+        totalEstCostSAR: totalEstCostSAR||0,
+        totalEstMDs: totalEstMDs||0,
+        // Current Month
+        thisMonthMDs: thisMonthMDs||0,
+        actualMDs: actualMDs||0,
+        completionPct: completionPct||0,
+        currentCostSAR: currentCostSAR||0,
+        // Profitability
+        remainingMDs: remainingMDs||0,
+        eacMDs: eacMDs||0,
+        estCostToComplete: estCostToComplete||0,
+        estAtCompletion: estAtCompletion||0,
+        cpi: cpi||0,
+        costVarianceSAR: costVarianceSAR||0,
+        costVariancePct: costVariancePct||0,
+        profitAtComp: profitAtComp||0,
+        plannedProfitSAR: plannedProfitMonthSAR||0,
+        profitAtCompPct: profitAtCompPct||0,
+        profVar: profVar||0,
+        profVarPct: profVarPct||0,
+        // Progress & VI
+        issuedUpToMonth: issuedUpToMonth||0,
+        progressPct: progressPct2||0,
+        recognizedRev: recognizedRev||0,
+        production: production||0,
+        accVI: accVI||0,
       });
     }
     prevViAcc = viAcc;
@@ -1418,6 +1446,7 @@ async function profRecomputeAll(phaseKey) {
       currentCostSAR: latestData.currentCostSAR,
       cpi:            latestData.cpi,
       profitAtComp:   latestData.profitAtComp,
+      totalRevSAR:    latestData.totalRevSAR,
       monthKey:       latestData.monthKey,
     };
     // Notify Overview to update its KPIs
@@ -2355,25 +2384,4 @@ async function deletePromo(id) {
   renderPromotionsSubTab();
 }
 
-}
-
-async function exportVariancePMO() {
-  const btn=document.getElementById('varianceExport');
-  const orig=btn?btn.textContent:'';
-  if(btn){btn.textContent='⏳ Generating...';btn.disabled=true;}
-  try {
-    const isBog=AppState._overviewData?.is_bog!==false;
-    const phaseKeys=isBog?['development','consultation']:['services','support'];
-    const phases=phaseKeys.map(k=>({phase:k,latestData:AppState._latestProfData?.[k]||{},months:AppState._varianceMonthData?.[k]||[]}));
-    const body={project_name:AppState._overviewData?.project_name||'Project',generated:new Date().toISOString().slice(0,10),phases};
-    const res=await fetch('/api/variance/export-pmo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    if(!res.ok) throw new Error('Server error '+res.status);
-    const blob=await res.blob();
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');a.href=url;
-    const cd=res.headers.get('Content-Disposition')||'';
-    a.download=cd.match(/filename="?([^"]+)"?/)?.[1]||'variance_report.xlsx';
-    document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
-  } catch(e){alert('Export failed: '+e.message);}
-  finally{if(btn){btn.textContent=orig||'⬇ Export Excel';btn.disabled=false;}}
 }
