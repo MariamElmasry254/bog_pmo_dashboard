@@ -113,7 +113,7 @@ tr:hover td{background:#FAFAFA;}
     <button class="tab-btn" onclick="switchTab('phaseconfig')">
       ⚙️ Phase Config
     </button>
-    <button class="tab-btn admin-only" id="tabBtnUsers" onclick="switchTab('users')" style="display:none;">
+    <button class="tab-btn" id="tabBtnUsers" onclick="switchTab('users')" style="display:none;">
       👥 Users
     </button>
   </div>
@@ -1504,45 +1504,72 @@ loadTravel();
     <button class="btn btn-primary" onclick="showAddUser()">+ Add User</button>
   </div>
 
-  <!-- Add/Edit User Form -->
+  <!-- Form -->
   <div id="userFormWrap" style="display:none;background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:16px;">
     <h4 id="userFormTitle" style="margin:0 0 14px;font-size:14px;font-weight:600;">Add New User</h4>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
       <div>
-        <label style="font-size:11px;font-weight:600;color:var(--muted);display:block;margin-bottom:4px;">USERNAME</label>
-        <input id="uUsername" placeholder="e.g. sara.ahmed" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
+        <label class="filter-label">USERNAME</label>
+        <input id="uUsername" placeholder="e.g. esraa.pmo"
+          style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
       </div>
       <div>
-        <label style="font-size:11px;font-weight:600;color:var(--muted);display:block;margin-bottom:4px;">PASSWORD</label>
-        <input id="uPassword" type="password" placeholder="••••••••" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
+        <label class="filter-label">PASSWORD</label>
+        <input id="uPassword" type="password" placeholder="••••••••"
+          style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
       </div>
       <div>
-        <label style="font-size:11px;font-weight:600;color:var(--muted);display:block;margin-bottom:4px;">DISPLAY NAME</label>
-        <input id="uDisplayName" placeholder="Sara Ahmed" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
+        <label class="filter-label">DISPLAY NAME</label>
+        <input id="uDisplayName" placeholder="Esraa Mohamed"
+          style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
       </div>
       <div>
-        <label style="font-size:11px;font-weight:600;color:var(--muted);display:block;margin-bottom:4px;">ROLE</label>
-        <select id="uRole" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;" onchange="toggleOdooField()">
+        <label class="filter-label">ROLE</label>
+        <select id="uRole" onchange="onRoleChange()"
+          style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
           <option value="pmo">PMO Coordinator</option>
           <option value="management">Management</option>
           <option value="admin">Admin</option>
         </select>
       </div>
+
+      <!-- Odoo name picker — PMO only -->
       <div id="odooNameRow" style="grid-column:span 2;">
-        <label style="font-size:11px;font-weight:600;color:var(--muted);display:block;margin-bottom:4px;">
-          ODOO NAME <span style="font-weight:400;color:var(--muted);">(exact name in Odoo — for coordinator matching)</span>
+        <label class="filter-label">ODOO EMPLOYEE
+          <span style="font-weight:400;color:var(--muted);text-transform:none;">
+            — select to auto-match coordinator projects
+          </span>
         </label>
-        <input id="uOdooName" placeholder="Sara Ahmed" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
+        <div style="display:flex;gap:8px;align-items:center;">
+          <div style="position:relative;flex:1;">
+            <input id="uOdooSearch" placeholder="🔍 Type to search Odoo employees…" autocomplete="off"
+              oninput="filterOdooList()"
+              style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
+            <div id="odooDropdown" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:999;
+              background:white;border:1px solid var(--border);border-radius:6px;
+              box-shadow:0 4px 16px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;margin-top:2px;">
+            </div>
+          </div>
+          <div id="uOdooNameDisplay" style="font-size:12px;color:var(--muted);min-width:120px;"></div>
+          <input type="hidden" id="uOdooName">
+        </div>
+        <div style="margin-top:6px;">
+          <button type="button" onclick="loadOdooEmployees()"
+            style="font-size:11px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0;">
+            ↺ Load from Odoo
+          </button>
+        </div>
       </div>
     </div>
-    <div style="display:flex;gap:8px;margin-top:14px;">
+
+    <div style="display:flex;gap:8px;margin-top:14px;align-items:center;">
       <button class="btn btn-primary" onclick="saveUser()">Save</button>
       <button class="btn btn-ghost" onclick="cancelUserForm()">Cancel</button>
-      <span id="userFormMsg" style="font-size:12px;padding:6px 0;"></span>
+      <span id="userFormMsg" style="font-size:12px;"></span>
     </div>
   </div>
 
-  <!-- Users table -->
+  <!-- Table -->
   <div class="tbl-wrap">
     <table style="width:100%;border-collapse:collapse;">
       <thead><tr style="background:var(--navy);color:white;">
@@ -1552,97 +1579,116 @@ loadTravel();
         <th style="text-align:center;padding:10px 14px;font-size:11px;font-weight:600;letter-spacing:.4px;">ACTIONS</th>
       </tr></thead>
       <tbody id="usersTableBody">
-        <tr><td colspan="4" style="padding:20px;text-align:center;color:var(--muted);">Loading users…</td></tr>
+        <tr><td colspan="4" style="padding:20px;text-align:center;color:var(--muted);">Click "👥 Users" to load</td></tr>
       </tbody>
     </table>
   </div>
 </div>
 
 <script>
-// ── Role colors ────────────────────────────────────────────────────────
 const ROLE_STYLE = {
-  admin:      'background:#FEF3C7;color:#92400E;',
-  management: 'background:#DBEAFE;color:#1E40AF;',
-  pmo:        'background:#D1FAE5;color:#065F46;',
+  admin:'background:#FEF3C7;color:#92400E;',
+  management:'background:#DBEAFE;color:#1E40AF;',
+  pmo:'background:#D1FAE5;color:#065F46;'
 };
-const ROLE_LABEL = {admin:'Admin', management:'Management', pmo:'PMO Coordinator'};
+const ROLE_LABEL = {admin:'Admin',management:'Management',pmo:'PMO Coordinator'};
 
 let _editingUser = null;
+let _odooEmployees = [];
 
+// ── Init ─────────────────────────────────────────────────────────────
 async function initUsersTab() {
-  // Show tab btn (admin only)
-  const btn = document.getElementById('tabBtnUsers');
-  if (btn) btn.style.display = '';
+  document.getElementById('tabBtnUsers').style.display = '';
   await loadUsers();
+  // Load employees in background
+  loadOdooEmployees();
 }
 
-async function loadUsers() {
-  const tbody = document.getElementById('usersTableBody');
-  tbody.innerHTML = '<tr><td colspan="4" style="padding:20px;text-align:center;color:var(--muted);">Loading…</td></tr>';
+// ── Odoo employees ────────────────────────────────────────────────────
+async function loadOdooEmployees() {
   try {
-    const res = await fetch('/api/users');
+    const res = await fetch('/api/odoo/pmo-employees');
     const d   = await res.json();
-    if (!d.ok || !d.users || !Object.keys(d.users).length) {
-      tbody.innerHTML = '<tr><td colspan="4" style="padding:20px;text-align:center;color:var(--muted);">No users yet — add one above</td></tr>';
-      return;
+    if (d.ok) {
+      _odooEmployees = d.employees || [];
+      console.log(`[Users] Loaded ${_odooEmployees.length} Odoo employees`);
     }
-    tbody.innerHTML = Object.entries(d.users).map(([uname, u]) => `
-      <tr style="border-bottom:1px solid var(--border);">
-        <td style="padding:10px 14px;">
-          <div style="font-weight:600;font-size:13px;">${esc(u.display_name||uname)}</div>
-          <div style="font-size:11px;color:var(--muted);">${esc(uname)}</div>
-        </td>
-        <td style="padding:10px 14px;">
-          <span style="font-size:11px;font-weight:600;padding:2px 10px;border-radius:10px;${ROLE_STYLE[u.role]||''}">
-            ${ROLE_LABEL[u.role]||u.role}
-          </span>
-        </td>
-        <td style="padding:10px 14px;font-size:12px;color:var(--muted);">${esc(u.odoo_name||'—')}</td>
-        <td style="padding:10px 14px;text-align:center;">
-          <button onclick="editUser('${esc(uname)}')" style="padding:4px 12px;border:1px solid var(--border);border-radius:5px;background:white;cursor:pointer;font-size:12px;margin-right:6px;">✏️ Edit</button>
-          <button onclick="deleteUser('${esc(uname)}')" style="padding:4px 12px;border:1px solid #FCA5A5;border-radius:5px;background:#FEF2F2;cursor:pointer;font-size:12px;color:#DC2626;">🗑 Delete</button>
-        </td>
-      </tr>`).join('');
-  } catch(e) {
-    tbody.innerHTML = `<tr><td colspan="4" style="padding:20px;text-align:center;color:red;">${e.message}</td></tr>`;
-  }
+  } catch(e) { console.warn('Could not load Odoo employees:', e); }
+}
+
+function filterOdooList() {
+  const q   = (document.getElementById('uOdooSearch').value || '').toLowerCase();
+  const dd  = document.getElementById('odooDropdown');
+  if (!q || !_odooEmployees.length) { dd.style.display = 'none'; return; }
+  const matches = _odooEmployees.filter(e =>
+    e.name.toLowerCase().includes(q) ||
+    (e.job||'').toLowerCase().includes(q)
+  ).slice(0, 20);
+  if (!matches.length) { dd.style.display = 'none'; return; }
+  dd.innerHTML = matches.map(e => `
+    <div onclick="selectOdooEmployee('${e.name.replace(/'/g,"\\'")}','${e.job.replace(/'/g,"\\'")||''}')"
+      style="padding:8px 12px;cursor:pointer;font-size:12px;border-bottom:1px solid #F3F4F6;"
+      onmouseover="this.style.background='#EFF6FF'" onmouseout="this.style.background=''">
+      <span style="font-weight:600;">${esc(e.name)}</span>
+      ${e.job ? `<span style="color:var(--muted);margin-left:6px;">${esc(e.job)}</span>` : ''}
+    </div>`).join('');
+  dd.style.display = 'block';
+}
+
+function selectOdooEmployee(name, job) {
+  document.getElementById('uOdooName').value         = name;
+  document.getElementById('uOdooSearch').value       = name;
+  document.getElementById('uOdooNameDisplay').textContent = job ? `(${job})` : '';
+  document.getElementById('odooDropdown').style.display  = 'none';
+  // Auto-fill display name if empty
+  if (!document.getElementById('uDisplayName').value)
+    document.getElementById('uDisplayName').value = name;
+}
+
+// Close dropdown on outside click
+document.addEventListener('click', (e) => {
+  if (!document.getElementById('odooNameRow')?.contains(e.target))
+    document.getElementById('odooDropdown').style.display = 'none';
+});
+
+// ── Form ──────────────────────────────────────────────────────────────
+function onRoleChange() {
+  const role = document.getElementById('uRole').value;
+  document.getElementById('odooNameRow').style.display = role === 'pmo' ? '' : 'none';
 }
 
 function showAddUser() {
   _editingUser = null;
-  document.getElementById('userFormTitle').textContent = 'Add New User';
-  document.getElementById('uUsername').value   = '';
-  document.getElementById('uPassword').value   = '';
-  document.getElementById('uDisplayName').value= '';
-  document.getElementById('uRole').value       = 'pmo';
-  document.getElementById('uOdooName').value   = '';
-  document.getElementById('uUsername').disabled = false;
+  document.getElementById('userFormTitle').textContent = '+ Add New User';
+  ['uUsername','uPassword','uDisplayName','uOdooName','uOdooSearch'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.value = ''; el.disabled = false; }
+  });
+  document.getElementById('uRole').value = 'pmo';
+  document.getElementById('uOdooNameDisplay').textContent = '';
+  document.getElementById('odooDropdown').style.display = 'none';
   document.getElementById('userFormMsg').textContent = '';
-  toggleOdooField();
+  onRoleChange();
   document.getElementById('userFormWrap').style.display = '';
 }
 
 function editUser(uname) {
   fetch('/api/users').then(r=>r.json()).then(d => {
-    const u = d.users[uname];
-    if (!u) return;
+    const u = d.users?.[uname]; if (!u) return;
     _editingUser = uname;
-    document.getElementById('userFormTitle').textContent = `Edit — ${uname}`;
+    document.getElementById('userFormTitle').textContent = `✏️ Edit — ${uname}`;
     document.getElementById('uUsername').value    = uname;
     document.getElementById('uUsername').disabled = true;
     document.getElementById('uPassword').value    = '';
     document.getElementById('uDisplayName').value = u.display_name || '';
     document.getElementById('uRole').value        = u.role || 'pmo';
     document.getElementById('uOdooName').value    = u.odoo_name || '';
+    document.getElementById('uOdooSearch').value  = u.odoo_name || '';
+    document.getElementById('uOdooNameDisplay').textContent = '';
     document.getElementById('userFormMsg').textContent = '';
-    toggleOdooField();
+    onRoleChange();
     document.getElementById('userFormWrap').style.display = '';
   });
-}
-
-function toggleOdooField() {
-  const role = document.getElementById('uRole').value;
-  document.getElementById('odooNameRow').style.display = role === 'pmo' ? '' : 'none';
 }
 
 function cancelUserForm() {
@@ -1658,42 +1704,77 @@ async function saveUser() {
   const role     = document.getElementById('uRole').value;
   const odooName = document.getElementById('uOdooName').value.trim();
 
-  if (!username) { msg.textContent = '⚠️ Username required'; msg.style.color='red'; return; }
-  if (!_editingUser && !password) { msg.textContent = '⚠️ Password required'; msg.style.color='red'; return; }
+  if (!username) { msg.textContent='⚠️ Username required'; msg.style.color='red'; return; }
+  if (!_editingUser && !password) { msg.textContent='⚠️ Password required'; msg.style.color='red'; return; }
 
-  const body = { username, role, display_name: dispName, odoo_name: odooName };
+  const body = {username, role, display_name: dispName, odoo_name: odooName};
   if (password) body.password = password;
 
   const url    = _editingUser ? `/api/users/${_editingUser}` : '/api/users';
   const method = _editingUser ? 'PUT' : 'POST';
 
   try {
-    const res = await fetch(url, {method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const res = await fetch(url, {method, headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
     const d   = await res.json();
-    if (d.error) { msg.textContent = '⚠️ '+d.error; msg.style.color='red'; return; }
-    msg.textContent = '✅ Saved!'; msg.style.color='green';
-    setTimeout(() => { cancelUserForm(); loadUsers(); }, 800);
-  } catch(e) { msg.textContent = '⚠️ '+e.message; msg.style.color='red'; }
+    if (d.error) { msg.textContent='⚠️ '+d.error; msg.style.color='red'; return; }
+    msg.textContent='✅ Saved!'; msg.style.color='green';
+    setTimeout(()=>{ cancelUserForm(); loadUsers(); }, 700);
+  } catch(e) { msg.textContent='⚠️ '+e.message; msg.style.color='red'; }
 }
 
 async function deleteUser(uname) {
-  if (!confirm(`Delete user "${uname}"? This cannot be undone.`)) return;
-  const res = await fetch(`/api/users/${uname}`, {method:'DELETE'});
-  const d   = await res.json();
-  if (d.ok) loadUsers();
-  else alert('Error: ' + d.error);
+  if (!confirm(`Delete "${uname}"? Cannot be undone.`)) return;
+  const d = await fetch(`/api/users/${uname}`,{method:'DELETE'}).then(r=>r.json());
+  if (d.ok) loadUsers(); else alert('Error: '+d.error);
 }
 
-// Show/hide admin-only elements based on role
-(async function checkRole() {
+// ── Users table ───────────────────────────────────────────────────────
+async function loadUsers() {
+  const tbody = document.getElementById('usersTableBody');
+  tbody.innerHTML = '<tr><td colspan="4" style="padding:20px;text-align:center;color:var(--muted);">Loading…</td></tr>';
+  try {
+    const d = await fetch('/api/users').then(r=>r.json());
+    const users = d.users || {};
+    if (!Object.keys(users).length) {
+      tbody.innerHTML = '<tr><td colspan="4" style="padding:20px;text-align:center;color:var(--muted);">No users yet</td></tr>';
+      return;
+    }
+    tbody.innerHTML = Object.entries(users).map(([uname,u]) => `
+      <tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:10px 14px;">
+          <div style="font-weight:600;font-size:13px;">${esc(u.display_name||uname)}</div>
+          <div style="font-size:11px;color:var(--muted);">${esc(uname)}</div>
+        </td>
+        <td style="padding:10px 14px;">
+          <span style="font-size:11px;font-weight:600;padding:2px 10px;border-radius:10px;${ROLE_STYLE[u.role]||''}">
+            ${ROLE_LABEL[u.role]||u.role}
+          </span>
+        </td>
+        <td style="padding:10px 14px;font-size:12px;color:var(--muted);">${esc(u.odoo_name||'—')}</td>
+        <td style="padding:10px 14px;text-align:center;">
+          <button onclick="editUser('${esc(uname)}')"
+            style="padding:4px 12px;border:1px solid var(--border);border-radius:5px;background:white;cursor:pointer;font-size:12px;margin-right:6px;">
+            ✏️ Edit
+          </button>
+          <button onclick="deleteUser('${esc(uname)}')"
+            style="padding:4px 12px;border:1px solid #FCA5A5;border-radius:5px;background:#FEF2F2;cursor:pointer;font-size:12px;color:#DC2626;">
+            🗑 Delete
+          </button>
+        </td>
+      </tr>`).join('');
+  } catch(e) {
+    tbody.innerHTML = `<tr><td colspan="4" style="padding:20px;text-align:center;color:red;">${e.message}</td></tr>`;
+  }
+}
+
+// ── Show Users tab for admin only ─────────────────────────────────────
+(async function() {
   try {
     const d = await fetch('/api/me').then(r=>r.json());
+    window._currentRole = d.role;
     if (d.role === 'admin') {
       document.getElementById('tabBtnUsers').style.display = '';
-      // Hide delete for non-admin on travel/promotions tabs handled below
     }
-    // Store role for manage tab permission checks
-    window._currentRole = d.role;
   } catch(e) {}
 })();
 </script>
