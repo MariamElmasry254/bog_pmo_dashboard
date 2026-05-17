@@ -1188,21 +1188,29 @@ async function profRecomputeAll(phaseKey) {
     try {
       if (!AppState._salesInvoicesByPhase) {
         const salesRes = await fetch('/api/sales-orders');
+        console.log('[INV] salesRes.ok='+salesRes.ok+' status='+salesRes.status);
         if (salesRes.ok) {
           const salesData = await salesRes.json();
+          console.log('[INV] salesData.ok='+salesData.ok);
+          console.log('[INV] invoices_by_phase keys='+JSON.stringify(Object.keys(salesData.invoices_by_phase||{})));
+          console.log('[INV] invoices_by_phase='+JSON.stringify(salesData.invoices_by_phase||{}));
           if (salesData.invoices_by_phase) {
             AppState._salesInvoicesByPhase = salesData.invoices_by_phase;
           }
+        } else {
+          const errTxt = await salesRes.text();
+          console.log('[INV] salesRes ERROR:', errTxt.slice(0,300));
         }
+      } else {
+        console.log('[INV] using cached _salesInvoicesByPhase keys='+JSON.stringify(Object.keys(AppState._salesInvoicesByPhase||{})));
       }
+      console.log('[INV] _salesInvoicesByPhase exists='+!!AppState._salesInvoicesByPhase);
       if (AppState._salesInvoicesByPhase) {
         // Map variance tab → sales phase keys
-        // BOG: development & consultation → 'development', support → 'support', license excluded
-        // Non-BOG: services → 'development', support → 'support'
         const phaseMapping = {
           development:  ['development'],
           consultation: ['consultation'],
-          services:     ['services', 'development', 'consultation'],  // services tab includes all non-support
+          services:     ['development', 'consultation'],  // non-BOG: services gets dev+consult
           support:      ['support'],
         };
         const matchPhases = phaseMapping[phaseKey] || [phaseKey];
@@ -1223,10 +1231,6 @@ async function profRecomputeAll(phaseKey) {
           running += monthly[mk];
           cum[mk] = running;
         }
-        console.log('[INV DEBUG] phaseKey='+phaseKey+' matchPhases='+JSON.stringify(matchPhases));
-        console.log('[INV DEBUG] salesInvoicesByPhase keys='+Object.keys(AppState._salesInvoicesByPhase||{}).join(','));
-        console.log('[INV DEBUG] monthly='+JSON.stringify(monthly));
-        console.log('[INV DEBUG] cum months='+Object.keys(cum).length);
         if (Object.keys(cum).length) {
           AppState._invoiceCumulative[phaseKey] = cum;
         }
@@ -1362,7 +1366,6 @@ async function profRecomputeAll(phaseKey) {
     for (const mk of cumMonths) {
       if (mk <= monthKey) issuedUpToMonth = invCum[mk];
     }
-    if (monthKey === cumMonths[0] || !cumMonths.length) console.log('[INV ROW] '+phaseKey+' month='+monthKey+' cumMonths='+JSON.stringify(cumMonths)+' issued='+issuedUpToMonth);
 
     const production  = recognizedRev - prevRecogRev;
     // Acc. VI = Recognized Revenue to Date − Cumulative Issued Invoices up to this month
