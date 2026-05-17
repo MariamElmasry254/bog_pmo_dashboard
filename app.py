@@ -8293,16 +8293,18 @@ def api_variance_export_pmo():
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
 
-    # ── Colour palette ─────────────────────────────────────────────────
-    NAVY   = '1B2A4E'
-    ACCENT = '0113FF'   # requested blue
-    AMBER  = 'F59E0B'
-    GREEN  = '059669'
-    RED    = 'DC2626'
-    LGRAY  = 'F8FAFC'
-    MGRAY  = 'E2E8F0'
+    # ── Professional colour palette ────────────────────────────────────
+    NAVY   = '1B2A4E'    # main header
+    ACCENT = '1E3A5F'    # section headers
+    MID    = '2D5F8A'    # sub-headers
+    LBBLUE = 'DBEAFE'    # light blue rows
+    GREEN  = '065F46'    # positive
+    RED    = '991B1B'    # negative
+    AMBER  = '92400E'    # warning
+    LGRAY  = 'F8FAFC'    # alternating row bg
+    MGRAY  = 'E2E8F0'    # borders / dividers
     WHITE  = 'FFFFFF'
-    DKBLUE = '0B0F6B'
+    DKBLUE = '0C1E3C'
 
     def fill(h): return PatternFill('solid', fgColor=h)
     def font(h='1E293B', bold=False, sz=10, italic=False):
@@ -8325,10 +8327,10 @@ def api_variance_export_pmo():
         return cell
 
     PHASE_INFO = {
-        'services':    ('Services',    ACCENT, DKBLUE),
-        'support':     ('Support',     AMBER,  'D97706'),
-        'development': ('Development', NAVY,   '1E3A5F'),
-        'consultation':('Consultation','3B82F6','1D4ED8'),
+        'services':    ('Services',    NAVY,   ACCENT),
+        'support':     ('Support',     MID,    ACCENT),
+        'development': ('Development', NAVY,   ACCENT),
+        'consultation':('Consultation', MID,   ACCENT),
     }
 
     # ── All columns with grouping ──────────────────────────────────────
@@ -8337,22 +8339,22 @@ def api_variance_export_pmo():
         # (name, width, num_fmt, align, group_label, group_color)
         ('Month',                    14, None,     'left',  'General',       NAVY),
         ('Variance %',               10, '0.0%',   'center','General',       NAVY),
-        ('Total Revenue (SAR)',       16, '#,##0',  'right', 'Budget',        '1E3A5F'),
-        ('Total Est. Cost (SAR)',     16, '#,##0',  'right', 'Budget',        '1E3A5F'),
-        ('Est. Effort MDs',          13, '#,##0.0','center','Budget',        '1E3A5F'),
-        ('This Month MDs',           13, '#,##0.0','center','Current Month', 'C2410C'),
-        ('Actual Effort to Date (MD)',16,'#,##0.0','center','Current Month', 'C2410C'),
-        ('% Completion',             13, '0.0%',   'center','Current Month', 'C2410C'),
-        ('Current Cost (SAR)',        16, '#,##0',  'right', 'Current Month', 'C2410C'),
-        ('Est. Remaining (MD)',       14, '#,##0.0','center','Profitability', '5B21B6'),
-        ('EAC MDs',                  12, '#,##0.0','center','Profitability', '5B21B6'),
-        ('Est. Cost to Complete SAR', 16, '#,##0',  'right', 'Profitability', '5B21B6'),
-        ('Est. at Completion SAR',    17, '#,##0',  'right', 'Profitability', '5B21B6'),
-        ('CPI',                      10, '0.00',   'center','Profitability', '5B21B6'),
-        ('Cost Variance SAR',         15, '#,##0',  'right', 'Profitability', '5B21B6'),
-        ('Profit at Comp SAR',        15, '#,##0',  'right', 'Profitability', '5B21B6'),
-        ('Progress %',               12, '0.0%',   'center','Progress & VI', '065F46'),
-        ('Virtual Invoice SAR',       16, '#,##0',  'right', 'Progress & VI', '065F46'),
+        ('Total Revenue (SAR)',       16, '#,##0',  'right', 'Budget',        ACCENT),
+        ('Total Est. Cost (SAR)',     16, '#,##0',  'right', 'Budget',        ACCENT),
+        ('Est. Effort MDs',          13, '#,##0.0','center','Budget',        ACCENT),
+        ('This Month MDs',           13, '#,##0.0','center','Current Month', MID),
+        ('Actual Effort to Date (MD)',16,'#,##0.0','center','Current Month', MID),
+        ('% Completion',             13, '0.0%',   'center','Current Month', MID),
+        ('Current Cost (SAR)',        16, '#,##0',  'right', 'Current Month', MID),
+        ('Est. Remaining (MD)',       14, '#,##0.0','center','Profitability', '334155'),
+        ('EAC MDs',                  12, '#,##0.0','center','Profitability', '334155'),
+        ('Est. Cost to Complete SAR', 16, '#,##0',  'right', 'Profitability', '334155'),
+        ('Est. at Completion SAR',    17, '#,##0',  'right', 'Profitability', '334155'),
+        ('CPI',                      10, '0.00',   'center','Profitability', '334155'),
+        ('Cost Variance SAR',         15, '#,##0',  'right', 'Profitability', '334155'),
+        ('Profit at Comp SAR',        15, '#,##0',  'right', 'Profitability', '334155'),
+        ('Progress %',               12, '0.0%',   'center','Progress & VI', '1E3A5F'),
+        ('Virtual Invoice SAR',       16, '#,##0',  'right', 'Progress & VI', '1E3A5F'),
     ]
     NCOLS = len(COL_GROUPS)
 
@@ -8479,7 +8481,7 @@ def api_variance_export_pmo():
         # Data rows
         for ri, m in enumerate(months, 5):
             ws2.row_dimensions[ri].height = 18
-            bg = WHITE if ri%2==1 else LGRAY
+            bg = WHITE if ri%2==1 else 'EFF6FF'
             cpi_v = m.get('cpi',0) or 0
             cv_v  = m.get('costVarianceSAR',0) or 0
             pr_v  = m.get('profitAtComp',0) or 0
