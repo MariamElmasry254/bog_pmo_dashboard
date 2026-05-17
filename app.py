@@ -8282,8 +8282,7 @@ def api_variance_export_pmo():
     """Generate comprehensive styled Excel variance report from JS data."""
     from flask import send_file
     import io, openpyxl
-    from openpyxl.styles import (PatternFill, Font, Alignment, Border, Side,
-                                  GradientFill)
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
 
     data      = request.get_json() or {}
@@ -8292,222 +8291,236 @@ def api_variance_export_pmo():
     gen_date  = data.get('generated', date.today().isoformat())
 
     wb = openpyxl.Workbook()
-    wb.remove(wb.active)  # remove default sheet
+    wb.remove(wb.active)
 
-    # ── Colour palette ──────────────────────────────────────────────────
+    # ── Colour palette ─────────────────────────────────────────────────
     NAVY   = '1B2A4E'
-    TEAL   = '0D9488'
+    ACCENT = '0113FF'   # requested blue
     AMBER  = 'F59E0B'
-    GREEN  = '10B981'
-    BLUE   = '3B82F6'
-    PURPLE = '7C3AED'
-    RED    = 'EF4444'
+    GREEN  = '059669'
+    RED    = 'DC2626'
     LGRAY  = 'F8FAFC'
+    MGRAY  = 'E2E8F0'
     WHITE  = 'FFFFFF'
+    DKBLUE = '0B0F6B'
 
-    def fill(hex_): return PatternFill('solid', fgColor=hex_)
-    def font(hex_='000000', bold=False, size=10, italic=False):
-        return Font(name='Arial', color=hex_, bold=bold, size=size, italic=italic)
-    def align(h='left', v='center', wrap=False):
+    def fill(h): return PatternFill('solid', fgColor=h)
+    def font(h='1E293B', bold=False, sz=10, italic=False):
+        return Font(name='Arial', color=h, bold=bold, size=sz, italic=italic)
+    def al(h='left', v='center', wrap=False):
         return Alignment(horizontal=h, vertical=v, wrap_text=wrap)
-    def border_thin():
-        s = Side(style='thin', color='D1D5DB')
+    def thin(color='CBD5E1'):
+        s = Side(style='thin', color=color)
         return Border(left=s, right=s, top=s, bottom=s)
-    def border_bottom(color='D1D5DB'):
+    def btm(color='CBD5E1'):
         return Border(bottom=Side(style='thin', color=color))
 
-    def set_cell(ws, row, col, val, fill_=None, font_=None, align_=None, border_=None, num_fmt=None):
-        cell = ws.cell(row=row, column=col, value=val)
-        if fill_:   cell.fill    = fill_
-        if font_:   cell.font    = font_
-        if align_:  cell.alignment = align_
-        if border_: cell.border  = border_
-        if num_fmt: cell.number_format = num_fmt
+    def sc(ws, r, c, v, f=None, fn=None, a=None, b=None, nf=None):
+        cell = ws.cell(row=r, column=c, value=v)
+        if f:  cell.fill            = f
+        if fn: cell.font            = fn
+        if a:  cell.alignment       = a
+        if b:  cell.border          = b
+        if nf: cell.number_format   = nf
         return cell
 
-    PHASE_COLORS = {
-        'services':     (TEAL,   '0F766E'),
-        'support':      (AMBER,  'D97706'),
-        'development':  (NAVY,   '1E3A5F'),
-        'consultation': (BLUE,   '1D4ED8'),
-    }
-    PHASE_LABELS = {
-        'services':    'Services',
-        'support':     'Support',
-        'development': 'Development',
-        'consultation':'Consultation',
+    PHASE_INFO = {
+        'services':    ('Services',    ACCENT, DKBLUE),
+        'support':     ('Support',     AMBER,  'D97706'),
+        'development': ('Development', NAVY,   '1E3A5F'),
+        'consultation':('Consultation','3B82F6','1D4ED8'),
     }
 
+    # ── All columns with grouping ──────────────────────────────────────
+    # Group 1: Budget  Group 2: Current Month  Group 3: Profitability  Group 4: Progress & VI
+    COL_GROUPS = [
+        # (name, width, num_fmt, align, group_label, group_color)
+        ('Month',                    14, None,     'left',  'General',       NAVY),
+        ('Variance %',               10, '0.0%',   'center','General',       NAVY),
+        ('Total Revenue (SAR)',       16, '#,##0',  'right', 'Budget',        '1E3A5F'),
+        ('Total Est. Cost (SAR)',     16, '#,##0',  'right', 'Budget',        '1E3A5F'),
+        ('Est. Effort MDs',          13, '#,##0.0','center','Budget',        '1E3A5F'),
+        ('This Month MDs',           13, '#,##0.0','center','Current Month', 'C2410C'),
+        ('Actual Effort to Date (MD)',16,'#,##0.0','center','Current Month', 'C2410C'),
+        ('% Completion',             13, '0.0%',   'center','Current Month', 'C2410C'),
+        ('Current Cost (SAR)',        16, '#,##0',  'right', 'Current Month', 'C2410C'),
+        ('Est. Remaining (MD)',       14, '#,##0.0','center','Profitability', '5B21B6'),
+        ('EAC MDs',                  12, '#,##0.0','center','Profitability', '5B21B6'),
+        ('Est. Cost to Complete SAR', 16, '#,##0',  'right', 'Profitability', '5B21B6'),
+        ('Est. at Completion SAR',    17, '#,##0',  'right', 'Profitability', '5B21B6'),
+        ('CPI',                      10, '0.00',   'center','Profitability', '5B21B6'),
+        ('Cost Variance SAR',         15, '#,##0',  'right', 'Profitability', '5B21B6'),
+        ('Profit at Comp SAR',        15, '#,##0',  'right', 'Profitability', '5B21B6'),
+        ('Progress %',               12, '0.0%',   'center','Progress & VI', '065F46'),
+        ('Virtual Invoice SAR',       16, '#,##0',  'right', 'Progress & VI', '065F46'),
+    ]
+    NCOLS = len(COL_GROUPS)
+
     # ════════════════════════════════════════════════════════════════════
-    # SHEET 1: SUMMARY
+    # SUMMARY SHEET
     # ════════════════════════════════════════════════════════════════════
     ws = wb.create_sheet('Summary')
     ws.sheet_view.showGridLines = False
-    ws.column_dimensions['A'].width = 28
-    ws.column_dimensions['B'].width = 20
-    ws.column_dimensions['C'].width = 20
-    ws.column_dimensions['D'].width = 20
-    ws.column_dimensions['E'].width = 20
+    ws.freeze_panes = 'B7'
 
-    # Header block
-    ws.row_dimensions[1].height = 40
-    ws.merge_cells('A1:E1')
-    set_cell(ws, 1, 1, 'ENVNT.', fill_=fill(NAVY), font_=font(WHITE, bold=True, size=16),
-             align_=align('left', 'center'))
-    ws.row_dimensions[2].height = 26
-    ws.merge_cells('A2:E2')
-    set_cell(ws, 2, 1, proj_name, fill_=fill(NAVY), font_=font(WHITE, bold=True, size=13),
-             align_=align('left', 'center'))
+    COL_W_SUM = [26, 20, 20, 14, 14, 14]
+    for ci, w in enumerate(COL_W_SUM, 1):
+        ws.column_dimensions[get_column_letter(ci)].width = w
+
+    # Row 1: ENVNT. logo bar
+    ws.row_dimensions[1].height = 44
+    ws.merge_cells('A1:F1')
+    sc(ws,1,1,'ENVNT.', fill(NAVY), font(WHITE,True,18), al('left','center'))
+
+    # Row 2: Project name
+    ws.row_dimensions[2].height = 28
+    ws.merge_cells('A2:F2')
+    sc(ws,2,1, proj_name, fill(ACCENT), font(WHITE,True,14), al('left','center'))
+
+    # Row 3: subtitle
     ws.row_dimensions[3].height = 18
-    ws.merge_cells('A3:E3')
-    set_cell(ws, 3, 1, f'Variance Report — Generated {gen_date}',
-             fill_=fill('2D3F6B'), font_=font('93C5FD', size=9, italic=True),
-             align_=align('left', 'center'))
+    ws.merge_cells('A3:F3')
+    sc(ws,3,1, f'Variance Report  ·  Generated {gen_date}',
+       fill('0A0F5C'), font('93C5FD',False,9,True), al('left','center'))
 
-    # Table header row
-    ws.row_dimensions[5].height = 22
-    headers = ['Phase', 'Current Cost (SAR)', 'EAC (SAR)', '% Complete', 'Remaining MDs']
-    col_aligns = ['left','right','right','center','center']
-    for ci, (h, al) in enumerate(zip(headers, col_aligns), 1):
-        set_cell(ws, 5, ci, h, fill_=fill('1E3A5F'),
-                 font_=font(WHITE, bold=True, size=9),
-                 align_=align(al, 'center'),
-                 border_=border_thin())
+    # Row 5: column headers
+    ws.row_dimensions[5].height = 20
+    hdrs = ['Phase','Current Cost (SAR)','EAC (SAR)','% Complete','Remaining MDs','Month (as of)']
+    h_al = ['left','right','right','center','center','center']
+    for ci,(h,a) in enumerate(zip(hdrs,h_al),1):
+        sc(ws,5,ci,h, fill(NAVY), font(WHITE,True,9), al(a,'center'), thin())
 
     total_cost = total_eac = 0
     row = 6
     for ph in phases:
-        ph_key   = ph.get('phase','')
-        ph_label = PHASE_LABELS.get(ph_key, ph_key.title())
-        ph_color, ph_dark = PHASE_COLORS.get(ph_key, (NAVY, NAVY))
-        months   = ph.get('months', [])
-        latest   = ph.get('latestData', {})
-        cost     = latest.get('currentCostSAR', 0) or 0
-        eac      = latest.get('eacCostSAR', 0) or cost
-        pct      = latest.get('completionPct', 0) or 0
-        rem      = latest.get('remainingMDs', 0) or 0
-        total_cost += cost; total_eac += eac
-
-        ws.row_dimensions[row].height = 20
-        set_cell(ws, row, 1, ph_label, fill_=fill(ph_color),
-                 font_=font(WHITE, bold=True, size=10), align_=align('left','center'))
-        set_cell(ws, row, 2, cost,  fill_=fill(LGRAY), font_=font(bold=True),
-                 align_=align('right','center'), num_fmt='#,##0')
-        set_cell(ws, row, 3, eac,   fill_=fill(LGRAY), font_=font(bold=True),
-                 align_=align('right','center'), num_fmt='#,##0')
-        set_cell(ws, row, 4, pct/100 if pct else 0, fill_=fill(LGRAY), font_=font(bold=True),
-                 align_=align('center','center'), num_fmt='0.0%')
-        set_cell(ws, row, 5, rem,   fill_=fill(LGRAY), font_=font(bold=True),
-                 align_=align('center','center'), num_fmt='#,##0.0')
-        row += 1
-
-    # Total row
-    ws.row_dimensions[row].height = 22
-    set_cell(ws, row, 1, 'TOTAL', fill_=fill(NAVY), font_=font(WHITE, bold=True, size=10),
-             align_=align('left','center'))
-    set_cell(ws, row, 2, total_cost, fill_=fill(NAVY), font_=font(WHITE, bold=True),
-             align_=align('right','center'), num_fmt='#,##0')
-    set_cell(ws, row, 3, total_eac,  fill_=fill(NAVY), font_=font(WHITE, bold=True),
-             align_=align('right','center'), num_fmt='#,##0')
-    for ci in [4,5]:
-        set_cell(ws, row, ci, '', fill_=fill(NAVY))
-
-    # ════════════════════════════════════════════════════════════════════
-    # SHEETS PER PHASE
-    # ════════════════════════════════════════════════════════════════════
-    for ph in phases:
-        ph_key   = ph.get('phase','')
-        ph_label = PHASE_LABELS.get(ph_key, ph_key.title())
-        ph_color, ph_dark = PHASE_COLORS.get(ph_key, (NAVY, NAVY))
-        months   = ph.get('months', [])
-        if not months: continue
-
-        ws2 = wb.create_sheet(ph_label)
-        ws2.sheet_view.showGridLines = False
-
-        # Column widths
-        col_w = [16, 10, 12, 12, 12, 12, 12, 14, 12, 12, 14, 14, 14]
-        col_names = ['Month','Variance %','Actual MDs','% Completion','Remaining MDs',
-                     'EAC MDs','Current Cost SAR','Est. at Completion SAR',
-                     'CPI','Cost Variance SAR','Profit at Comp SAR',
-                     'Progress %','Virtual Invoice SAR']
-        for ci, (w, nm) in enumerate(zip(col_w, col_names), 1):
-            ws2.column_dimensions[get_column_letter(ci)].width = w
-
-        # Phase header
-        ws2.row_dimensions[1].height = 36
-        ws2.merge_cells(f'A1:{get_column_letter(len(col_names))}1')
-        set_cell(ws2, 1, 1, f'ENVNT. — {proj_name} — {ph_label}',
-                 fill_=fill(ph_color), font_=font(WHITE, bold=True, size=13),
-                 align_=align('left','center'))
-
-        ws2.row_dimensions[2].height = 16
-        ws2.merge_cells(f'A2:{get_column_letter(len(col_names))}2')
-        latest = ph.get('latestData',{})
-        mk = latest.get('monthKey','')
+        ph_key = ph.get('phase','')
+        ph_label, ph_color, ph_dark = PHASE_INFO.get(ph_key, (ph_key.title(), NAVY, NAVY))
+        latest = ph.get('latestData', {})
         cost = latest.get('currentCostSAR',0) or 0
         eac  = latest.get('eacCostSAR',0) or cost
         pct  = latest.get('completionPct',0) or 0
         rem  = latest.get('remainingMDs',0) or 0
-        summary_txt = (f'As of {mk}   |   Current Cost: {cost:,.0f} SAR   |   '
-                       f'EAC: {eac:,.0f} SAR   |   {pct:.1f}% Complete   |   '
-                       f'{rem:.1f} MDs Remaining')
-        set_cell(ws2, 2, 1, summary_txt, fill_=fill(ph_dark),
-                 font_=font('BAE6FD', size=9, italic=True), align_=align('left','center'))
+        mk   = latest.get('monthKey','')
+        total_cost += cost; total_eac += eac
 
-        # Column headers
-        ws2.row_dimensions[4].height = 22
-        for ci, nm in enumerate(col_names, 1):
-            set_cell(ws2, 4, ci, nm, fill_=fill('1E3A5F'),
-                     font_=font(WHITE, bold=True, size=8),
-                     align_=align('center','center'), border_=border_thin())
+        ws.row_dimensions[row].height = 20
+        sc(ws,row,1,ph_label, fill(ph_color), font(WHITE,True,10), al('left','center'))
+        sc(ws,row,2,cost,  fill(LGRAY),font('1E293B',True),al('right','center'),None,'#,##0')
+        sc(ws,row,3,eac,   fill(LGRAY),font('1E293B',True),al('right','center'),None,'#,##0')
+        sc(ws,row,4,pct/100 if pct else 0, fill(LGRAY),font('1E293B',True),al('center','center'),None,'0.0%')
+        sc(ws,row,5,rem,   fill(LGRAY),font('1E293B',True),al('center','center'),None,'#,##0.0')
+        sc(ws,row,6,mk,    fill(LGRAY),font('64748B'),al('center','center'))
+        row += 1
+
+    ws.row_dimensions[row].height = 24
+    sc(ws,row,1,'TOTAL', fill(NAVY),font(WHITE,True,11),al('left','center'))
+    sc(ws,row,2,total_cost, fill(NAVY),font(WHITE,True),al('right','center'),None,'#,##0')
+    sc(ws,row,3,total_eac,  fill(NAVY),font(WHITE,True),al('right','center'),None,'#,##0')
+    for ci in [4,5,6]:
+        sc(ws,row,ci,'', fill(NAVY))
+
+    # ════════════════════════════════════════════════════════════════════
+    # ONE SHEET PER PHASE  (all phases on same sheet if BOG-style project)
+    # ════════════════════════════════════════════════════════════════════
+    for ph in phases:
+        ph_key = ph.get('phase','')
+        ph_label, ph_color, ph_dark = PHASE_INFO.get(ph_key, (ph_key.title(), NAVY, NAVY))
+        months = ph.get('months', [])
+        if not months: continue
+
+        ws2 = wb.create_sheet(ph_label)
+        ws2.sheet_view.showGridLines = False
+        ws2.freeze_panes = 'B5'
+
+        # Set column widths
+        for ci, (nm,w,*_) in enumerate(COL_GROUPS, 1):
+            ws2.column_dimensions[get_column_letter(ci)].width = w
+
+        # Row 1: main header
+        ws2.row_dimensions[1].height = 40
+        ws2.merge_cells(f'A1:{get_column_letter(NCOLS)}1')
+        sc(ws2,1,1,f'ENVNT.  ·  {proj_name}  ·  {ph_label}',
+           fill(ACCENT), font(WHITE,True,14), al('left','center'))
+
+        # Row 2: summary stats bar
+        latest = ph.get('latestData',{})
+        mk   = latest.get('monthKey','')
+        cost = latest.get('currentCostSAR',0) or 0
+        eac  = latest.get('eacCostSAR',0) or cost
+        pct  = latest.get('completionPct',0) or 0
+        rem  = latest.get('remainingMDs',0) or 0
+        ws2.row_dimensions[2].height = 22
+        ws2.merge_cells(f'A2:{get_column_letter(NCOLS)}2')
+        sc(ws2,2,1,
+           f'As of {mk}     Current Cost: {cost:,.0f} SAR     EAC: {eac:,.0f} SAR     {pct:.1f}% Complete     {rem:.1f} MDs Remaining',
+           fill(ph_dark), font('BFDBFE',False,9,True), al('left','center'))
+
+        # Row 3: group labels (merged spans)
+        ws2.row_dimensions[3].height = 18
+        groups_seen = {}
+        for ci, (_,__,___,____,grp,grp_col) in enumerate(COL_GROUPS, 1):
+            if grp not in groups_seen:
+                groups_seen[grp] = {'start':ci,'color':grp_col}
+            groups_seen[grp]['end'] = ci
+        for grp,(info) in groups_seen.items():
+            s, e, gc = info['start'], info['end'], info['color']
+            if s == e:
+                sc(ws2,3,s,grp, fill(gc), font(WHITE,True,8), al('center','center'))
+            else:
+                ws2.merge_cells(f'{get_column_letter(s)}3:{get_column_letter(e)}3')
+                sc(ws2,3,s,grp, fill(gc), font(WHITE,True,8), al('center','center'))
+
+        # Row 4: column names
+        ws2.row_dimensions[4].height = 24
+        for ci,(_nm,_w,_nf,_al,_grp,_gc) in enumerate(COL_GROUPS,1):
+            sc(ws2,4,ci,_nm, fill('1E293B'), font(WHITE,True,8),
+               al('center','center',True), thin())
 
         # Data rows
-        num_fmts = [None,'0.0%','#,##0.0','0.0%','#,##0.0','#,##0.0',
-                    '#,##0','#,##0','0.00','#,##0','#,##0','0.0%','#,##0']
         for ri, m in enumerate(months, 5):
             ws2.row_dimensions[ri].height = 18
-            row_bg = WHITE if ri % 2 == 1 else 'F1F5F9'
+            bg = WHITE if ri%2==1 else LGRAY
+            cpi_v = m.get('cpi',0) or 0
+            cv_v  = m.get('costVarianceSAR',0) or 0
+            pr_v  = m.get('profitAtComp',0) or 0
+
             vals = [
                 m.get('month',''),
                 (m.get('variancePct',0) or 0)/100,
+                latest.get('totalRevSAR',0) or 0,   # total rev - same for all months
+                0,  # total est cost - TBD
+                0,  # est effort MDs - TBD
+                m.get('thisMonthMDs', m.get('actualMDs',0) or 0),
                 m.get('actualMDs',0) or 0,
                 (m.get('completionPct',0) or 0)/100,
+                m.get('currentCostSAR',0) or 0,
                 m.get('remainingMDs',0) or 0,
                 m.get('eacMDs',0) or 0,
-                m.get('currentCostSAR',0) or 0,
+                (m.get('estAtCompletion',0) or 0) - (m.get('currentCostSAR',0) or 0),  # cost to complete
                 m.get('estAtCompletion',0) or 0,
-                m.get('cpi',0) or 0,
-                m.get('costVarianceSAR',0) or 0,
-                m.get('profitAtComp',0) or 0,
+                cpi_v,
+                cv_v,
+                pr_v,
                 (m.get('progressPct',0) or 0)/100,
                 m.get('virtualInvoice',0) or 0,
             ]
-            for ci, (v, nf) in enumerate(zip(vals, num_fmts), 1):
-                al = 'left' if ci==1 else 'right' if ci in [7,8,10,11,13] else 'center'
-                # color cost variance and CPI
-                f_color = '000000'
-                if ci == 9:  # CPI
-                    f_color = GREEN if (v or 0)>=1 else AMBER if (v or 0)>0 else RED
-                elif ci == 10:  # cost variance
-                    f_color = GREEN if (v or 0)>=0 else RED
-                elif ci == 11:  # profit
-                    f_color = GREEN if (v or 0)>=0 else RED
-                set_cell(ws2, ri, ci, v, fill_=fill(row_bg),
-                         font_=font(f_color, size=9),
-                         align_=align(al,'center'),
-                         border_=border_bottom(),
-                         num_fmt=nf)
 
-    # Save to buffer
+            for ci,(v,(_nm,_w,nf,_al,_grp,_gc)) in enumerate(zip(vals,COL_GROUPS),1):
+                fc = '1E293B'
+                if ci==14: fc = GREEN if cpi_v>=1 else AMBER if cpi_v>0 else RED
+                elif ci==15: fc = GREEN if cv_v>=0 else RED
+                elif ci==16: fc = GREEN if pr_v>=0 else RED
+                sc(ws2,ri,ci,v, fill(bg), font(fc,False,9),
+                   al(_al,'center'), btm(), nf)
+
+    # buffer
     buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    filename = f'{proj_name.replace(" ","_")}_Variance_{date.today().isoformat()}.xlsx'
+    wb.save(buf); buf.seek(0)
+    fn = f'{proj_name.replace(" ","_")}_Variance_{date.today().isoformat()}.xlsx'
     return send_file(buf,
-                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                     as_attachment=True,
-                     download_name=filename)
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True, download_name=fn)
+
 
 
 if __name__ == '__main__':
