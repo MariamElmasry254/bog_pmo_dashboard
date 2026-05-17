@@ -63,9 +63,31 @@ function profFillFromTasks(phaseKey) {
 window.loadVariance = async function() {
   if (!AppState.loaded.variance) {
     AppState.loaded.variance = true;
-    document.getElementById('varianceExport').addEventListener('click', () => {
-      exportVariancePMO();
-    });
+    // Wire or create export button
+    let exportBtn = document.getElementById('varianceExport');
+    if (!exportBtn) {
+      exportBtn = document.createElement('button');
+      exportBtn.id = 'varianceExport';
+      exportBtn.innerHTML = '⬇ Export Excel';
+      exportBtn.style.cssText = [
+        'position:fixed;bottom:24px;right:24px;z-index:999',
+        'padding:10px 20px;background:#1B2A4E;color:white',
+        'border:none;border-radius:8px;font-size:13px;font-weight:600',
+        'cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.3)',
+        'display:none'  // hidden until variance tab is active
+      ].join(';');
+      document.body.appendChild(exportBtn);
+      // Show when variance tab active, hide otherwise
+      document.querySelectorAll('.exec-tab').forEach(t => {
+        t.addEventListener('click', () => {
+          exportBtn.style.display = t.dataset.tab === 'variance' ? 'block' : 'none';
+        });
+      });
+    }
+    if (exportBtn) {
+      exportBtn.style.display = 'block';
+      exportBtn.addEventListener('click', () => { exportVariancePMO(); });
+    }
     document.querySelectorAll('.sub-tab').forEach(b => {
       b.addEventListener('click', () => switchSubTab(b.dataset.subtab));
     });
