@@ -88,11 +88,38 @@ tr:hover td{background:#FAFAFA;}
 .modal-bg.open{display:flex;}
 .modal{background:#fff;border-radius:12px;padding:28px;width:440px;max-width:92vw;box-shadow:0 20px 60px rgba(0,0,0,.3);}
 
-/* Management role: hide edit/delete/add controls */
-body.role-management .mgmt-hide { display: none !important; }
-body.role-management #ticketConfirmBtn { display: none !important; }
-body.role-management .btn-primary:not(.mgmt-show) { display: none !important; }
+.role-management .btn-ghost.btn-sm { display: none !important; }
+.role-management #ticketSection { display: none !important; }
+.role-management #ticketConfirmBtn { display: none !important; }
+.role-management #promoFormWrap { display: none !important; }
+.role-management #travelAddBtn { display: none !important; }
+.role-management .btn-primary { display: none !important; }
 </style>
+<script>
+// Set role class BEFORE page renders to prevent flash
+(function(){
+  var r = document.cookie.match(/user_role=([^;]+)/);
+  // Try sessionStorage fallback
+  var stored = typeof sessionStorage !== "undefined" && sessionStorage.getItem("_pmo_role");
+  if (stored) {
+    window._currentRole = stored;
+    if (stored === "management") document.documentElement.classList.add("role-management");
+  }
+  // Always fetch fresh from server (authoritative)
+  fetch("/api/me").then(function(r){return r.json();}).then(function(d){
+    window._currentRole = d.role;
+    if (typeof sessionStorage !== "undefined") sessionStorage.setItem("_pmo_role", d.role);
+    if (d.role === "management") {
+      document.documentElement.classList.add("role-management");
+      document.body && document.body.classList.add("role-management");
+    }
+    if (d.role === "admin") {
+      var b = document.getElementById("tabBtnUsers");
+      if (b) b.style.display = "";
+    }
+  }).catch(function(){});
+})();
+</script>
 </head>
 <body>
 
@@ -115,6 +142,7 @@ body.role-management .btn-primary:not(.mgmt-show) { display: none !important; }
     <button class="tab-btn" onclick="switchTab('promotions')">
       🏆 Promotions <span class="cnt-badge" id="promoCount">…</span>
     </button>
+
     <button class="tab-btn" id="tabBtnUsers" onclick="switchTab('users')" style="display:none;">
       Users
     </button>
@@ -449,7 +477,7 @@ async function loadTravel() {
           <td style="font-size:12px;">${r.end_date||'—'}</td>
           <td style="font-size:11px;color:var(--muted);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(r.notes||'')}</td>
           <td style="white-space:nowrap;">
-            <button class="btn btn-ghost btn-sm mgmt-hide" onclick='openEdit(${JSON.stringify(r).replace(/'/g,"\'")},"travel")'>✎</button>
+            <button class="btn btn-ghost btn-sm" onclick='openEdit(${JSON.stringify(r).replace(/'/g,"\'")},"travel")'>✎</button>
             <button class="btn btn-danger btn-sm" onclick="delTravel(${r.id})">✕</button>
           </td>
         </tr>`).join('');
@@ -470,7 +498,7 @@ async function loadTravel() {
         <td style="font-size:12px;">${r.end_date||'—'}</td>
         <td style="font-size:11px;color:var(--muted);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(r.notes||'')}</td>
         <td style="white-space:nowrap;">
-          <button class="btn btn-ghost btn-sm mgmt-hide" onclick='openEdit(${JSON.stringify(r).replace(/'/g,"\\'")},"travel")'>✎</button>
+          <button class="btn btn-ghost btn-sm" onclick='openEdit(${JSON.stringify(r).replace(/'/g,"\\'")},"travel")'>✎</button>
           <button class="btn btn-danger btn-sm" onclick="delTravel(${r.id})">✕</button>
         </td>
       </tr>`).join('')
@@ -564,6 +592,7 @@ async function bulkDeleteTravel() {
 
 // ─── Travel: CRUD ────────────────────────────────────────────────────
 function openEdit(r, type) {
+  if(window._currentRole === 'management') return;
   if (type === 'travel') {
     _editTravel = r;
     document.getElementById('tv_name').value   = r.name        || '';
@@ -1378,7 +1407,7 @@ async function loadPromos() {
         <td><span class="badge badge-blue" style="font-size:10px;">${r.year||'—'}</span></td>
         <td style="font-size:11px;color:var(--muted);">${esc(r.notes||'')}</td>
         <td style="white-space:nowrap;">
-          <button class="btn btn-ghost btn-sm mgmt-hide" onclick='openEdit(${JSON.stringify(r).replace(/'/g,"\\'")},"promotions")'>✎</button>
+          <button class="btn btn-ghost btn-sm" onclick='openEdit(${JSON.stringify(r).replace(/'/g,"\\'")},"promotions")'>✎</button>
           <button class="btn btn-danger btn-sm" onclick="delPromo(${r.id})">✕</button>
         </td>
       </tr>`).join('')
@@ -1512,11 +1541,7 @@ loadTravel();
       <div><label class="filter-label">ROLE</label><select id="uRole" onchange="onRoleChange()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;"><option value="pmo">PMO Coordinator</option><option value="management">Management</option><option value="admin">Admin</option></select></div>
       <div id="coordRow" style="grid-column:span 2;"><label class="filter-label">ODOO COORDINATOR</label><button type="button" onclick="loadCoords()" id="coordBtn" style="display:block;font-size:12px;color:var(--blue);background:none;border:none;cursor:pointer;padding:3px 0;margin-bottom:6px;">Load from Odoo</button><div id="coordCards" style="display:flex;flex-wrap:wrap;gap:8px;max-height:180px;overflow-y:auto;"></div><input type="hidden" id="uOdooName"><div id="coordInfo" style="display:none;margin-top:8px;padding:8px 12px;background:#EFF6FF;border-radius:8px;font-size:12px;color:#1E40AF;"><b id="coordInfoName"></b> <span id="coordInfoJob" style="color:#64748B;"></span><div id="coordInfoProjects" style="margin-top:4px;"></div></div></div>
     </div>
-    <div style="display:flex;gap:8px;margin-top:14px;align-items:center;">
-      <button class="btn btn-primary" onclick="saveUser()">Save</button>
-      <button class="btn btn-ghost" onclick="cancelUser()">Cancel</button>
-      <span id="uMsg" style="font-size:12px;"></span>
-    </div>
+    <div style="display:flex;gap:8px;margin-top:14px;align-items:center;"><button class="btn btn-primary" onclick="saveUser()">Save</button><button class="btn btn-ghost" onclick="cancelUser()">Cancel</button><span id="uMsg" style="font-size:12px;"></span></div>
   </div>
   <div class="tbl-wrap"><table style="width:100%;border-collapse:collapse;"><thead><tr style="background:var(--navy);color:white;"><th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:600;">USER</th><th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:600;">ROLE</th><th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:600;">COORDINATOR</th><th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:600;">PROJECTS</th><th style="text-align:center;padding:10px 14px;font-size:11px;font-weight:600;">ACTIONS</th></tr></thead><tbody id="uTbody"></tbody></table></div>
 </div>
@@ -1535,7 +1560,6 @@ window.deleteUser=function(idx){var uname=Object.keys(_UDATA)[idx];if(!uname)ret
 window.cancelUser=function(){document.getElementById("userFormWrap").style.display="none";_UE=null;};
 window.saveUser=function(){var msg=document.getElementById("uMsg"),un=document.getElementById("uUsername").value.trim().toLowerCase(),pw=document.getElementById("uPassword").value.trim(),dn=document.getElementById("uDisplayName").value.trim(),role=document.getElementById("uRole").value,on2=document.getElementById("uOdooName").value.trim();if(!un){msg.textContent="Username required";msg.style.color="red";return;}if(!_UE&&!pw){msg.textContent="Password required";msg.style.color="red";return;}var body={username:un,role:role,display_name:dn||un,odoo_name:on2};if(pw)body.password=pw;fetch(_UE?"/api/users/"+_UE:"/api/users",{method:_UE?"PUT":"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json();}).then(function(d){if(d.error){msg.textContent=d.error;msg.style.color="red";return;}msg.textContent="Saved!";msg.style.color="green";setTimeout(function(){window.cancelUser();usrLoad();},700);}).catch(function(e){msg.textContent=e.message;msg.style.color="red";});};
 function usrLoad(){var tbody=document.getElementById("uTbody");tbody.innerHTML="<tr><td colspan=\"5\" style=\"padding:20px;text-align:center;color:var(--muted);\">Loading...</td></tr>";fetch("/api/users").then(function(r){return r.json();}).then(function(d){_UDATA=d.users||{};var keys=Object.keys(_UDATA);if(!keys.length){tbody.innerHTML="<tr><td colspan=\"5\" style=\"padding:20px;text-align:center;color:var(--muted);\">No users</td></tr>";return;}fetch("/api/odoo/coordinators").then(function(r){return r.json();}).then(function(cr){var cd={};if(cr.ok)for(var i=0;i<cr.employees.length;i++)cd[cr.employees[i].name]=cr.employees[i].projects;var rows="";for(var k=0;k<keys.length;k++){var u=_UDATA[keys[k]],projs=u.odoo_name&&cd[u.odoo_name]?cd[u.odoo_name]:[],ph="";for(var j=0;j<projs.length;j++)ph+="<span style=\"display:inline-block;margin:1px 3px 1px 0;padding:1px 7px;background:#DBEAFE;border-radius:10px;font-size:10px;color:#1E40AF;\">"+esc(projs[j].name)+"</span>";if(!ph)ph="<span style=\"color:var(--muted);font-size:11px;\">-</span>";rows+="<tr style=\"border-bottom:1px solid var(--border);\"><td style=\"padding:10px 14px;\"><div style=\"font-weight:600;font-size:13px;\">"+esc(u.display_name||keys[k])+"</div><div style=\"font-size:11px;color:var(--muted);\">"+esc(keys[k])+"</div></td><td style=\"padding:10px 14px;\"><span style=\"font-size:11px;font-weight:600;padding:2px 10px;border-radius:10px;"+(URST[u.role]||"")+"\">"+( URLB[u.role]||u.role)+"</span></td><td style=\"padding:10px 14px;font-size:12px;color:var(--muted);\">"+esc(u.odoo_name||"-")+"</td><td style=\"padding:10px 14px;\">"+ph+"</td><td style=\"padding:10px 14px;text-align:center;white-space:nowrap;\"><button data-act=\"edit\" data-idx=\""+k+"\" style=\"padding:4px 12px;border:1px solid var(--border);border-radius:5px;background:white;cursor:pointer;font-size:12px;margin-right:6px;\">Edit</button><button data-act=\"del\" data-idx=\""+k+"\" style=\"padding:4px 12px;border:1px solid #FCA5A5;border-radius:5px;background:#FEF2F2;cursor:pointer;font-size:12px;color:#DC2626;\">Delete</button></td></tr>";}tbody.innerHTML=rows;tbody.querySelectorAll("[data-act]").forEach(function(btn){btn.addEventListener("click",function(){var idx=parseInt(this.getAttribute("data-idx"));if(this.getAttribute("data-act")==="edit")editUser(idx);else deleteUser(idx);});});}).catch(function(){});}).catch(function(e){tbody.innerHTML="<tr><td colspan=\"5\" style=\"padding:20px;text-align:center;color:red;\">"+e.message+"</td></tr>";});}
-fetch("/api/me").then(function(r){return r.json();}).then(function(d){window._currentRole=d.role;if(d.role==="admin"){var b=document.getElementById("tabBtnUsers");if(b)b.style.display="";}if(d.role==="management"){document.querySelectorAll(".btn-ghost.btn-sm").forEach(function(el){el.style.display="none";});var tb=document.getElementById("ticketConfirmBtn");if(tb)tb.style.display="none";}}).catch(function(){});
 </script>
 </body>
 </html>
