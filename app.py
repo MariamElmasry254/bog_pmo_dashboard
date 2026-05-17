@@ -1773,6 +1773,19 @@ def api_overview_phase_progress():
     return jsonify({'ok': True, 'phases': result})
 
 
+@app.route('/api/project-info')
+def api_project_info():
+    """Fast endpoint: returns project type from session without hitting Odoo."""
+    proj_id   = session.get('project_id')
+    proj_name = session.get('project_name', '')
+    is_bog    = not proj_id or str(proj_id) == '228'
+    return jsonify({
+        'ok':         True,
+        'project_id': proj_id,
+        'project_name': proj_name,
+        'is_bog':     is_bog,
+    })
+
 @app.route('/api/project-phases-available')
 def api_project_phases_available():
     """Check which phase groups exist for this project — uses Excel config first."""
@@ -6419,13 +6432,8 @@ def api_plan_overrides_get():
         value     = body.get('value')
         if not phase or not month_key or not field:
             return jsonify({'error': 'phase, month_key, field required'}), 400
-        # For so_line_map and direct_inv_phase: save as key=month_key, value=value directly
-        # so classify_direct_inv can read: dir_inv_overrides.get('INV_2025_0057') = 'support'
-        # and so_line_map can read: so_map_raw.get('12345') = 'support'
-        if phase in ('so_line_map', 'direct_inv_phase'):
-            proj_set_override('plan', phase, month_key, value)
-        else:
-            proj_set_override('plan', phase, f'{month_key}.{field}', value)
+        # Save: namespace=plan, subkey=phase, key=month_key.field
+        proj_set_override('plan', phase, f'{month_key}.{field}', value)
         return jsonify({'ok': True, 'phase': phase, 'month_key': month_key, 'field': field})
     return jsonify(load_plan_overrides())
 
@@ -7733,17 +7741,11 @@ def api_sales_orders():
         pfx = active_db_prefix()
         plan_ns = f'{pfx}_plan' if pfx else 'plan'
         so_map_raw = db.get_namespace_overrides(plan_ns, 'so_line_map') or {}
-        for raw_key, val in so_map_raw.items():
-            # New format: key='12345', value='support'
-            if isinstance(val, str) and val and not raw_key.endswith('.var_tab'):
-                line_var_map[raw_key] = val
-            # Old format: key='12345.var_tab', value='support'
-            elif raw_key.endswith('.var_tab'):
-                line_id = raw_key[:-len('.var_tab')]
-                if isinstance(val, str) and val:
-                    line_var_map[line_id] = val
-            elif isinstance(val, dict) and val.get('var_tab'):
-                line_var_map[str(raw_key)] = val['var_tab']
+        for line_id_key, fields in so_map_raw.items():
+            if isinstance(fields, dict) and fields.get('var_tab'):
+                line_var_map[str(line_id_key)] = fields['var_tab']
+            elif isinstance(fields, str):
+                line_var_map[str(line_id_key)] = fields
     except Exception:
         pass
     try:
@@ -7856,15 +7858,6 @@ def api_sales_orders():
             # Classify each direct invoice by saved override or auto-detection
             def classify_direct_inv(inv_id, inv_name=''):
                 key = (inv_name or '').replace('/', '_')
-                # New format: key='INV_2025_0057', value='support'
-                val = dir_inv_overrides.get(key)
-                if val and isinstance(val, str):
-                    return val
-                # Old format: key='INV_2025_0057.phase', value='support'
-                val2 = dir_inv_overrides.get(f'{key}.phase')
-                if val2 and isinstance(val2, str):
-                    return val2
-                # Legacy dict format
                 override = dir_inv_overrides.get(key, {})
                 if isinstance(override, dict) and override.get('phase'):
                     return override['phase']
