@@ -563,7 +563,13 @@ def login():
             session['display_name'] = user_info.get('display_name', username)
             session['odoo_name']    = user_info.get('odoo_name', '')
             session.permanent = True
-            return jsonify({'ok':True,'redirect':'/projects','role':role}) if request.is_json else redirect('/projects')
+            if request.is_json:
+                resp = jsonify({'ok':True,'redirect':'/projects','role':role})
+            else:
+                resp = redirect('/projects')
+            # Set plain cookie for sync JS read (not httponly)
+            resp.set_cookie('pmo_role', role, max_age=86400*30, samesite='Lax')
+            return resp
         error = 'Invalid credentials'
         if request.is_json:
             return jsonify({'ok': False, 'error': error}), 401
@@ -573,7 +579,9 @@ def login():
 @app.route('/logout')
 def logout():
     session.clear()
-    return redirect('/login')
+    resp = redirect('/login')
+    resp.set_cookie('pmo_role', '', expires=0)
+    return resp
 
 
 @app.route('/')
@@ -593,10 +601,7 @@ def projects_list():
     # Try both locations
     import os
     tmpl_dir = app.template_folder
-    display_name = session.get('display_name', '')
-    role         = session.get('user_role', 'admin')
-    return render_template('partials/projects.html',
-                           display_name=display_name, role=role)
+    return render_template('partials/projects.html', display_name=session.get('display_name',''), role=session.get('user_role','admin'))
 
 
 @app.route('/project/select', methods=['POST'])
@@ -1804,8 +1809,7 @@ def api_overview_phase_progress():
 def api_project_info():
     proj_id = session.get('project_id')
     is_bog  = not proj_id or str(proj_id) == '228'
-    return jsonify({'ok':True,'project_id':proj_id,
-                    'project_name':session.get('project_name',''),'is_bog':is_bog})
+    return jsonify({'ok':True,'project_id':proj_id,'project_name':session.get('project_name',''),'is_bog':is_bog})
 
 @app.route('/api/me')
 @login_required
@@ -1847,7 +1851,7 @@ def api_odoo_coordinators():
         for p in projs:
             coord=p.get('coordinator_id')
             if coord and isinstance(coord,list) and len(coord)>1:
-                cn=coord[1]; 
+                cn=coord[1]
                 if cn not in cp: cp[cn]=[]
                 cp[cn].append({'id':p['id'],'name':p['name']})
         result=[]
@@ -1857,8 +1861,7 @@ def api_odoo_coordinators():
             for cn,plist in cp.items():
                 if e['name'].lower() in cn.lower() or cn.lower() in e['name'].lower():
                     mp.extend(plist)
-            result.append({'id':e['id'],'name':e['name'],'job':job,
-                           'email':e.get('work_email',''),'projects':mp})
+            result.append({'id':e['id'],'name':e['name'],'job':job,'email':e.get('work_email',''),'projects':mp})
         return jsonify({'ok':True,'employees':result})
     except Exception as ex:
         return jsonify({'ok':False,'error':str(ex),'trace':traceback.format_exc()}),500
@@ -2448,8 +2451,7 @@ def api_projects_list():
         if not odoo.uid:
             if not odoo.connect():
                 return jsonify({'error': 'Odoo not connected', 'projects': []}), 503
-        safe_fields = ['id', 'name', 'user_id', 'date_start', 'end_date',
-                       'stage_id', 'coordinator_id']
+        safe_fields = ['id', 'name', 'user_id', 'date_start', 'end_date', 'stage_id', 'coordinator_id']
         _role    = session.get('user_role', 'admin')
         _odoo_nm = (session.get('odoo_name') or '').strip()
         pmo_proj_ids = None
@@ -2529,7 +2531,7 @@ def api_projects_list():
                 'stage_name':  stage_name,
                 'value':       float(ex.get('value') or 0),
             })
-        return jsonify({'projects': result, 'role': _role if '_role' in dir() else 'admin', 'display_name': session.get('display_name',''), 'total': len(result)})
+        return jsonify({'projects':result,'role':_role if '_role' in dir() else 'admin','display_name':session.get('display_name',''),'total':len(result)})
     except Exception as e:
         logger.error(f"Projects list error: {e}", exc_info=True)
         return jsonify({'error': str(e), 'projects': []}), 500
