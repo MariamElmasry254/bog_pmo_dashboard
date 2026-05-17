@@ -29,6 +29,28 @@
 })();
 
 
+// ─── PMO Variance Export (defined early so button can reference it) ──
+window.exportVariancePMO = async function() {
+  var btn=document.getElementById('varianceExport');
+  var orig=btn?btn.textContent:'';
+  if(btn){btn.textContent='⏳ Generating...';btn.disabled=true;}
+  try{
+    var isBog=AppState._overviewData&&AppState._overviewData.is_bog!==false;
+    var phaseKeys=isBog?['development','consultation']:['services','support'];
+    var phases=phaseKeys.map(function(k){return{phase:k,latestData:Object.assign({},AppState._latestProfData&&AppState._latestProfData[k]||{},{totalRevSAR:AppState._savedRevenue&&AppState._savedRevenue[k]||0,totalEstCostSAR:AppState._budgetFinalCost&&AppState._budgetFinalCost[k]||0,totalEstMDs:AppState._budgetFinalMDs&&AppState._budgetFinalMDs[k]||0}),months:AppState._varianceMonthData&&AppState._varianceMonthData[k]||[]};});
+    var body={project_name:(AppState._overviewData&&AppState._overviewData.project_name)||document.title||'Project',generated:new Date().toISOString().slice(0,10),phases:phases};
+    var res=await fetch('/api/variance/export-pmo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(!res.ok)throw new Error('Server error '+res.status);
+    var blob=await res.blob();var url=URL.createObjectURL(blob);
+    var a=document.createElement('a');a.href=url;
+    var cd=res.headers.get('Content-Disposition')||'';
+    a.download=(cd.match(/filename="?([^"]+)"?/)||[])[1]||'variance_report.xlsx';
+    document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
+  }catch(e){alert('Export failed: '+e.message);}
+  finally{if(btn){btn.textContent=orig||'⬇ Export Excel';btn.disabled=false;}}
+};
+
+
 function profFillFromTasks(phaseKey) {
   const remMD = AppState._taskRemainingMDs && AppState._taskRemainingMDs[phaseKey];
   if (!remMD) {
@@ -62,28 +84,37 @@ function profFillFromTasks(phaseKey) {
 
 
 async function fetchEffortCached(phaseKey) {
-  const ckey='_eff_'+phaseKey+'_'+(window._activeProjectId||'');
-  try{const hit=sessionStorage.getItem(ckey);if(hit){const d=JSON.parse(hit);if(d&&d.months&&d.months.length)return d;}}catch(e){}
-  const res=await fetch('/api/effort/'+phaseKey+'/all-months');
+  var ckey='_eff_'+phaseKey+'_'+(window._activeProjectId||'');
+  try{var hit=sessionStorage.getItem(ckey);if(hit){var d=JSON.parse(hit);if(d&&d.months&&d.months.length)return d;}}catch(e){}
+  var res=await fetch('/api/effort/'+phaseKey+'/all-months');
   if(!res.ok)throw new Error('Effort API '+res.status);
-  const d=await res.json();
+  var d=await res.json();
   try{sessionStorage.setItem(ckey,JSON.stringify(d));}catch(e){}
   return d;
 }
 
 window.loadVariance = async function() {
-  if(AppState._overviewData?.project_id)window._activeProjectId=AppState._overviewData.project_id;
+  if(AppState._overviewData&&AppState._overviewData.project_id)window._activeProjectId=AppState._overviewData.project_id;
   if (!AppState.loaded.variance) {
     AppState.loaded.variance = true;
-    setTimeout(async()=>{
-      const isBog=AppState._overviewData?.is_bog!==false;
-      const all=isBog?['development','consultation']:['services','support'];
-      for(const ph of all){if(!AppState._varianceMonthData?.[ph]){try{await switchSubTab(ph);}catch(e){}}}
-    },800);
-    let _vBtn=document.getElementById('varianceExport');
-    if(!_vBtn){_vBtn=document.createElement('button');_vBtn.id='varianceExport';_vBtn.textContent='\u2b07 Export Excel';_vBtn.style.cssText='position:fixed;bottom:24px;right:24px;z-index:999;padding:10px 20px;background:#1B2A4E;color:white;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.3)';document.body.appendChild(_vBtn);}
+    setTimeout(async function(){
+      var isBog2=AppState._overviewData&&AppState._overviewData.is_bog!==false;
+      var all=isBog2?['development','consultation']:['services','support'];
+      for(var i=0;i<all.length;i++){if(!AppState._varianceMonthData||!AppState._varianceMonthData[all[i]]){try{await switchSubTab(all[i]);}catch(e){}}}
+      // Notify overview to refresh EAC
+      if(window._overviewUpdateProfKPIs&&AppState._latestProfData){
+        Object.keys(AppState._latestProfData).forEach(function(k){window._overviewUpdateProfKPIs(k);});
+      }
+    },1000);
+    var _vBtn=document.getElementById('varianceExport');
+    if(!_vBtn){
+      _vBtn=document.createElement('button');_vBtn.id='varianceExport';
+      _vBtn.textContent='⬇ Export Excel';
+      _vBtn.style.cssText='position:fixed;bottom:24px;right:24px;z-index:999;padding:10px 20px;background:#1B2A4E;color:white;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.3)';
+      document.body.appendChild(_vBtn);
+    }
     _vBtn.style.display='block';
-    _vBtn.addEventListener('click',()=>exportVariancePMO());
+    _vBtn.onclick=function(){window.exportVariancePMO();};
     document.querySelectorAll('.sub-tab').forEach(b => {
       b.addEventListener('click', () => switchSubTab(b.dataset.subtab));
     });
@@ -1368,12 +1399,9 @@ async function profRecomputeAll(phaseKey) {
 
     // Only update latestData if this month has a % completion or remaining entry
     if (completionPct || remainingMDs) {
-      latestData = { completionPct, remainingMDs, eacMDs, cpi, profitAtComp, totalRevSAR, monthKey,
-                     eacCostSAR: estAtCompletion, currentCostSAR };
+      latestData = { completionPct, remainingMDs, eacMDs, cpi, profitAtComp, totalRevSAR, monthKey, eacCostSAR: estAtCompletion, currentCostSAR };
     }
-    if(!AppState._varianceMonthData)AppState._varianceMonthData={};
-    if(!AppState._varianceMonthData[phaseKey])AppState._varianceMonthData[phaseKey]=[];
-    if(completionPct||remainingMDs||actualMDs||thisMonthMDs){AppState._varianceMonthData[phaseKey].push({month:monthKey,consumedRevSAR:recognizedRev||0,totalRevSAR:totalRevSAR||0,totalEstCostSAR:totalEstCostSAR||0,totalEstMDs:totalEstMDs||0,thisMonthMDs:thisMonthMDs||0,actualMDs:actualMDs||0,completionPct:completionPct||0,currentCostSAR:currentCostSAR||0,remainingMDs:remainingMDs||0,eacMDs:eacMDs||0,estCostToComplete:estCostToComplete||0,estAtCompletion:estAtCompletion||0,cpi:cpi||0,costVarianceSAR:costVarianceSAR||0,costVariancePct:costVariancePct||0,profitAtComp:profitAtComp||0,plannedProfitSAR:plannedProfitMonthSAR||0,profitAtCompPct:profitAtCompPct||0,profVar:profVar||0,profVarPct:profVarPct||0,issuedUpToMonth:issuedUpToMonth||0,progressPct:progressPct2||0,recognizedRev:recognizedRev||0,production:production||0,accVI:accVI||0});}
+    if(!AppState._varianceMonthData)AppState._varianceMonthData={};if(!AppState._varianceMonthData[phaseKey])AppState._varianceMonthData[phaseKey]=[];if(completionPct||remainingMDs||actualMDs||thisMonthMDs){AppState._varianceMonthData[phaseKey].push({month:monthKey,consumedRevSAR:recognizedRev||0,totalRevSAR:totalRevSAR||0,totalEstCostSAR:totalEstCostSAR||0,totalEstMDs:totalEstMDs||0,thisMonthMDs:thisMonthMDs||0,actualMDs:actualMDs||0,completionPct:completionPct||0,currentCostSAR:currentCostSAR||0,remainingMDs:remainingMDs||0,eacMDs:eacMDs||0,estCostToComplete:estCostToComplete||0,estAtCompletion:estAtCompletion||0,cpi:cpi||0,costVarianceSAR:costVarianceSAR||0,costVariancePct:costVariancePct||0,profitAtComp:profitAtComp||0,plannedProfitSAR:plannedProfitMonthSAR||0,profitAtCompPct:profitAtCompPct||0,profVar:profVar||0,profVarPct:profVarPct||0,issuedUpToMonth:issuedUpToMonth||0,progressPct:progressPct2||0,recognizedRev:recognizedRev||0,production:production||0,accVI:accVI||0});}
     prevViAcc = viAcc;
   }  // end for..of rows
 
