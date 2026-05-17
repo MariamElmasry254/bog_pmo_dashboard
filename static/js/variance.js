@@ -34,7 +34,7 @@ if (typeof window.exportVariancePMO === 'undefined') {
     if(btn){btn.textContent='⏳ Generating...';btn.disabled=true;}
     try{
       var isBog=!AppState._overviewData||AppState._overviewData.is_bog!==false;
-      var phaseKeys=isBog?['development','consultation']:['Services', 'services','support'];
+      var phaseKeys=isBog?['development','consultation']:['services','support'];
       var phases=phaseKeys.map(function(k){var ld=(AppState._latestProfData&&AppState._latestProfData[k])||{};return{phase:k,latestData:Object.assign({},ld,{totalRevSAR:(AppState._savedRevenue&&AppState._savedRevenue[k])||ld.totalRevSAR||0,totalEstCostSAR:(AppState._budgetFinalCost&&AppState._budgetFinalCost[k])||0,totalEstMDs:(AppState._budgetFinalMDs&&AppState._budgetFinalMDs[k])||0}),months:(AppState._varianceMonthData&&AppState._varianceMonthData[k])||[]};});
       var body={project_name:(AppState._overviewData&&AppState._overviewData.project_name)||document.title||'Project',generated:new Date().toISOString().slice(0,10),phases:phases};
       var res=await fetch('/api/variance/export-pmo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -1210,7 +1210,7 @@ async function profRecomputeAll(phaseKey) {
         const phaseMapping = {
           development:  ['development'],
           consultation: ['consultation'],
-          services:     ['development', 'consultation'],  // non-BOG: services gets dev+consult
+          services:     ['Services', 'development', 'consultation'],  // non-BOG: services gets dev+consult
           support:      ['support'],
         };
         const matchPhases = phaseMapping[phaseKey] || [phaseKey];
