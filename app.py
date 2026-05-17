@@ -553,7 +553,7 @@ def login():
         password = data.get('password') or request.form.get('password', '')
         role, user_info = authenticate_user(username, password)
         if role:
-            session['logged_in']    = True; session['user_role']    = role
+            session['logged_in']    = True; session['user_role'] = role
             session['username']     = username
             session['display_name'] = user_info.get('display_name', username)
             session['odoo_name']    = user_info.get('odoo_name', '')
@@ -1918,7 +1918,7 @@ def api_variance_export_pmo():
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
     data=request.get_json() or {}
-    proj_name=data.get('project_name', active_project_name() or 'Project')
+    proj_name=(session.get('project_name') or data.get('project_name') or active_project_name() or 'Project')
     phases=data.get('phases',[]); gen_date=data.get('generated',date.today().isoformat())
     wb=openpyxl.Workbook(); wb.remove(wb.active)
     NAVY='1B2A4E'; GREEN='1D7A4A'; ORANGE='D4560A'; RED_H='B91C1C'; PURPLE='6D28D9'; LGRAY='F1F5F9'; WHITE='FFFFFF'; DARK='0F172A'
@@ -1966,8 +1966,7 @@ def api_variance_export_pmo():
         if rc: sc(ws,5,rc,total_rev,fill('F8FAFC'),font('065F46',True,9),al('right','center'),nf='#,##0')
         if cc2: sc(ws,5,cc2,total_cost,fill('F8FAFC'),font(DARK,True,9),al('right','center'),nf='#,##0')
         if mc: sc(ws,5,mc,total_mds,fill('F8FAFC'),font(DARK,True,9),al('right','center'),nf='#,##0.0')
-        ws.row_dimensions[6].height=20
-        col=1
+        ws.row_dimensions[6].height=20; col=1
         for grp_label,cols,grp_col in GROUPS:
             ncols=len(cols)
             if ncols>1: ws.merge_cells(f'{get_column_letter(col)}6:{get_column_letter(col+ncols-1)}6')
@@ -2752,7 +2751,7 @@ def api_overview():
         pass
 
     return jsonify({
-        'project_name':       PROJECT_NAME,
+        'project_name':       session.get('project_name', PROJECT_NAME),
         'phase':              PROJECT_INFO.get('phase'),
         'roadmap_start':      proj_start,
         'roadmap_end':        proj_end,
