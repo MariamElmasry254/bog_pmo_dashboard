@@ -96,27 +96,19 @@ tr:hover td{background:#FAFAFA;}
 .role-management .btn-primary { display: none !important; }
 </style>
 <script>
-// Set role class BEFORE page renders to prevent flash
+// Read role from cookie SYNCHRONOUSLY - no async delay
 (function(){
-  var r = document.cookie.match(/user_role=([^;]+)/);
-  // Try sessionStorage fallback
-  var stored = typeof sessionStorage !== "undefined" && sessionStorage.getItem("_pmo_role");
-  if (stored) {
-    window._currentRole = stored;
-    if (stored === "management") document.documentElement.classList.add("role-management");
+  var m = document.cookie.match(/(?:^|;)\s*pmo_role=([^;]+)/);
+  var role = m ? decodeURIComponent(m[1]) : "";
+  window._currentRole = role;
+  if (role === "management") {
+    document.documentElement.classList.add("role-management");
   }
-  // Always fetch fresh from server (authoritative)
+  // Also fetch to get Users tab for admin (async ok for that)
   fetch("/api/me").then(function(r){return r.json();}).then(function(d){
     window._currentRole = d.role;
-    if (typeof sessionStorage !== "undefined") sessionStorage.setItem("_pmo_role", d.role);
-    if (d.role === "management") {
-      document.documentElement.classList.add("role-management");
-      document.body && document.body.classList.add("role-management");
-    }
-    if (d.role === "admin") {
-      var b = document.getElementById("tabBtnUsers");
-      if (b) b.style.display = "";
-    }
+    if (d.role === "management") document.documentElement.classList.add("role-management");
+    if (d.role === "admin") { var b=document.getElementById("tabBtnUsers"); if(b) b.style.display=""; }
   }).catch(function(){});
 })();
 </script>
