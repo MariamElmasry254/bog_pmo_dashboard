@@ -6390,6 +6390,13 @@ def api_effort_all_months(phase_key):
         odoo_info = odoo_data.get(emp_name, {})
         odoo_pos = odoo_info.get('position')
         sar_rate = odoo_info.get('sar_rate', 0)
+        # Position override: use manually set position if Odoo has none
+        _pos_overrides = load_plan_overrides().get('position_overrides', {})
+        _pos_override = _pos_overrides.get(emp_name) or _pos_overrides.get(
+            _re_effort.sub(r'^\[[A-Z]\d+\s*\]\s*', '', emp_name).strip()
+        )
+        if _pos_override and not odoo_pos:
+            odoo_pos = _pos_override
 
         # ── Travel periods (match by Odoo ID, code, or name) ──
         emp_travel_periods = []
