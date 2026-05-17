@@ -519,18 +519,15 @@ DASHBOARD_USER = os.environ.get('DASHBOARD_USER', 'codelab')
 DASHBOARD_PASS = os.environ.get('DASHBOARD_PASS', 'pmo2026')
 ADMIN_USER = os.environ.get('ADMIN_USER', DASHBOARD_USER)
 ADMIN_PASS = os.environ.get('ADMIN_PASS', DASHBOARD_PASS)
-
 def get_all_users():
     try: return db.get_override('system', 'global', 'pmo_users') or {}
     except: return {}
-
 def authenticate_user(username, password):
     if username == ADMIN_USER and password == ADMIN_PASS:
         return 'admin', {'username':username,'display_name':'Admin','role':'admin','odoo_name':''}
     u = get_all_users().get(username)
     if u and u.get('password') == password: return u.get('role','pmo'), u
     return None, None
-
 def current_role(): return session.get('user_role', 'admin')
 def current_user_info():
     return {'username':session.get('username',''),'display_name':session.get('display_name',''),
@@ -556,21 +553,17 @@ def login():
         password = data.get('password') or request.form.get('password', '')
         role, user_info = authenticate_user(username, password)
         if role:
-            session['logged_in']    = True
-            session['user_role']    = role
+            session['logged_in']    = True; session['user_role']    = role
             session['username']     = username
             session['display_name'] = user_info.get('display_name', username)
             session['odoo_name']    = user_info.get('odoo_name', '')
             session.permanent = True
-            if request.is_json:
-                resp = jsonify({'ok':True,'redirect':'/projects','role':role})
-            else:
-                resp = redirect('/projects')
+            if request.is_json: resp = jsonify({'ok':True,'redirect':'/projects','role':role})
+            else: resp = redirect('/projects')
             resp.set_cookie('pmo_role', role, max_age=86400*30, samesite='Lax')
             return resp
         error = 'Invalid credentials'
-        if request.is_json:
-            return jsonify({'ok': False, 'error': error}), 401
+        if request.is_json: return jsonify({'ok': False, 'error': error}), 401
     return render_template('partials/login.html', error=error)
 
 
@@ -597,8 +590,8 @@ def projects_list():
     # Try both locations
     import os
     tmpl_dir = app.template_folder
-    display_name=session.get('display_name',''); role=session.get('user_role','admin')
-    return render_template('partials/projects.html',display_name=display_name,role=role)
+    dn=session.get('display_name','');rl=session.get('user_role','admin')
+    return render_template('partials/projects.html',display_name=dn,role=rl)
 
 
 @app.route('/project/select', methods=['POST'])
@@ -1916,6 +1909,116 @@ def api_projects_inprogress():
                 for p in sorted(pm.values(),key=lambda x:x['last_date'],reverse=True)]
         return jsonify({'ok':True,'projects':result,'cutoff':cutoff})
     except Exception as ex: return jsonify({'ok':False,'error':str(ex),'trace':traceback.format_exc()}),500
+
+@app.route('/api/variance/export-pmo', methods=['POST'])
+@login_required
+def api_variance_export_pmo():
+    from flask import send_file
+    import io, openpyxl
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    data=request.get_json() or {}
+    proj_name=data.get('project_name', active_project_name() or 'Project')
+    phases=data.get('phases',[]); gen_date=data.get('generated',date.today().isoformat())
+    wb=openpyxl.Workbook(); wb.remove(wb.active)
+    NAVY='1B2A4E'; GREEN='1D7A4A'; ORANGE='D4560A'; RED_H='B91C1C'; PURPLE='6D28D9'; LGRAY='F1F5F9'; WHITE='FFFFFF'; DARK='0F172A'
+    def fill(h): return PatternFill('solid',fgColor=h)
+    def font(h='0F172A',bold=False,sz=10,italic=False): return Font(name='Calibri',color=h,bold=bold,size=sz,italic=italic)
+    def al(h='left',v='center',wrap=False): return Alignment(horizontal=h,vertical=v,wrap_text=wrap)
+    def thin(col='CBD5E1'): s=Side(style='thin',color=col); return Border(left=s,right=s,top=s,bottom=s)
+    def btm_only(col='CBD5E1'): return Border(bottom=Side(style='thin',color=col))
+    def sc(ws,r,col,v,f=None,fn=None,a=None,b=None,nf=None):
+        cell=ws.cell(row=r,column=col,value=v)
+        if f: cell.fill=f
+        if fn: cell.font=fn
+        if a: cell.alignment=a
+        if b: cell.border=b
+        if nf: cell.number_format=nf
+        return cell
+    PNAMES={'services':'Services','support':'Support','development':'Development','consultation':'Consultation'}
+    GROUPS=[
+        ('Month',[('Month',14,None,'left')],NAVY),
+        ('Budget',[('Consumed Revenue',16,'#,##0','right'),('Total Revenue (SAR)',16,'#,##0','right'),('Total Est. Cost (SAR)',16,'#,##0','right'),('Est. Effort MDs',13,'#,##0.0','center')],NAVY),
+        ('Current Month',[('This Month MDs',13,'#,##0.0','center'),('Actual Effort to Date (MD)',16,'#,##0.0','center'),('% Completion',13,'0.0%','center'),('Current Cost (SAR)',16,'#,##0','right'),('Est. Remaining (MD)',14,'#,##0.0','center'),('EAC MDs',12,'#,##0.0','center')],ORANGE),
+        ('Profitability',[('Profit at Completion',16,'#,##0','right'),('Planned Profit',16,'#,##0','right'),('Profit at Comp (%)',13,'0.0%','center'),('Profitability Variance',16,'#,##0','right'),('Prof. Var (%)',12,'0.0%','center'),('Total Issued Invoices',16,'#,##0','right')],GREEN),
+        ('Progress & Virtual Invoices',[('Progress %',12,'0.0%','center'),('Total Recognized Revenue',18,'#,##0','right'),('Production',14,'#,##0','right'),('Acc. Virtual Invoice',16,'#,##0','right')],PURPLE),
+    ]
+    ALL_COLS=[(g,gc)+ci for g,cols,gc in GROUPS for ci in cols]; NCOLS=len(ALL_COLS)
+    def build_sheet(ws,ph_label,ph_data):
+        ws.sheet_view.showGridLines=False; ws.freeze_panes='B8'
+        for ci,(_,__,nm,w,*_) in enumerate(ALL_COLS,1): ws.column_dimensions[get_column_letter(ci)].width=w
+        latest=ph_data.get('latestData',{}); months=ph_data.get('months',[])
+        total_rev=latest.get('totalRevSAR',0) or 0; total_cost=latest.get('totalEstCostSAR',0) or 0; total_mds=latest.get('totalEstMDs',0) or 0
+        ws.row_dimensions[1].height=32; ws.merge_cells(f'A1:{get_column_letter(NCOLS)}1')
+        sc(ws,1,1,'ENVNT.',fill(NAVY),font(WHITE,True,16),al('left','center'))
+        ws.row_dimensions[2].height=20
+        sc(ws,2,1,'Project',fill('E2E8F0'),font(DARK,True,10),al('left','center'))
+        ws.merge_cells(f'B2:{get_column_letter(NCOLS)}2')
+        sc(ws,2,2,proj_name,fill('E2E8F0'),font(DARK,False,10),al('left','center'))
+        ws.row_dimensions[3].height=8
+        ws.row_dimensions[4].height=22; ws.merge_cells(f'A4:{get_column_letter(NCOLS)}4')
+        sc(ws,4,1,ph_label,fill(NAVY),font(WHITE,True,13),al('left','center'))
+        ws.row_dimensions[5].height=18
+        sc(ws,5,1,'Total Revenue SAR',fill('F8FAFC'),font(DARK,True,9),al('left','center'))
+        rc=next((ci for ci,(_,__,nm,*_) in enumerate(ALL_COLS,1) if nm=='Total Revenue (SAR)'),None)
+        cc2=next((ci for ci,(_,__,nm,*_) in enumerate(ALL_COLS,1) if nm=='Total Est. Cost (SAR)'),None)
+        mc=next((ci for ci,(_,__,nm,*_) in enumerate(ALL_COLS,1) if nm=='Est. Effort MDs'),None)
+        if rc: sc(ws,5,rc,total_rev,fill('F8FAFC'),font('065F46',True,9),al('right','center'),nf='#,##0')
+        if cc2: sc(ws,5,cc2,total_cost,fill('F8FAFC'),font(DARK,True,9),al('right','center'),nf='#,##0')
+        if mc: sc(ws,5,mc,total_mds,fill('F8FAFC'),font(DARK,True,9),al('right','center'),nf='#,##0.0')
+        ws.row_dimensions[6].height=20
+        col=1
+        for grp_label,cols,grp_col in GROUPS:
+            ncols=len(cols)
+            if ncols>1: ws.merge_cells(f'{get_column_letter(col)}6:{get_column_letter(col+ncols-1)}6')
+            sc(ws,6,col,grp_label if grp_label!='Month' else '',fill(grp_col),font(WHITE,True,9),al('center','center'))
+            col+=ncols
+        ws.row_dimensions[7].height=28
+        for ci,(_,__,nm,w,nf,aln) in enumerate(ALL_COLS,1): sc(ws,7,ci,nm,fill(DARK),font(WHITE,True,8),al('center','center',True),thin())
+        for ri,m in enumerate(months,8):
+            ws.row_dimensions[ri].height=16; bg=WHITE if ri%2==0 else LGRAY
+            profit=m.get('profitAtComp',0) or 0; prof_v=m.get('profVar',0) or 0
+            vals=[m.get('month',''),m.get('consumedRevSAR',0) or 0,m.get('totalRevSAR',0) or total_rev,m.get('totalEstCostSAR',0) or total_cost,m.get('totalEstMDs',0) or total_mds,m.get('thisMonthMDs',0) or 0,m.get('actualMDs',0) or 0,(m.get('completionPct',0) or 0)/100,m.get('currentCostSAR',0) or 0,m.get('remainingMDs',0) or 0,m.get('eacMDs',0) or 0,profit,m.get('plannedProfitSAR',0) or 0,(m.get('profitAtCompPct',0) or 0)/100,prof_v,(m.get('profVarPct',0) or 0)/100,m.get('issuedUpToMonth',0) or 0,(m.get('progressPct',0) or 0)/100,m.get('recognizedRev',0) or 0,m.get('production',0) or 0,m.get('accVI',0) or 0]
+            for ci,(v,(_,__,nm,w,nf,aln)) in enumerate(zip(vals,ALL_COLS),1):
+                fc=DARK
+                if nm=='Profit at Completion': fc='065F46' if profit>=0 else RED_H
+                elif nm in ('Profitability Variance','Prof. Var (%)'): fc='065F46' if prof_v>=0 else RED_H
+                sc(ws,ri,ci,v,fill(bg),font(fc,False,9),al(aln,'center'),btm_only(),nf)
+    for ph in phases:
+        ph_key=ph.get('phase',''); months=ph.get('months',[])
+        if not months: continue
+        ph_label=PNAMES.get(ph_key,ph_key.title()); ws2=wb.create_sheet(ph_label); build_sheet(ws2,ph_label,ph)
+    ws_s=wb.create_sheet('Summary',0); ws_s.sheet_view.showGridLines=False
+    for ci,w in enumerate([26,18,18,14,14,16],1): ws_s.column_dimensions[get_column_letter(ci)].width=w
+    ws_s.row_dimensions[1].height=40; ws_s.merge_cells('A1:F1')
+    sc(ws_s,1,1,'ENVNT.',fill(NAVY),font(WHITE,True,18),al('left','center'))
+    ws_s.row_dimensions[2].height=24; ws_s.merge_cells('A2:F2')
+    sc(ws_s,2,1,proj_name,fill('1E3A5F'),font(WHITE,True,12),al('left','center'))
+    ws_s.row_dimensions[3].height=16; ws_s.merge_cells('A3:F3')
+    sc(ws_s,3,1,f'Variance Report  ·  {gen_date}',fill('0C1E3C'),font('93C5FD',False,9,True),al('left','center'))
+    ws_s.row_dimensions[5].height=20
+    for ci,(h,a) in enumerate(zip(['Phase','Current Cost (SAR)','EAC (SAR)','% Complete','Remaining MDs','As of'],['left','right','right','center','center','center']),1):
+        sc(ws_s,5,ci,h,fill(NAVY),font(WHITE,True,9),al(a,'center'),thin())
+    tc=te=0; row=6
+    for ph in phases:
+        ph_key=ph.get('phase',''); ph_label=PNAMES.get(ph_key,ph_key.title()); latest=ph.get('latestData',{})
+        cost=latest.get('currentCostSAR',0) or 0; eac=latest.get('eacCostSAR',0) or cost
+        pct=latest.get('completionPct',0) or 0; rem=latest.get('remainingMDs',0) or 0; mk=latest.get('monthKey','')
+        tc+=cost; te+=eac; ws_s.row_dimensions[row].height=18
+        sc(ws_s,row,1,ph_label,fill(NAVY),font(WHITE,True,10),al('left','center'))
+        sc(ws_s,row,2,cost,fill(LGRAY),font(DARK,True),al('right','center'),nf='#,##0')
+        sc(ws_s,row,3,eac,fill(LGRAY),font(DARK,True),al('right','center'),nf='#,##0')
+        sc(ws_s,row,4,pct/100 if pct else 0,fill(LGRAY),font(DARK,True),al('center','center'),nf='0.0%')
+        sc(ws_s,row,5,rem,fill(LGRAY),font(DARK,True),al('center','center'),nf='#,##0.0')
+        sc(ws_s,row,6,mk,fill(LGRAY),font('64748B'),al('center','center')); row+=1
+    ws_s.row_dimensions[row].height=22
+    sc(ws_s,row,1,'TOTAL',fill(NAVY),font(WHITE,True,11),al('left','center'))
+    sc(ws_s,row,2,tc,fill(NAVY),font(WHITE,True),al('right','center'),nf='#,##0')
+    sc(ws_s,row,3,te,fill(NAVY),font(WHITE,True),al('right','center'),nf='#,##0')
+    for ci in [4,5,6]: sc(ws_s,row,ci,'',fill(NAVY))
+    buf=io.BytesIO(); wb.save(buf); buf.seek(0)
+    fn=f'{proj_name.replace(" ","_")}_Variance_{date.today().isoformat()}.xlsx'
+    return send_file(buf,mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',as_attachment=True,download_name=fn)
 
 @app.route('/api/project-phases-available')
 def api_project_phases_available():
@@ -8273,143 +8376,6 @@ def api_sales_orders():
     except Exception as e:
         import traceback
         return jsonify({'ok': False, 'error': str(e), 'trace': traceback.format_exc()}), 500
-
-
-@app.route('/api/variance/export-pmo', methods=['POST'])
-@login_required
-def api_variance_export_pmo():
-    from flask import send_file
-    import io, openpyxl
-    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
-    from openpyxl.utils import get_column_letter
-    data=request.get_json() or {}
-    proj_name=data.get('project_name', active_project_name() or 'Project')
-    phases=data.get('phases', []); gen_date=data.get('generated', date.today().isoformat())
-    wb=openpyxl.Workbook(); wb.remove(wb.active)
-    NAVY='1B2A4E'; GREEN='1D7A4A'; ORANGE='D4560A'; RED_H='B91C1C'; PURPLE='6D28D9'
-    LGRAY='F1F5F9'; WHITE='FFFFFF'; DARK='0F172A'
-    def fill(h): return PatternFill('solid',fgColor=h)
-    def font(h='0F172A',bold=False,sz=10,italic=False): return Font(name='Calibri',color=h,bold=bold,size=sz,italic=italic)
-    def al(h='left',v='center',wrap=False): return Alignment(horizontal=h,vertical=v,wrap_text=wrap)
-    def thin(col='CBD5E1'): s=Side(style='thin',color=col); return Border(left=s,right=s,top=s,bottom=s)
-    def btm_only(col='CBD5E1'): return Border(bottom=Side(style='thin',color=col))
-    def sc(ws,r,col,v,f=None,fn=None,a=None,b=None,nf=None):
-        cell=ws.cell(row=r,column=col,value=v)
-        if f: cell.fill=f
-        if fn: cell.font=fn
-        if a: cell.alignment=a
-        if b: cell.border=b
-        if nf: cell.number_format=nf
-        return cell
-    PHASE_NAMES={'services':'Services','support':'Support','development':'Development','consultation':'Consultation'}
-    GROUPS=[
-        ('Month',[('Month',14,None,'left')],NAVY),
-        ('Budget',[('Consumed Revenue',16,'#,##0','right'),('Total Revenue (SAR)',16,'#,##0','right'),
-                   ('Total Est. Cost (SAR)',16,'#,##0','right'),('Est. Effort MDs',13,'#,##0.0','center')],NAVY),
-        ('Current Month',[('This Month MDs',13,'#,##0.0','center'),('Actual Effort to Date (MD)',16,'#,##0.0','center'),
-                          ('% Completion',13,'0.0%','center'),('Current Cost (SAR)',16,'#,##0','right'),
-                          ('Est. Remaining (MD)',14,'#,##0.0','center'),('EAC MDs',12,'#,##0.0','center')],ORANGE),
-        ('Profitability',[('Profit at Completion',16,'#,##0','right'),('Planned Profit',16,'#,##0','right'),
-                          ('Profit at Comp (%)',13,'0.0%','center'),('Profitability Variance',16,'#,##0','right'),
-                          ('Prof. Var (%)',12,'0.0%','center'),('Total Issued Invoices',16,'#,##0','right')],GREEN),
-        ('Progress & Virtual Invoices',[('Progress %',12,'0.0%','center'),('Total Recognized Revenue',18,'#,##0','right'),
-                                        ('Production',14,'#,##0','right'),('Acc. Virtual Invoice',16,'#,##0','right')],PURPLE),
-    ]
-    ALL_COLS=[(g,gc)+ci for g,cols,gc in GROUPS for ci in cols]
-    NCOLS=len(ALL_COLS)
-
-    def build_sheet(ws,ph_label,ph_data):
-        ws.sheet_view.showGridLines=False; ws.freeze_panes='B8'
-        for ci,(_,__,nm,w,*_) in enumerate(ALL_COLS,1): ws.column_dimensions[get_column_letter(ci)].width=w
-        latest=ph_data.get('latestData',{}); months=ph_data.get('months',[])
-        total_rev=latest.get('totalRevSAR',0) or 0; total_cost=latest.get('totalEstCostSAR',0) or 0
-        total_mds=latest.get('totalEstMDs',0) or 0
-        ws.row_dimensions[1].height=32; ws.merge_cells(f'A1:{get_column_letter(NCOLS)}1')
-        sc(ws,1,1,'ENVNT.',fill(NAVY),font(WHITE,True,16),al('left','center'))
-        ws.row_dimensions[2].height=20
-        sc(ws,2,1,'Project',fill('E2E8F0'),font(DARK,True,10),al('left','center'))
-        ws.merge_cells(f'B2:{get_column_letter(NCOLS)}2')
-        sc(ws,2,2,proj_name,fill('E2E8F0'),font(DARK,False,10),al('left','center'))
-        ws.row_dimensions[3].height=8
-        ws.row_dimensions[4].height=22; ws.merge_cells(f'A4:{get_column_letter(NCOLS)}4')
-        sc(ws,4,1,ph_label,fill(NAVY),font(WHITE,True,13),al('left','center'))
-        ws.row_dimensions[5].height=18
-        sc(ws,5,1,'Total Revenue SAR',fill('F8FAFC'),font(DARK,True,9),al('left','center'))
-        rev_col=next((ci for ci,(_,__,nm,*_) in enumerate(ALL_COLS,1) if nm=='Total Revenue (SAR)'),None)
-        cost_col=next((ci for ci,(_,__,nm,*_) in enumerate(ALL_COLS,1) if nm=='Total Est. Cost (SAR)'),None)
-        mds_col=next((ci for ci,(_,__,nm,*_) in enumerate(ALL_COLS,1) if nm=='Est. Effort MDs'),None)
-        if rev_col: sc(ws,5,rev_col,total_rev,fill('F8FAFC'),font('065F46',True,9),al('right','center'),nf='#,##0')
-        if cost_col: sc(ws,5,cost_col,total_cost,fill('F8FAFC'),font(DARK,True,9),al('right','center'),nf='#,##0')
-        if mds_col: sc(ws,5,total_mds,fill('F8FAFC'),font(DARK,True,9),al('right','center'),nf='#,##0.0')
-        ws.row_dimensions[6].height=20
-        col=1
-        for grp_label,cols,grp_col in GROUPS:
-            ncols=len(cols)
-            if ncols>1: ws.merge_cells(f'{get_column_letter(col)}6:{get_column_letter(col+ncols-1)}6')
-            sc(ws,6,col,grp_label if grp_label!='Month' else '',fill(grp_col),font(WHITE,True,9),al('center','center'))
-            col+=ncols
-        ws.row_dimensions[7].height=28
-        for ci,(_,__,nm,w,nf,aln) in enumerate(ALL_COLS,1):
-            sc(ws,7,ci,nm,fill(DARK),font(WHITE,True,8),al('center','center',True),thin())
-        for ri,m in enumerate(months,8):
-            ws.row_dimensions[ri].height=16; bg=WHITE if ri%2==0 else LGRAY
-            profit=m.get('profitAtComp',0) or 0; prof_v=m.get('profVar',0) or 0
-            vals=[m.get('month',''),m.get('consumedRevSAR',0) or 0,
-                  m.get('totalRevSAR',0) or total_rev,m.get('totalEstCostSAR',0) or total_cost,
-                  m.get('totalEstMDs',0) or total_mds,m.get('thisMonthMDs',0) or 0,
-                  m.get('actualMDs',0) or 0,(m.get('completionPct',0) or 0)/100,
-                  m.get('currentCostSAR',0) or 0,m.get('remainingMDs',0) or 0,m.get('eacMDs',0) or 0,
-                  profit,m.get('plannedProfitSAR',0) or 0,(m.get('profitAtCompPct',0) or 0)/100,
-                  prof_v,(m.get('profVarPct',0) or 0)/100,m.get('issuedUpToMonth',0) or 0,
-                  (m.get('progressPct',0) or 0)/100,m.get('recognizedRev',0) or 0,
-                  m.get('production',0) or 0,m.get('accVI',0) or 0]
-            for ci,(v,(_,__,nm,w,nf,aln)) in enumerate(zip(vals,ALL_COLS),1):
-                fc=DARK
-                if nm=='Profit at Completion': fc='065F46' if profit>=0 else RED_H
-                elif nm in ('Profitability Variance','Prof. Var (%)'): fc='065F46' if prof_v>=0 else RED_H
-                sc(ws,ri,ci,v,fill(bg),font(fc,False,9),al(aln,'center'),btm_only(),nf)
-
-    for ph in phases:
-        ph_key=ph.get('phase',''); months=ph.get('months',[])
-        if not months: continue
-        ph_label=PHASE_NAMES.get(ph_key,ph_key.title())
-        ws2=wb.create_sheet(ph_label); build_sheet(ws2,ph_label,ph)
-
-    # Summary
-    ws_s=wb.create_sheet('Summary',0); ws_s.sheet_view.showGridLines=False
-    for ci,w in enumerate([26,18,18,14,14,16],1): ws_s.column_dimensions[get_column_letter(ci)].width=w
-    ws_s.row_dimensions[1].height=40; ws_s.merge_cells('A1:F1')
-    sc(ws_s,1,1,'ENVNT.',fill(NAVY),font(WHITE,True,18),al('left','center'))
-    ws_s.row_dimensions[2].height=24; ws_s.merge_cells('A2:F2')
-    sc(ws_s,2,1,proj_name,fill('1E3A5F'),font(WHITE,True,12),al('left','center'))
-    ws_s.row_dimensions[3].height=16; ws_s.merge_cells('A3:F3')
-    sc(ws_s,3,1,f'Variance Report  ·  {gen_date}',fill('0C1E3C'),font('93C5FD',False,9,True),al('left','center'))
-    ws_s.row_dimensions[5].height=20
-    for ci,(h,a) in enumerate(zip(['Phase','Current Cost (SAR)','EAC (SAR)','% Complete','Remaining MDs','As of'],
-                                   ['left','right','right','center','center','center']),1):
-        sc(ws_s,5,ci,h,fill(NAVY),font(WHITE,True,9),al(a,'center'),thin())
-    tc=te=0; row=6
-    for ph in phases:
-        ph_key=ph.get('phase',''); ph_label=PHASE_NAMES.get(ph_key,ph_key.title())
-        latest=ph.get('latestData',{}); cost=latest.get('currentCostSAR',0) or 0
-        eac=latest.get('eacCostSAR',0) or cost; pct=latest.get('completionPct',0) or 0
-        rem=latest.get('remainingMDs',0) or 0; mk=latest.get('monthKey','')
-        tc+=cost; te+=eac; ws_s.row_dimensions[row].height=18
-        sc(ws_s,row,1,ph_label,fill(NAVY),font(WHITE,True,10),al('left','center'))
-        sc(ws_s,row,2,cost,fill(LGRAY),font(DARK,True),al('right','center'),nf='#,##0')
-        sc(ws_s,row,3,eac,fill(LGRAY),font(DARK,True),al('right','center'),nf='#,##0')
-        sc(ws_s,row,4,pct/100 if pct else 0,fill(LGRAY),font(DARK,True),al('center','center'),nf='0.0%')
-        sc(ws_s,row,5,rem,fill(LGRAY),font(DARK,True),al('center','center'),nf='#,##0.0')
-        sc(ws_s,row,6,mk,fill(LGRAY),font('64748B'),al('center','center')); row+=1
-    ws_s.row_dimensions[row].height=22
-    sc(ws_s,row,1,'TOTAL',fill(NAVY),font(WHITE,True,11),al('left','center'))
-    sc(ws_s,row,2,tc,fill(NAVY),font(WHITE,True),al('right','center'),nf='#,##0')
-    sc(ws_s,row,3,te,fill(NAVY),font(WHITE,True),al('right','center'),nf='#,##0')
-    for ci in [4,5,6]: sc(ws_s,row,ci,'',fill(NAVY))
-    buf=io.BytesIO(); wb.save(buf); buf.seek(0)
-    fn=f'{proj_name.replace(" ","_")}_Variance_{date.today().isoformat()}.xlsx'
-    return send_file(buf,mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                     as_attachment=True,download_name=fn)
 
 
 if __name__ == '__main__':
