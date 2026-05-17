@@ -810,7 +810,10 @@ function renderProfitability(data, phaseKey) {
             title="Fill Remaining MDs from Tasks Analysis tab"
             onclick="profFillFromTasks('${phaseKey}')">📋 Fill from Tasks</button>
           <button class="btn-primary" style="font-size:12px;padding:6px 16px;" onclick="profBuildTable('${phaseKey}')">↻ Recalculate</button>
-          <button class="btn-ghost" style="font-size:12px;padding:6px 14px;" onclick="exportProjectVariance()">⬇ Export Excel</button>
+          <button class="btn-ghost" style="font-size:12px;padding:6px 14px;display:flex;align-items:center;gap:5px;" onclick="exportProjectVariance()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Export Excel
+          </button>
         </div>
       </div>
       <div id="prof-table-wrap-${phaseKey}">
@@ -2319,12 +2322,15 @@ async function deletePromo(id) {
 
 }
 
-// ── Project Variance Excel Export ─────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════
+// PROJECT VARIANCE EXCEL EXPORT
+// ══════════════════════════════════════════════════════════════════════════
 async function exportProjectVariance() {
   const btn = document.querySelector('[onclick="exportProjectVariance()"]');
-  if (btn) { btn.textContent = '⏳ Exporting…'; btn.disabled = true; }
+  if (btn) { btn.disabled = true; btn.querySelector('svg') && (btn.lastChild.textContent = ' Exporting…'); }
 
   try {
+    // Load SheetJS
     if (!window.XLSX) {
       await new Promise((res, rej) => {
         const s = document.createElement('script');
@@ -2334,265 +2340,305 @@ async function exportProjectVariance() {
       });
     }
 
-    const isBog     = AppState._overviewData?.is_bog !== false;
-    const projName  = document.querySelector('.project-title, h1, .hdr h1')?.textContent?.trim() || 'Project';
-    const phases    = isBog ? ['development','consultation','support'] : ['services','support'];
-    const phaseLabels = {development:'Development',consultation:'Consultation',support:'Support',services:'Services'};
-    const now       = new Date().toISOString().slice(0,10);
+    const isBog = AppState._overviewData?.is_bog !== false;
+    const projName = document.querySelector('.project-title,.hdr h1,h1')?.textContent?.trim() || 'Project';
+    const now = new Date().toISOString().slice(0, 10);
+
+    // Detect available phases from DOM
+    const allPhases = isBog
+      ? ['development', 'consultation', 'support']
+      : ['services', 'support'];
+    const phaseLabels = { development:'Development', consultation:'Consultation', support:'Support', services:'Services' };
+
+    const availPhases = allPhases.filter(pk => !!document.getElementById(`profit-table-${pk}`));
+    if (!availPhases.length) { alert('No profitability data loaded yet. Please open each phase tab first.'); return; }
 
     const wb = XLSX.utils.book_new();
 
-    for (const phaseKey of phases) {
-      const table = document.getElementById(`profit-table-${phaseKey}`);
-      if (!table) continue;
-      const rows  = table.querySelectorAll('tr[data-month-key]');
-      if (!rows.length) continue;
+    // ── Helper: XLSX cell with style ──────────────────────────────────────
+    const cell = (v, style) => ({ v, s: style });
+    const numFmt0 = '0';
+    const pctFmt  = '0.0%';
+    const sarFmt  = '#,##0';
 
+    // Styles
+    const S = {
+      title:   { font:{bold:true,sz:13,color:{rgb:'FFFFFF'}}, fill:{fgColor:{rgb:'1B2A4E'}}, alignment:{wrapText:false} },
+      meta:    { font:{sz:10,color:{rgb:'6B7280'}} },
+      secHead: { font:{bold:true,sz:10,color:{rgb:'FFFFFF'}}, fill:{fgColor:{rgb:'2C3E6B'}} },
+      budHead: { font:{bold:true,sz:10,color:{rgb:'1B2A4E'}}, fill:{fgColor:{rgb:'E8EDF5'}}, border:{bottom:{style:'thin',color:{rgb:'1B2A4E'}}} },
+      budData: { font:{sz:11}, fill:{fgColor:{rgb:'F8F9FC'}}, numFmt: sarFmt },
+      budPct:  { font:{sz:11,color:{rgb:'27500A'}}, fill:{fgColor:{rgb:'EAF3DE'}}, numFmt: pctFmt },
+      eqHead:  { font:{italic:true,sz:9,color:{rgb:'9CA3AF'}}, fill:{fgColor:{rgb:'F9FAFB'}} },
+      colHead: { font:{bold:true,sz:9,color:{rgb:'FFFFFF'}}, fill:{fgColor:{rgb:'1B2A4E'}}, alignment:{horizontal:'center'} },
+      oddRow:  { font:{sz:10}, fill:{fgColor:{rgb:'FFFFFF'}} },
+      evenRow: { font:{sz:10}, fill:{fgColor:{rgb:'F8F9FC'}} },
+      numOdd:  { font:{sz:10}, fill:{fgColor:{rgb:'FFFFFF'}}, numFmt: sarFmt, alignment:{horizontal:'right'} },
+      numEven: { font:{sz:10}, fill:{fgColor:{rgb:'F8F9FC'}}, numFmt: sarFmt, alignment:{horizontal:'right'} },
+      pctOdd:  { font:{sz:10}, fill:{fgColor:{rgb:'FFFFFF'}}, numFmt: pctFmt, alignment:{horizontal:'right'} },
+      pctEven: { font:{sz:10}, fill:{fgColor:{rgb:'F8F9FC'}}, numFmt: pctFmt, alignment:{horizontal:'right'} },
+      greenNum:{ font:{sz:10,color:{rgb:'27500A'}}, fill:{fgColor:{rgb:'FFFFFF'}}, numFmt: sarFmt, alignment:{horizontal:'right'} },
+      greenEven:{font:{sz:10,color:{rgb:'27500A'}}, fill:{fgColor:{rgb:'F8F9FC'}}, numFmt: sarFmt, alignment:{horizontal:'right'} },
+      redNum:  { font:{sz:10,color:{rgb:'A32D2D'}}, fill:{fgColor:{rgb:'FFFFFF'}}, numFmt: sarFmt, alignment:{horizontal:'right'} },
+      redEven: { font:{sz:10,color:{rgb:'A32D2D'}}, fill:{fgColor:{rgb:'F8F9FC'}}, numFmt: sarFmt, alignment:{horizontal:'right'} },
+      totalRow:{ font:{bold:true,sz:10,color:{rgb:'FFFFFF'}}, fill:{fgColor:{rgb:'1B2A4E'}}, numFmt: sarFmt, alignment:{horizontal:'right'} },
+      monthCell:{font:{sz:10,color:{rgb:'374151'}}, fill:{fgColor:{rgb:'FFFFFF'}}, numFmt: '@' },
+      monthEven:{font:{sz:10,color:{rgb:'374151'}}, fill:{fgColor:{rgb:'F8F9FC'}}, numFmt: '@' },
+    };
+
+    // ── Build ws_set helper ───────────────────────────────────────────────
+    function wsSet(ws, r, c2, v, s, fmt, formula) {
+      const addr = XLSX.utils.encode_cell({r, c:c2});
+      if (formula) {
+        ws[addr] = { t:'n', f: formula, s: s || {} };
+      } else if (v === null || v === undefined || v === '') {
+        ws[addr] = { t:'z', s: s || {} };
+      } else if (typeof v === 'number') {
+        ws[addr] = { t:'n', v, s: s || {}, z: fmt };
+      } else {
+        ws[addr] = { t:'s', v: String(v), s: s || {} };
+      }
+    }
+
+    // ── PROFITABILITY SHEETS ──────────────────────────────────────────────
+    for (const phaseKey of availPhases) {
+      const table = document.getElementById(`profit-table-${phaseKey}`);
+      const rows  = [...table.querySelectorAll('tr[data-month-key]')];
       const pLabel = phaseLabels[phaseKey] || phaseKey;
 
-      // ── Budget figures ──
       const totalRevSAR     = AppState._savedRevenue?.[phaseKey] || 0;
       const totalEstCostSAR = AppState._budgetFinalCost?.[phaseKey] || 0;
       const totalEstMDs     = AppState._budgetFinalMDs?.[phaseKey] || 0;
-      const plannedProfit   = totalRevSAR - totalEstCostSAR;
-      const plannedProfPct  = totalRevSAR > 0 ? plannedProfit / totalRevSAR : 0;
 
-      // Row indices (1-based for Excel formulas)
-      // Title block: rows 1-5
-      // Budget block: rows 6-9 (header=7, data=8)
-      // Monthly header: row 11
-      // Data starts: row 12
-      const DATA_START = 12;
+      const ws = {};
+      let R = 0; // current row (0-based)
 
-      // ── Collect monthly data ──
-      const monthRows = [];
-      for (const tr of rows) {
+      // ── Row 0: Title ──
+      wsSet(ws, R, 0, `${projName} — ${pLabel} — Monthly Profitability Variance`, S.title);
+      for (let c2=1;c2<=23;c2++) wsSet(ws, R, c2, '', S.title);
+      ws['!merges'] = [{s:{r:0,c:0},e:{r:0,c:23}}];
+      R++;
+
+      // ── Row 1: Generated ──
+      wsSet(ws, R, 0, `Generated: ${now}`, S.meta);
+      R++;
+
+      // ── Row 2: empty ──
+      R++;
+
+      // ── Row 3: BUDGET SUMMARY header ──
+      wsSet(ws, R, 0, 'BUDGET SUMMARY', S.secHead);
+      for (let c2=1;c2<=4;c2++) wsSet(ws, R, c2, '', S.secHead);
+      ws['!merges'].push({s:{r:R,c:0},e:{r:R,c:4}});
+      R++;
+
+      // ── Row 4: Budget col headers ──
+      ['Revenue SAR','Est. Cost SAR','Est. MDs','Planned Profit SAR','Planned Profit %'].forEach((h,ci) => {
+        wsSet(ws, R, ci, h, S.budHead);
+      });
+      R++;
+
+      // ── Row 5: Budget data with formulas ──
+      const BUD_DATA_R = R; // 0-based
+      const BUD_R1 = R + 1; // 1-based for formulas
+      wsSet(ws, R, 0, totalRevSAR,     S.budData, sarFmt);
+      wsSet(ws, R, 1, totalEstCostSAR, S.budData, sarFmt);
+      wsSet(ws, R, 2, totalEstMDs,     S.budData, numFmt0);
+      wsSet(ws, R, 3, null, {...S.budData, font:{sz:11,color:{rgb:'27500A'}}, fill:{fgColor:{rgb:'EAF3DE'}}}, sarFmt, `A${BUD_R1}-B${BUD_R1}`);
+      wsSet(ws, R, 4, null, S.budPct,  pctFmt, `IF(A${BUD_R1}>0,D${BUD_R1}/A${BUD_R1},0)`);
+      R++;
+
+      // ── Row 6: empty ──
+      R++;
+
+      // ── Row 7: Equation Guide ──
+      const eqs = ['EAC MDs = Actual MDs + Remaining MDs', 'CPI = Est.Cost ÷ EAC Cost', 'Profit at Comp = Revenue − EAC Cost', 'Acc.VI = Recog.Revenue − Total Issued', 'Progress% = Current Cost ÷ EAC Cost'];
+      eqs.forEach((eq, ci) => wsSet(ws, R, ci, eq, S.eqHead));
+      ws['!merges'].push({s:{r:R,c:0},e:{r:R,c:0}});
+      R++;
+
+      // ── Row 8: empty ──
+      R++;
+
+      // ── Row 9: Column headers ──
+      const COL_HEADS = [
+        'Month','% Comp.','Rem. MDs','Revenue SAR','Est. Cost SAR','Est. MDs',
+        'This Mo. MDs','Actual MDs','Current Cost SAR','EAC MDs','EAC Cost SAR',
+        'CPI','Variance SAR','Profit at Comp','Profit %','Planned Profit SAR',
+        'Prof. Var SAR','Prof. Var %','Recog. Revenue','Progress %','Production',
+        'Total Issued SAR','Acc. VI SAR','This Mo. VI SAR'
+      ];
+      COL_HEADS.forEach((h, ci) => wsSet(ws, R, ci, h, S.colHead));
+      R++;
+
+      const DATA_START_R = R; // 0-based first data row
+      const DATA_START_R1 = R + 1; // 1-based
+
+      // ── Data rows ──
+      const spanNum = (tr, cls) => {
+        const el = tr.querySelector(`.${cls}`);
+        if (!el) return null;
+        const t = el.textContent.replace(/,/g,'').replace(/[^\d.+-]/g,'').trim();
+        return (!t || t === '—') ? null : parseFloat(t);
+      };
+
+      rows.forEach((tr, i) => {
         const mk = tr.dataset.monthKey;
-        if (!mk) continue;
-
         const compInp = tr.querySelector('.completion-input');
         const remInp  = tr.querySelector('.remaining-input');
         const compPct  = parseFloat(compInp?.value) || 0;
         const remMDs   = parseFloat(remInp?.value)  || 0;
 
-        const spanNum = (cls) => {
-          const el = tr.querySelector(`.${cls}`);
-          if (!el) return null;
-          const t = el.textContent.replace(/,/g,'').replace(/[^\d.+-]/g,'').trim();
-          return t === '' || t === '—' ? null : parseFloat(t);
-        };
-        const spanPct = (cls) => {
-          const el = tr.querySelector(`.${cls}`);
-          if (!el) return null;
-          const t = el.textContent.replace(/[^0-9.-]/g,'').trim();
-          return t === '' ? null : parseFloat(t) / 100;
-        };
+        const isEven = i % 2 === 1;
+        const sN  = isEven ? S.numEven  : S.numOdd;
+        const sP  = isEven ? S.pctEven  : S.pctOdd;
+        const sM  = isEven ? S.monthEven: S.monthCell;
+        const sG  = isEven ? S.greenEven: S.greenNum;
+        const sRd = isEven ? S.redEven  : S.redNum;
 
-        const thisMDs  = spanNum(`prof-thismonth-${phaseKey}`);
-        const actMDs   = spanNum(`prof-actual-${phaseKey}`);
-        const revSAR   = spanNum(`prof-rev-${phaseKey}`);
-        const estCost  = spanNum(`prof-estcost-${phaseKey}`);
-        const estMDs2  = spanNum(`prof-estmds-${phaseKey}`);
+        const r1 = R + 1; // 1-based for formulas
+        const thisMDs = spanNum(tr, `prof-thismonth-${phaseKey}`);
+        const actMDs  = spanNum(tr, `prof-actual-${phaseKey}`);
+        const revSAR  = spanNum(tr, `prof-rev-${phaseKey}`);
+        const estCost = spanNum(tr, `prof-estcost-${phaseKey}`);
+        const estMDs2 = spanNum(tr, `prof-estmds-${phaseKey}`);
+        const currCost= spanNum(tr, `pc-currcost-${mk}`);
+        const issued  = spanNum(tr, `pc-issued-${mk}`);
+        const recog   = spanNum(tr, `pc-rev-todate-${mk}`);
+        const prod    = spanNum(tr, `pc-production-${mk}`);
+        const accVI   = spanNum(tr, `pc-vi-acc-${mk}`);
+        const thisMoVI= spanNum(tr, `pc-vi-month-${mk}`);
+        const profComp= spanNum(tr, `pc-profit-comp-${mk}`);
 
-        monthRows.push({
-          mk, compPct, remMDs, revSAR, estCost, estMDs2,
-          thisMDs, actMDs,
-          currCost:  spanNum(`pc-currcost-${mk}`),
-          eacMDs:    spanNum(`pc-eac-${mk}`),
-          eacCost:   spanNum(`pc-eac-cost-${mk}`),
-          cpi:       spanNum(`pc-cpi-${mk}`),
-          varSAR:    spanNum(`pc-variance-${mk}`),
-          profComp:  spanNum(`pc-profit-comp-${mk}`),
-          profPct:   spanPct(`pc-profit-pct-${mk}`),
-          profVar:   spanNum(`pc-prof-var-${mk}`),
-          profVarPct:spanPct(`pc-prof-var-pct-${mk}`),
-          recogRev:  spanNum(`pc-rev-todate-${mk}`),
-          progress:  spanPct(`pc-progress-${mk}`),
-          production:spanNum(`pc-production-${mk}`),
-          issued:    spanNum(`pc-issued-${mk}`),
-          accVI:     spanNum(`pc-vi-acc-${mk}`),
-          thisMoVI:  spanNum(`pc-vi-month-${mk}`),
-        });
-      }
-
-      // ── Column definitions (label, width, formula or value fn) ──
-      // Columns: A=Month B=%Comp C=RemMDs D=RevSAR E=EstCost F=EstMDs
-      //          G=ThisMoMDs H=ActualMDs I=CurrCost J=EACMDs K=EACCost
-      //          L=CPI  M=VarSAR  N=ProfAtComp O=Profit% P=PlannedProfit
-      //          Q=ProfVar R=ProfVar% S=RecogRev T=Progress% U=Production
-      //          V=TotalIssued W=AccVI X=ThisMoVI
-
-      const cols = [
-        {h:'Month',               w:10},
-        {h:'% Completion',        w:12},
-        {h:'Remaining MDs',       w:13},
-        {h:'Revenue SAR',         w:14},
-        {h:'Est. Cost SAR',       w:14},
-        {h:'Est. MDs',            w:10},
-        {h:'This Month MDs',      w:13},
-        {h:'Actual MDs to Date',  w:16},
-        {h:'Current Cost SAR',    w:15},
-        {h:'EAC MDs',             w:10},
-        {h:'Est. at Completion SAR', w:18},
-        {h:'CPI',                 w:8},
-        {h:'Variance SAR',        w:14},
-        {h:'Profit at Comp SAR',  w:16},
-        {h:'Profit %',            w:10},
-        {h:'Planned Profit SAR',  w:16},
-        {h:'Prof. Var SAR',       w:14},
-        {h:'Prof. Var %',         w:11},
-        {h:'Total Recog. Revenue',w:18},
-        {h:'Progress %',          w:11},
-        {h:'Production',          w:13},
-        {h:'Total Issued SAR',    w:15},
-        {h:'Acc. VI SAR',         w:13},
-        {h:'This Month VI SAR',   w:16},
-      ];
-
-      // ── Build sheet data ──
-      const wsData = [];
-
-      // Row 1: Title
-      wsData.push([`Monthly Profitability Variance — ${projName} — ${pLabel}`]);
-      wsData.push([`Generated: ${now}`]);
-      wsData.push([]);
-
-      // Row 4-5: Budget summary header + data
-      wsData.push(['BUDGET SUMMARY','','','','']);
-      wsData.push(['Revenue SAR','Est. Cost SAR','Est. MDs','Planned Profit SAR','Planned Profit %']);
-
-      // Row 6: Budget data (with formula for Planned Profit)
-      // A6=revSAR, B6=estCost, C6=estMDs, D6=A6-B6, E6=D6/A6
-      const BUD_ROW = 6; // 1-based
-      wsData.push([totalRevSAR, totalEstCostSAR, totalEstMDs, {f:`A${BUD_ROW}-B${BUD_ROW}`}, {f:`IF(A${BUD_ROW}>0,D${BUD_ROW}/A${BUD_ROW},0)`}]);
-      wsData.push([]);
-
-      // Row 8: Column headers
-      wsData.push(['EQUATION GUIDE:','CPI = Est.Cost / EAC Cost','EAC MDs = Actual + Remaining','EAC Cost = CostToComplete + CurrentCost','Profit% = ProfitAtComp / Revenue','VI = RecogRev - TotalIssued']);
-      wsData.push([]);
-
-      // Row 10: Column headers
-      wsData.push(cols.map(c => c.h));
-
-      // DATA_START = row 11 (0-indexed: push index 10)
-      const DATA_ROW_OFFSET = wsData.length + 1; // 1-based row number of first data row
-
-      // Data rows with Excel formulas
-      monthRows.forEach((r, i) => {
-        const row = DATA_ROW_OFFSET + i; // 1-based
-        // Column letters: A=1, B=2...
-        // A=Month, B=%Comp, C=RemMDs, D=RevSAR, E=EstCost, F=EstMDs,
-        // G=ThisMoMDs, H=ActualMDs, I=CurrCost, J=EACMDs, K=EAC Cost SAR
-        // L=CPI, M=VarSAR, N=ProfAtComp, O=Profit%, P=PlannedProfit
-        // Q=ProfVar, R=ProfVar%, S=RecogRev, T=Progress%, U=Production
-        // V=TotalIssued, W=AccVI, X=ThisMoVI
-
-        const EAC_MDs_COL   = 'J';
-        const EAC_COST_COL  = 'K';
-        const REV_COL       = 'D';
-        const EST_COST_COL  = 'E';
-        const CURR_COST_COL = 'I';
-        const COMP_COL      = 'B';
-        const RECOG_COL     = 'S';
-        const ISSUED_COL    = 'V';
-
-        wsData.push([
-          r.mk,                         // A: Month
-          r.compPct / 100,              // B: % Completion (decimal)
-          r.remMDs,                     // C: Remaining MDs
-          r.revSAR,                     // D: Revenue SAR
-          r.estCost,                    // E: Est. Cost SAR
-          r.estMDs2,                    // F: Est. MDs
-          r.thisMDs,                    // G: This Month MDs
-          r.actMDs,                     // H: Actual MDs to Date
-          r.currCost,                   // I: Current Cost SAR
-          r.eacMDs ?? {f:`H${row}+C${row}`},                              // J: EAC MDs = Actual + Remaining
-          r.eacCost ?? {f:`I${row}+(C${row}*IF(H${row}>0,I${row}/H${row},E${row}/IF(F${row}>0,F${row},1)))`}, // K: EAC Cost
-          r.cpi     ?? {f:`IF(${EAC_COST_COL}${row}>0,${EST_COST_COL}${row}/${EAC_COST_COL}${row},"")`},     // L: CPI
-          r.varSAR  ?? {f:`${EST_COST_COL}${row}-${EAC_COST_COL}${row}`},                                     // M: Variance SAR
-          r.profComp?? {f:`${REV_COL}${row}-${EAC_COST_COL}${row}`},                                          // N: Profit at Comp
-          r.profPct ?? {f:`IF(${REV_COL}${row}>0,N${row}/${REV_COL}${row},"")`},                              // O: Profit %
-          {f:`A$${BUD_ROW}*(A$${BUD_ROW}>0) * (IF(A$${BUD_ROW}>0,(A$${BUD_ROW}-B$${BUD_ROW})/A$${BUD_ROW},0))`}, // P: Planned Profit SAR (= rev * planned%)  simplified:
-          r.profVar ?? {f:`N${row}-P${row}`},                                                                   // Q: Prof Var
-          r.profVarPct?? {f:`IF(${REV_COL}${row}>0,Q${row}/${REV_COL}${row},"")`},                            // R: Prof Var %
-          r.recogRev?? {f:`${REV_COL}${row}*${COMP_COL}${row}`},                                              // S: Recog Revenue = Rev * %Comp
-          r.progress ?? {f:`IF(${EAC_COST_COL}${row}>0,${CURR_COST_COL}${row}/${EAC_COST_COL}${row},"")`},   // T: Progress %
-          r.production,                 // U: Production
-          r.issued,                     // V: Total Issued SAR
-          r.accVI   ?? {f:`S${row}-V${row}`},                                                                   // W: Acc. VI = RecogRev - Issued
-          r.thisMoVI,                   // X: This Month VI
-        ]);
+        wsSet(ws, R, 0,  mk,                 sM);
+        wsSet(ws, R, 1,  compPct/100,        sP,  pctFmt);
+        wsSet(ws, R, 2,  remMDs,             sN,  numFmt0);
+        wsSet(ws, R, 3,  revSAR,             sN,  sarFmt);
+        wsSet(ws, R, 4,  estCost,            sN,  sarFmt);
+        wsSet(ws, R, 5,  estMDs2,            sN,  '0.0');
+        wsSet(ws, R, 6,  thisMDs,            sN,  '0.0');
+        wsSet(ws, R, 7,  actMDs,             sN,  '0.0');
+        wsSet(ws, R, 8,  currCost,           sN,  sarFmt);
+        // J: EAC MDs = H + C (Actual + Remaining)
+        wsSet(ws, R, 9,  null, sN, '0.0',   `H${r1}+C${r1}`);
+        // K: EAC Cost = CurrCost + (RemMDs * AvgCostPerMD)
+        wsSet(ws, R, 10, null, sN, sarFmt,  `IF(H${r1}>0, I${r1}+(C${r1}*(I${r1}/H${r1})), I${r1})`);
+        // L: CPI = EstCost / EAC Cost
+        wsSet(ws, R, 11, null, sN, '0.00',  `IF(K${r1}>0, E${r1}/K${r1}, "")`);
+        // M: Variance = EstCost - EAC Cost
+        wsSet(ws, R, 12, null, sN, sarFmt,  `E${r1}-K${r1}`);
+        // N: Profit at Comp = Revenue - EAC Cost
+        wsSet(ws, R, 13, profComp !== null ? profComp : null,
+              profComp > 0 ? sG : sRd, sarFmt,
+              profComp === null ? `D${r1}-K${r1}` : undefined);
+        // O: Profit % = Profit / Revenue
+        wsSet(ws, R, 14, null, sP, pctFmt,  `IF(D${r1}>0, N${r1}/D${r1}, "")`);
+        // P: Planned Profit = Revenue * PlannedProfitPct (from budget row)
+        wsSet(ws, R, 15, null, sN, sarFmt,  `A$${BUD_R1}*IF(A$${BUD_R1}>0,(A$${BUD_R1}-B$${BUD_R1})/A$${BUD_R1},0)`);
+        // Q: Prof Var = Profit - Planned
+        wsSet(ws, R, 16, null, sN, sarFmt,  `N${r1}-P${r1}`);
+        // R: Prof Var % = ProfVar / Revenue
+        wsSet(ws, R, 17, null, sP, pctFmt,  `IF(D${r1}>0, Q${r1}/D${r1}, "")`);
+        // S: Recog Revenue = Revenue * %Comp
+        wsSet(ws, R, 18, recog,   sN, sarFmt);
+        // T: Progress % = CurrCost / EAC Cost
+        wsSet(ws, R, 19, null, sP, pctFmt,  `IF(K${r1}>0, I${r1}/K${r1}, "")`);
+        wsSet(ws, R, 20, prod,    sN, sarFmt);
+        wsSet(ws, R, 21, issued,  sN, sarFmt);
+        // W: Acc.VI = Recog Revenue - Issued
+        wsSet(ws, R, 22, accVI !== null ? accVI : null, sN, sarFmt,
+              accVI === null ? `S${r1}-V${r1}` : undefined);
+        wsSet(ws, R, 23, thisMoVI, sN, sarFmt);
+        R++;
       });
 
-      // Total row
-      const lastDataRow = DATA_ROW_OFFSET + monthRows.length - 1;
-      wsData.push([
-        'TOTAL','','',
-        {f:`SUM(D${DATA_ROW_OFFSET}:D${lastDataRow})`},
-        {f:`SUM(E${DATA_ROW_OFFSET}:E${lastDataRow})`},
-        '',
-        {f:`SUM(G${DATA_ROW_OFFSET}:G${lastDataRow})`},
-        '',
-        {f:`SUM(I${DATA_ROW_OFFSET}:I${lastDataRow})`},
-        '','','','',
-        {f:`SUM(N${DATA_ROW_OFFSET}:N${lastDataRow})`},
-        '','','','','','','',
-        {f:`SUM(V${DATA_ROW_OFFSET}:V${lastDataRow})`},
-        '','',
-      ]);
+      const LAST_DATA_R1 = R; // 1-based last data row
 
-      // ── Create worksheet ──
-      const ws = XLSX.utils.aoa_to_sheet(wsData, {cellDates: false});
+      // ── Total row ──
+      const sumCols = {3:'D',4:'E',6:'G',8:'I',20:'U',21:'V'};
+      for (let ci=0; ci<24; ci++) {
+        const col = String.fromCharCode(65+ci);
+        if (ci === 0) {
+          wsSet(ws, R, ci, 'TOTAL', S.totalRow);
+        } else if (sumCols[ci]) {
+          wsSet(ws, R, ci, null, S.totalRow, sarFmt, `SUM(${sumCols[ci]}${DATA_START_R1}:${sumCols[ci]}${LAST_DATA_R1})`);
+        } else {
+          wsSet(ws, R, ci, '', S.totalRow);
+        }
+      }
+      R++;
 
-      // Merges
-      ws['!merges'] = [
-        {s:{r:0,c:0}, e:{r:0,c:5}},   // Title
-        {s:{r:3,c:0}, e:{r:3,c:4}},   // Budget Summary label
-        {s:{r:7,c:0}, e:{r:7,c:5}},   // Equation guide label (partial)
+      // ── Sheet range ──
+      ws['!ref'] = XLSX.utils.encode_range({s:{r:0,c:0}, e:{r:R-1,c:23}});
+
+      // ── Column widths ──
+      ws['!cols'] = [
+        {wch:9},{wch:9},{wch:11},{wch:14},{wch:14},{wch:9},
+        {wch:12},{wch:12},{wch:15},{wch:10},{wch:15},
+        {wch:7},{wch:14},{wch:15},{wch:9},{wch:16},
+        {wch:13},{wch:10},{wch:15},{wch:10},{wch:12},
+        {wch:14},{wch:13},{wch:14}
       ];
 
-      // Column widths
-      ws['!cols'] = cols.map(c => ({wch: c.w}));
-
-      // Format percentage columns as % in Excel
-      const pctCols = [1, 14, 17, 19]; // B, O, R, T (0-indexed)
-      for (let ri = DATA_ROW_OFFSET - 1; ri <= DATA_ROW_OFFSET + monthRows.length - 1; ri++) {
-        pctCols.forEach(ci => {
-          const cellAddr = XLSX.utils.encode_cell({r: ri, c: ci});
-          if (ws[cellAddr]) ws[cellAddr].z = '0.0%';
-        });
-      }
-      // Format budget profit % cell
-      const budPctCell = XLSX.utils.encode_cell({r: BUD_ROW - 1, c: 4});
-      if (ws[budPctCell]) ws[budPctCell].z = '0.0%';
+      // ── Row heights ──
+      ws['!rows'] = [{hpt:22}]; // title row taller
 
       XLSX.utils.book_append_sheet(wb, ws, pLabel);
     }
 
-    // ── Budget Changes sheet (if any) ──
-    const allChanges = [];
-    for (const phaseKey of phases) {
-      const changes = window._budgetChanges?.[phaseKey] || [];
-      changes.forEach(ch => allChanges.push([
-        phaseLabels[phaseKey] || phaseKey,
-        ch.change_date || '',
-        ch.description || '',
-        parseFloat(ch.delta_rev)  || 0,
-        parseFloat(ch.delta_cost) || 0,
-        parseFloat(ch.delta_mds)  || 0,
-      ]));
+    // ── CURRENT EFFORT SHEET ─────────────────────────────────────────────
+    const effortRows = [];
+    for (const phaseKey of availPhases) {
+      const pLabel = phaseLabels[phaseKey] || phaseKey;
+      const effortMDs   = AppState._effortMonthMDs?.[phaseKey]   || {};
+      const effortCosts = AppState._effortMonthCosts?.[phaseKey] || {};
+      const months = Object.keys(effortMDs).sort();
+      months.forEach(mk => {
+        effortRows.push([pLabel, mk, effortMDs[mk] || 0, (effortCosts[mk] || 0) * 3.75]);
+      });
     }
-    if (allChanges.length) {
-      const ws3 = XLSX.utils.aoa_to_sheet([
-        ['Budget Changes'],
+    if (effortRows.length) {
+      const wsE = XLSX.utils.aoa_to_sheet([
+        [`${projName} — Current Effort by Month`],
+        [`Generated: ${now}`],
         [],
-        ['Phase','Date','Description','Delta Rev SAR','Delta Cost SAR','Delta MDs'],
-        ...allChanges,
+        ['Phase','Month','MDs','Cost SAR (approx)'],
+        ...effortRows,
       ]);
-      ws3['!cols'] = [{wch:14},{wch:12},{wch:44},{wch:15},{wch:16},{wch:12}];
-      XLSX.utils.book_append_sheet(wb, ws3, 'Budget Changes');
+      wsE['!cols'] = [{wch:14},{wch:10},{wch:10},{wch:16}];
+      XLSX.utils.book_append_sheet(wb, wsE, 'Effort by Month');
     }
 
+    // ── BUDGET CHANGES SHEET ─────────────────────────────────────────────
+    const allChanges = [];
+    for (const phaseKey of availPhases) {
+      const changes = _budgetChanges[phaseKey] || [];
+      changes.forEach(ch => {
+        if (ch.delta_rev || ch.delta_cost || ch.delta_mds) {
+          allChanges.push([
+            phaseLabels[phaseKey] || phaseKey,
+            ch.change_date || '',
+            ch.reason || ch.description || '',
+            ch.plan_id || '',
+            parseFloat(ch.delta_rev)  || 0,
+            parseFloat(ch.delta_cost) || 0,
+            parseFloat(ch.delta_mds)  || 0,
+          ]);
+        }
+      });
+    }
+    if (allChanges.length) {
+      const wsC = XLSX.utils.aoa_to_sheet([
+        [`${projName} — Budget Changes`],
+        [],
+        ['Phase','Date','Description','Plan ID','Delta Rev SAR','Delta Cost SAR','Delta MDs'],
+        ...allChanges,
+      ]);
+      wsC['!cols'] = [{wch:14},{wch:12},{wch:40},{wch:12},{wch:15},{wch:16},{wch:12}];
+      XLSX.utils.book_append_sheet(wb, wsC, 'Budget Changes');
+    }
+
+    // ── Download ─────────────────────────────────────────────────────────
     const filename = `variance_${projName.replace(/[^a-zA-Z0-9]/g,'_')}_${now}.xlsx`;
     XLSX.writeFile(wb, filename);
 
@@ -2600,6 +2646,6 @@ async function exportProjectVariance() {
     alert('Export failed: ' + e.message);
     console.error(e);
   } finally {
-    if (btn) { btn.textContent = '⬇ Export Excel'; btn.disabled = false; }
+    if (btn) { btn.disabled = false; btn.lastChild && (btn.lastChild.textContent = ' Export Excel'); }
   }
 }
