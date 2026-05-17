@@ -6038,8 +6038,12 @@ def api_effort_all_months(phase_key):
             return jsonify({'employees': [], 'months': [], 'total_employees': 0,
                             'note': f'No phases found for {phase_key} in this project'})
 
-        # Non-BOG: get project.phase records split by support keywords
+        # Non-BOG: split tasks by parent task name pattern
+        # Parent tasks named "[ Services ... ]" → services
+        # Parent tasks named "[ Support ... ]" → support  
+        # Falls back to project.phase SUPPORT_KWS if no bracket pattern found
         use_all_tasks_eff = False
+        _nonbog_split_by_parent = False  # will be set below after fetching tasks
         if not _is_bog_eff:
             all_proj_phases = odoo.models.execute_kw(
                 ODOO_DB, odoo.uid, ODOO_PASSWORD,
@@ -6055,10 +6059,10 @@ def api_effort_all_months(phase_key):
                     phase_names = [p['name'] for p in all_proj_phases
                                    if not any(kw in p['name'].lower() for kw in SUPPORT_KWS)]
             else:
-                use_all_tasks_eff = True  # no phases → all tasks
+                use_all_tasks_eff = True  # no phases → split by parent task name
 
         # Non-BOG support with no phases → return empty with clear message
-        if not _is_bog_eff and phase_key == 'support' and not phase_names:
+        if not _is_bog_eff and phase_key == 'support' and not phase_names and not use_all_tasks_eff:
             return jsonify({'employees': [], 'months': [], 'total_employees': 0,
                            'has_phases': False,
                            'note': f'No support/operation phases found in this project'})
@@ -6109,9 +6113,50 @@ def api_effort_all_months(phase_key):
                     relevant_ids.add(t['id'])
             logger.info(f"Non-BOG effort {phase_key}: {len(relevant_ids)} tasks in {len(phase_ids)} phases")
         else:
-            # Non-BOG with no phases: all project tasks
-            relevant_ids = {t['id'] for t in all_proj_tasks}
-            logger.info(f"Non-BOG effort {phase_key}: using all {len(relevant_ids)} tasks (no phases)")
+            # Non-BOG with no phases: split by parent task name
+            # "[Services...]" → services tab, "[Support...]" → support tab
+            # If no bracket pattern, use SUPPORT_KWS on parent task name
+            all_parent_tasks = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.task', 'search_read',
+                [[('project_id', '=', project_id), ('parent_id', '=', False)]],
+                {'fields': ['id', 'name'], 'limit': 500}
+            )
+            parent_name_map = {t['id']: t['name'] for t in all_parent_tasks}
+            has_bracket = any('[' in n for n in parent_name_map.values())
+
+            def _is_support_parent(name):
+                nl = name.lower()
+                if has_bracket:
+                    # Use bracket classification: [Support...] or [Operation...]
+                    if '[support' in nl or '[operation' in nl or '[دعم' in nl:
+                        return True
+                    if '[service' in nl or '[develop' in nl or '[consult' in nl:
+                        return False
+                    # Fallback to keywords for unbracketed
+                return any(kw in nl for kw in SUPPORT_KWS)
+
+            relevant_ids = set()
+            for t in all_proj_tasks:
+                pid = t.get('parent_id')
+                parent_id = pid[0] if isinstance(pid, list) and pid else None
+                pname = parent_name_map.get(parent_id, '') if parent_id else ''
+                if not pname and parent_id:
+                    # Sub-sub-task: walk up
+                    cur = t
+                    for _ in range(5):
+                        pp = cur.get('parent_id')
+                        ppid = pp[0] if isinstance(pp, list) and pp else None
+                        if not ppid: break
+                        pname = parent_name_map.get(ppid, '')
+                        if pname: break
+                        cur = task_map.get(ppid, {})
+                is_supp = _is_support_parent(pname) if pname else False
+                if phase_key == 'support' and is_supp:
+                    relevant_ids.add(t['id'])
+                elif phase_key != 'support' and not is_supp:
+                    relevant_ids.add(t['id'])
+            logger.info(f"Non-BOG effort {phase_key}: {len(relevant_ids)} tasks by parent name split")
 
         # Check if user chose to include unassigned hours in this phase
         _incl_unassigned = proj_get_override('plan', phase_key, 'unassigned.include_unassigned')
@@ -8145,8 +8190,7 @@ def api_sales_orders():
             for ph, monthly in dir_inv_by_phase.items():
                 running = 0; cum = {}
                 for mk in sorted(monthly.keys()):
-                    running += monthly[mk]
-                    cum[mk] = {'month': monthly[mk], 'cumulative': round(running, 2)}
+                    running += monthly[mk]; cum[mk] = {'month': monthly[mk], 'cumulative': round(running, 2)}
                 dir_inv_by_phase_cum[ph] = cum
             logger.info(f"Direct inv phases: {list(dir_inv_by_phase_cum.keys())}")
             return jsonify({'ok': True, 'orders': [], 'direct_invoices': inv_list,
