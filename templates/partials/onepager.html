@@ -7,14 +7,14 @@
 .op-lbl{font-size:9px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;}
 .op-val{font-size:16px;font-weight:700;color:var(--text);}
 .op-card{background:var(--bg-card);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:12px;}
-.op-ch{padding:8px 12px;font-size:11px;font-weight:700;color:white;text-transform:uppercase;letter-spacing:.5px;background:#1B2A4E;}
-.op-ch.g{background:#1D7A4A;} .op-ch.a{background:#D4560A;}
+.op-ch{padding:8px 12px;font-size:11px;font-weight:700;color:#ffffff!important;text-transform:uppercase;letter-spacing:.5px;background:#1B2A4E!important;}
+.op-ch.g{background:#1D7A4A!important;} .op-ch.a{background:#D4560A!important;}
 .op-t{width:100%;border-collapse:collapse;font-size:11px;}
 .op-t th{padding:6px 10px;background:var(--bg-subtle);color:var(--text-muted);font-weight:600;font-size:10px;text-transform:uppercase;}
 .op-t td{padding:7px 10px;border-bottom:1px solid var(--border-light);color:var(--text);}
 .op-t tr:last-child td{border-bottom:none;}
 .op-t tbody tr:nth-child(even) td{background:var(--bg-subtle);}
-.op-t tfoot td{background:#1B2A4E!important;color:white!important;font-weight:700;}
+.op-t tfoot td{background:#1B2A4E!important;color:#ffffff!important;font-weight:700;}
 .op-st{display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;cursor:pointer;border:none;}
 .op-st.ontrack{background:#D1FAE5;color:#065F46;} .op-st.concern{background:#FEF3C7;color:#92400E;}
 .op-st.delayed{background:#FEE2E2;color:#991B1B;} .op-st.onhold{background:#F1F5F9;color:#64748B;border:1px solid #CBD5E1;}
@@ -325,10 +325,12 @@ function opBuildInvoices(){
     var vi=lm.accVI||0;               // Accumulative virtual invoice
     var issued=lm.issuedUpToMonth||0; // Total issued cumulative
     var coll=collectedByPhase[ph]||0;
+    // VI can be negative if production < 0, show as-is (it's a valid business indicator)
     totVI+=vi; totIssued+=issued; totColl+=coll;
+    var viColor=vi>=0?'':'color:#DC2626;';
     tbody.innerHTML+='<tr>'
       +'<td style="font-weight:600;">'+ph.charAt(0).toUpperCase()+ph.slice(1)+'</td>'
-      +'<td style="text-align:right;">'+fSAR(vi)+'</td>'
+      +'<td style="text-align:right;'+viColor+'">'+fSAR(vi)+'</td>'
       +'<td style="text-align:right;">'+fSAR(issued)+'</td>'
       +'<td style="text-align:right;">'+fSAR(coll)+'</td>'
       +'</tr>';
@@ -458,7 +460,17 @@ window.opExportPDF=function(){
     // jsPDF is exposed as window.jspdf.jsPDF
     var JsPDF=window.jspdf&&window.jspdf.jsPDF||window.jsPDF||window.jsPDF&&window.jsPDF.jsPDF;
     if(!JsPDF){alert('PDF library not loaded yet, try again');return;}
-    html2canvas(el,{scale:1.5,useCORS:true,backgroundColor:'#ffffff',logging:false}).then(function(canvas){
+    // Temporarily set white background for capture
+    var origBg=el.style.background; el.style.background='#ffffff';
+    html2canvas(el,{scale:2,useCORS:true,backgroundColor:'#ffffff',logging:false,
+      onclone:function(doc){
+        // Force all CSS vars to real colors in the cloned doc
+        var style=doc.createElement('style');
+        style.textContent='.op-ch{background:#1B2A4E!important;color:#ffffff!important;} .op-ch.g{background:#1D7A4A!important;} .op-ch.a{background:#D4560A!important;} .op-t tfoot td{background:#1B2A4E!important;color:#ffffff!important;} body{background:#ffffff;}';
+        doc.head.appendChild(style);
+      }
+    }).then(function(canvas){
+    el.style.background=origBg;
       var imgData=canvas.toDataURL('image/png');
       var pdf=new JsPDF('p','mm','a4');
       var pw=pdf.internal.pageSize.getWidth();
@@ -481,7 +493,7 @@ window.opExportPDF=function(){
         }
       }
       pdf.save(title+'.pdf');
-    });
+    }); // end html2canvas.then
   }
   // Load libs if needed
   if(typeof html2canvas!=='undefined'&&typeof jsPDF!=='undefined'){ doExport(); return; }
