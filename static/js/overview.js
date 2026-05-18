@@ -357,12 +357,12 @@ async function loadOverviewKPIs() {
       b.className='exec-tab'; b.setAttribute('data-tab','standup');
       b.textContent='Standup';
       b.addEventListener('click', function(){
-        // Mark tab active
         document.querySelectorAll('.exec-tab').forEach(function(t){ t.classList.remove('active'); });
         b.classList.add('active');
-        // Open standup in new tab
-        window.open('/standup', '_blank');
-        // Deactivate immediately so it doesn't look stuck
+        var pid  = (window.AppState&&AppState._overviewData&&AppState._overviewData.project_id)||'';
+        var pname= (window.AppState&&AppState._overviewData&&AppState._overviewData.project_name)||'';
+        var url  = '/standup?project_id='+encodeURIComponent(pid)+'&project_name='+encodeURIComponent(pname);
+        window.open(url, '_blank');
         setTimeout(function(){ b.classList.remove('active'); }, 300);
       });
       nav.appendChild(b);
