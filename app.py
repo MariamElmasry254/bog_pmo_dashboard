@@ -4602,7 +4602,7 @@ def api_roadmap():
 @app.route('/api/budget')
 def api_budget():
     return jsonify({
-        'project_name': PROJECT_NAME,
+        'project_name': session.get('project_name', PROJECT_NAME),
         'pm': 'Abdelrahman Doghish',
         'support_start': '2027-05-18',
         'support_end': '2028-05-17',
@@ -6390,13 +6390,13 @@ def api_effort_all_months(phase_key):
         odoo_info = odoo_data.get(emp_name, {})
         odoo_pos = odoo_info.get('position')
         sar_rate = odoo_info.get('sar_rate', 0)
-        # Position override: use manually set position if Odoo has none
-        _pos_overrides = load_plan_overrides().get('position_overrides', {})
-        _pos_override = _pos_overrides.get(emp_name) or _pos_overrides.get(
-            _re_effort.sub(r'^\[[A-Z]\d+\s*\]\s*', '', emp_name).strip()
+        # Use position override if Odoo has no position
+        _pos_ovr = load_plan_overrides().get('position_overrides', {})
+        _pos_ovr_val = _pos_ovr.get(emp_name) or _pos_ovr.get(
+            __import__('re').sub(r'^\[[A-Z]\d+\s*\]\s*', '', emp_name).strip()
         )
-        if _pos_override and not odoo_pos:
-            odoo_pos = _pos_override
+        if _pos_ovr_val and not odoo_pos:
+            odoo_pos = _pos_ovr_val
 
         # ── Travel periods (match by Odoo ID, code, or name) ──
         emp_travel_periods = []
@@ -6744,10 +6744,13 @@ def api_positions_list():
     names = sorted(set(p.get('position') or p.get('name','') for p in all_pos if p.get('position') or p.get('name')))
     return jsonify({'positions': names})
 
-
 @app.route('/api/position-overrides/save', methods=['POST'])
-def api_position_overrides_save_alias():
-    return api_position_overrides_save()
+def api_position_overrides_save_v2():
+    body = request.json or {}
+    name = body.get('name'); position = body.get('position')
+    if not name: return jsonify({'error': 'name required'}), 400
+    db.set_override('position', '', name, position if position else None)
+    return jsonify({'ok': True})
 
 @app.route('/api/position-overrides', methods=['POST'])
 def api_position_overrides_save():
@@ -7940,7 +7943,7 @@ def debug_timesheets():
     info = {
         'date_from': date_from,
         'date_to': date_to,
-        'project_name': PROJECT_NAME,
+        'project_name': session.get('project_name', PROJECT_NAME),
         'odoo_uid': odoo.uid,
         'odoo_last_error': odoo.last_error,
     }
