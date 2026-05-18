@@ -1247,7 +1247,7 @@ async function profRecomputeAll(phaseKey) {
   const table = document.getElementById(`profit-table-${phaseKey}`);
   if (!table) return;
   const rows = table.querySelectorAll('tr[data-month-key]');
-  let accActualMDs=0, latestData={}, prevViAcc=0;
+  let accActualMDs=0, latestData={}, latestCurrentCostSAR=0, prevViAcc=0;
 
   let rowIdx = 0;
   for (const tr of rows) {
@@ -1399,6 +1399,8 @@ async function profRecomputeAll(phaseKey) {
     if (completionPct || remainingMDs) {
       latestData = { completionPct, remainingMDs, eacMDs, cpi, profitAtComp, totalRevSAR, monthKey, eacCostSAR: estAtCompletion, currentCostSAR };
     }
+    // Always track latest current cost (from any row with actual effort)
+    if (currentCostSAR > 0) latestCurrentCostSAR = currentCostSAR;
     if(!AppState._varianceMonthData)AppState._varianceMonthData={};
     if(!AppState._varianceMonthData[phaseKey])AppState._varianceMonthData[phaseKey]=[];
     if(completionPct||remainingMDs||actualMDs||thisMonthMDs){AppState._varianceMonthData[phaseKey].push({month:monthKey,consumedRevSAR:recognizedRev||0,totalRevSAR:totalRevSAR||0,totalEstCostSAR:totalEstCostSAR||0,totalEstMDs:totalEstMDs||0,thisMonthMDs:thisMonthMDs||0,actualMDs:actualMDs||0,completionPct:completionPct||0,currentCostSAR:currentCostSAR||0,remainingMDs:remainingMDs||0,eacMDs:eacMDs||0,estCostToComplete:estCostToComplete||0,estAtCompletion:estAtCompletion||0,cpi:cpi||0,costVarianceSAR:costVarianceSAR||0,costVariancePct:costVariancePct||0,profitAtComp:profitAtComp||0,plannedProfitSAR:plannedProfitMonthSAR||0,profitAtCompPct:profitAtCompPct||0,profVar:profVar||0,profVarPct:profVarPct||0,issuedUpToMonth:issuedUpToMonth||0,progressPct:progressPct2||0,recognizedRev:recognizedRev||0,production:production||0,accVI:accVI||0});}
@@ -1430,6 +1432,24 @@ async function profRecomputeAll(phaseKey) {
     if(window._overviewUpdateProfKPIs)window._overviewUpdateProfKPIs(phaseKey);
     // Notify Overview to update its KPIs
     if (window._overviewUpdateProfKPIs) window._overviewUpdateProfKPIs(phaseKey);
+    // ── Persist EAC + currentCost to DB for Portfolio Summary ──────
+    try{
+      // eacCostSAR from latest row with % (latestData)
+      if(latestData.monthKey && latestData.eacCostSAR){
+        fetch('/api/plan-overrides', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ phase: phaseKey, month_key: latestData.monthKey, field: 'eacCostSAR', value: latestData.eacCostSAR })
+        });
+      }
+      // currentCostSAR from latest row with any effort
+      if(latestCurrentCostSAR > 0){
+        const _mk = latestData.monthKey || 'latest';
+        fetch('/api/plan-overrides', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ phase: phaseKey, month_key: _mk, field: 'currentCostSAR', value: latestCurrentCostSAR })
+        });
+      }
+    }catch(_e){}
   }
 }
 
