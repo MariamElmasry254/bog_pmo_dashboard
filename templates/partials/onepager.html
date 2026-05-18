@@ -452,61 +452,37 @@ window.opSave=async function(){
 };
 
 window.opExportPDF=function(){
-  // Use jsPDF + html2canvas for real PDF
-  function doExport(){
-    var el=document.getElementById('onepager');
-    var pn=document.getElementById('opProjName');
-    var title=(pn?pn.textContent:'Project')+' - One Pager';
-    // jsPDF is exposed as window.jspdf.jsPDF
-    var JsPDF=window.jspdf&&window.jspdf.jsPDF||window.jsPDF||window.jsPDF&&window.jsPDF.jsPDF;
-    if(!JsPDF){alert('PDF library not loaded yet, try again');return;}
-    // Temporarily set white background for capture
-    var origBg=el.style.background; el.style.background='#ffffff';
-    html2canvas(el,{scale:2,useCORS:true,backgroundColor:'#ffffff',logging:false,
-      onclone:function(doc){
-        // Force all CSS vars to real colors in the cloned doc
-        var style=doc.createElement('style');
-        style.textContent='.op-ch{background:#1B2A4E!important;color:#ffffff!important;} .op-ch.g{background:#1D7A4A!important;} .op-ch.a{background:#D4560A!important;} .op-t tfoot td{background:#1B2A4E!important;color:#ffffff!important;} body{background:#ffffff;}';
-        doc.head.appendChild(style);
-      }
-    }).then(function(canvas){
-    el.style.background=origBg;
-      var imgData=canvas.toDataURL('image/png');
-      var pdf=new JsPDF('p','mm','a4');
-      var pw=pdf.internal.pageSize.getWidth();
-      var ph=pdf.internal.pageSize.getHeight();
-      var ratio=canvas.height/canvas.width;
-      var imgH=pw*ratio;
-      if(imgH<=ph){
-        pdf.addImage(imgData,'PNG',0,0,pw,imgH);
-      } else {
-        // Multi-page
-        var pageH=ph, pageImgH=canvas.width*(pageH/pw);
-        var pages=Math.ceil(canvas.height/pageImgH);
-        for(var i=0;i<pages;i++){
-          if(i>0) pdf.addPage();
-          var sy=i*pageImgH;
-          var tmpC=document.createElement('canvas');
-          tmpC.width=canvas.width; tmpC.height=Math.min(pageImgH,canvas.height-sy);
-          tmpC.getContext('2d').drawImage(canvas,0,sy,canvas.width,tmpC.height,0,0,canvas.width,tmpC.height);
-          pdf.addImage(tmpC.toDataURL('image/png'),'PNG',0,0,pw,tmpC.height*(pw/canvas.width));
-        }
-      }
-      pdf.save(title+'.pdf');
-    }); // end html2canvas.then
-  }
-  // Load libs if needed
-  if(typeof html2canvas!=='undefined'&&typeof jsPDF!=='undefined'){ doExport(); return; }
-  var scripts=[
-    'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js',
-    'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'
-  ];
-  var loaded=0;
-  scripts.forEach(function(src){
-    var s=document.createElement('script'); s.src=src;
-    s.onload=function(){ loaded++; if(loaded===scripts.length) doExport(); };
-    document.head.appendChild(s);
-  });
+  var pn=document.getElementById('opProjName');
+  var title=(pn?pn.textContent:'Project')+' - One Pager';
+  document.title=title;
+  // Inject print styles
+  var sid='_opPrintCSS';
+  var old=document.getElementById(sid); if(old) old.remove();
+  var s=document.createElement('style'); s.id=sid;
+  s.textContent=[
+    '@media print{',
+    '  @page{size:A4 landscape;margin:8mm;}',
+    '  body>*{display:none!important;}',
+    '  #onepager{display:block!important;padding:0!important;background:#fff!important;}',
+    '  .op-bar button{display:none!important;}',
+    '  .op-ch{background:#1B2A4E!important;color:#fff!important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}',
+    '  .op-ch.g{background:#1D7A4A!important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}',
+    '  .op-ch.a{background:#D4560A!important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}',
+    '  .op-t tfoot td{background:#1B2A4E!important;color:#fff!important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}',
+    '  .op-t tbody tr:nth-child(even) td{background:#F1F5F9!important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}',
+    '  nav,header,.main-nav,.exec-tabs,.tabs-bar{display:none!important;}',
+    '  #onepager{font-size:10px;}',
+    '  .op-chip-row{flex-wrap:nowrap;}',
+    '}'
+  ].join('');
+  document.head.appendChild(s);
+  setTimeout(function(){
+    window.print();
+    setTimeout(function(){
+      s.remove();
+      document.title=pn?pn.textContent:'Dashboard';
+    },1000);
+  },200);
 };
 
 window.loadOnepager=opLoad;
