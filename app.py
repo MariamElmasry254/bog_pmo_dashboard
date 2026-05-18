@@ -881,6 +881,11 @@ def api_global_promos_import():
     return jsonify({'ok': True, 'added': added, 'skipped': skipped})
 
 
+@app.route('/partials/onepager')
+@login_required
+def onepager_partial():
+    return render_template('partials/onepager.html')
+
 @app.route('/manage')
 @login_required
 def manage_page():
@@ -1776,6 +1781,116 @@ def api_import_summary_excel():
 
     # No sheet specified → return list of sheets
     return jsonify({'ok': True, 'sheets': wb.sheetnames, 'needs_sheet_selection': True})
+
+
+@app.route('/api/onepager')
+@login_required
+def api_onepager():
+    """Aggregate data for One Pager tab from Odoo + plan overrides"""
+    _proj_name = active_project_name()
+    _proj_id   = session.get('project_id')
+    _is_bog    = not _proj_id or str(_proj_id) == '228'
+    result = {'ok': True, 'project_name': _proj_name, 'is_bog': _is_bog}
+
+    # ── Odoo project info ──────────────────────────────────────────────
+    try:
+        if not odoo.uid: odoo.connect()
+        projs = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD, 'project.project', 'search_read',
+            [[('name', 'ilike', _proj_name)]],
+            {'fields': ['id','name','start_date','end_date','user_id','coordinator_id'], 'limit': 3}
+        )
+        if projs:
+            proj = next((p for p in projs if (p.get('name','').strip().lower() == (_proj_name or '').strip().lower())), projs[0])
+            result['start_date']   = (proj.get('start_date') or '')[:10]
+            result['end_date']     = (proj.get('end_date') or '')[:10]
+            uid_f = proj.get('user_id')
+            result['pm_name']      = uid_f[1] if isinstance(uid_f, list) and len(uid_f)>1 else ''
+            coord_f = proj.get('coordinator_id')
+            result['coordinator']  = coord_f[1] if isinstance(coord_f, list) and len(coord_f)>1 else ''
+    except Exception as e:
+        logger.warning(f"onepager odoo: {e}")
+        result['start_date'] = result['end_date'] = result['pm_name'] = result['coordinator'] = ''
+
+    # ── Team count: unique employees in last month ────────────────────
+    try:
+        from datetime import datetime as _dt
+        _today = date.today()
+        _first = date(_today.year, _today.month, 1)
+        timesheets = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD, 'account.analytic.line', 'search_read',
+            [[('date', '>=', str(_first)), ('project_id.name', 'ilike', _proj_name)]],
+            {'fields': ['employee_id'], 'limit': 2000}
+        )
+        emps = set()
+        for t in timesheets:
+            emp = t.get('employee_id')
+            if isinstance(emp, list) and emp[1]: emps.add(emp[1])
+        result['team_count_last_month'] = len(emps)
+        result['team_month'] = _first.strftime('%b %Y')
+    except Exception as e:
+        logger.warning(f"onepager team: {e}")
+        result['team_count_last_month'] = 0; result['team_month'] = ''
+
+    # ── Plan overrides: phases data ───────────────────────────────────
+    try:
+        overrides = load_plan_overrides().get('plan_overrides', {}) or {}
+        phases_keys = ['consultation','development'] if _is_bog else ['services','support']
+        phases_data = []
+        for ph in phases_keys:
+            ph_data = overrides.get(ph, {}) or {}
+            sorted_months = sorted(ph_data.keys(), reverse=True)
+            pct = rem = budget_rev = budget_cost = budget_mds = 0
+            for mk in sorted_months:
+                md = ph_data.get(mk, {}) or {}
+                if not pct and 'completion' in md: pct = float(md['completion'])
+                if not rem and 'remaining' in md: rem = float(md['remaining'])
+                if not budget_rev and 'approved' in mk: pass
+                if pct and rem: break
+            # Budget from approved fields
+            for mk, md in ph_data.items():
+                if not isinstance(md, dict): continue
+                if md.get('approved.revenue_sar') and not budget_rev:
+                    budget_rev = float(md['approved.revenue_sar'])
+                if md.get('approved.cost_sar') and not budget_cost:
+                    budget_cost = float(md['approved.cost_sar'])
+                if md.get('approved.mandays') and not budget_mds:
+                    budget_mds = float(md['approved.mandays'])
+            phases_data.append({
+                'phase': ph,
+                'completion_pct': round(pct, 1),
+                'remaining_mds': round(rem, 1),
+                'budget_rev_sar': round(budget_rev, 0),
+                'budget_cost_sar': round(budget_cost, 0),
+                'budget_mds': round(budget_mds, 1),
+            })
+        result['phases'] = phases_data
+    except Exception as e:
+        logger.warning(f"onepager phases: {e}")
+        result['phases'] = []
+
+    # ── DB overrides: one pager manual fields ─────────────────────────
+    try:
+        pfx = active_db_prefix()
+        op_ns = f'{pfx}_onepager' if pfx else 'onepager'
+        manual = db.get_namespace_overrides(op_ns, '') or {}
+        result['manual'] = manual
+    except Exception:
+        result['manual'] = {}
+
+    return jsonify(result)
+
+
+@app.route('/api/onepager/save', methods=['POST'])
+@login_required
+def api_onepager_save():
+    """Save manual One Pager fields to DB"""
+    body = request.json or {}
+    pfx = active_db_prefix()
+    op_ns = f'{pfx}_onepager' if pfx else 'onepager'
+    for key, val in body.items():
+        db.set_override(op_ns, '', key, val)
+    return jsonify({'ok': True})
 
 
 @app.route('/api/overview/phase-progress')
