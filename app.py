@@ -1048,14 +1048,185 @@ def api_summary():
 @app.route('/api/standup')
 @login_required
 def api_standup():
-    """Return open tasks per team member with hours today, remaining, and first entry date."""
+    """Return open tasks per team member grouped by phase."""
     from datetime import date, timedelta
-    import json as _json
 
     today_str     = date.today().isoformat()
     yesterday_str = (date.today() - timedelta(days=1)).isoformat()
-    query_date    = request.args.get('date', today_str)   # ?date=YYYY-MM-DD
+    query_date    = request.args.get('date', today_str)
     prev_date     = request.args.get('prev', yesterday_str)
+    # Accept project_id from URL param (standup opens in new tab)
+    url_proj_id   = request.args.get('project_id')
+    url_proj_name = request.args.get('project_name')
+
+    try:
+        if not odoo.uid:
+            odoo.connect()
+
+        proj_id   = url_proj_id or session.get('project_id')
+        proj_name = url_proj_name or session.get('project_name', PROJECT_NAME)
+        is_bog    = not proj_id or str(proj_id) == '228'
+        phases    = ['development', 'consultation'] if is_bog else ['services', 'support']
+
+        # ── 1. Fetch all tasks (open + closed) ───────────────────────────
+        if proj_id and str(proj_id) != '228':
+            proj_domain = [('project_id', '=', int(proj_id))]
+        else:
+            proj_domain = [('project_id', '=', 228)] if is_bog else [('project_id.name', 'ilike', proj_name)]
+
+        tasks = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [proj_domain + [('child_ids', '=', False)]],
+            {'fields': ['id', 'name', 'planned_hours', 'effective_hours',
+                        'user_id', 'stage_id', 'parent_id', 'write_date'],
+             'limit': 3000}
+        )
+
+        task_ids = [t['id'] for t in tasks]
+        if not task_ids:
+            return jsonify({'ok': True, 'date': query_date, 'phases': {ph: [] for ph in phases}})
+
+        # ── 2. Classify tasks by phase (from parent bracket) ─────────────
+        def classify_phase(task):
+            parent_raw = task.get('parent_id')
+            parent = (parent_raw[1] if isinstance(parent_raw, list) else str(parent_raw or '')).lower()
+            name   = (task.get('name') or '').lower()
+            if is_bog:
+                if 'consult' in parent or 'consult' in name: return 'consultation'
+                if 'develop' in parent or 'develop' in name: return 'development'
+                if 'support' in parent or 'support' in name: return 'support'
+                return 'development'
+            else:
+                if 'support' in parent or 'support' in name: return 'support'
+                return 'services'
+
+        # ── 3. Timesheets for both dates ──────────────────────────────────
+        def fetch_ts(date_str):
+            return odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'account.analytic.line', 'search_read',
+                [[('task_id', 'in', task_ids), ('date', '=', date_str)]],
+                {'fields': ['employee_id', 'task_id', 'unit_amount'], 'limit': 5000}
+            )
+
+        ts_prev  = fetch_ts(prev_date)
+        ts_today = fetch_ts(query_date)
+
+        # ── 4. First entry per task ───────────────────────────────────────
+        first_entry_map = {}
+        all_ts = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'account.analytic.line', 'search_read',
+            [[('task_id', 'in', task_ids)]],
+            {'fields': ['task_id', 'date'], 'limit': 10000, 'order': 'date asc'}
+        )
+        for ts in all_ts:
+            tid = ts['task_id'][0] if ts.get('task_id') else None
+            if tid and tid not in first_entry_map:
+                first_entry_map[tid] = ts['date']
+
+        # ── 5. Build hours maps ───────────────────────────────────────────
+        def build_hrs_map(ts_list):
+            m = {}  # emp_name -> {task_id -> hours}
+            for ts in ts_list:
+                emp_raw = ts.get('employee_id')
+                emp = emp_raw[1] if isinstance(emp_raw, list) and len(emp_raw)>1 else str(emp_raw or '')
+                tid = ts['task_id'][0] if ts.get('task_id') else None
+                if not tid or not emp: continue
+                m.setdefault(emp, {})
+                m[emp][tid] = m[emp].get(tid, 0) + float(ts.get('unit_amount') or 0)
+            return m
+
+        hrs_prev  = build_hrs_map(ts_prev)
+        hrs_today = build_hrs_map(ts_today)
+
+        # ── 6. Build per-phase → per-employee structure ───────────────────
+        done_kws = ['done', 'cancel', 'closed']
+        def is_closed(task):
+            s = task.get('stage_id')
+            stage = (s[1] if isinstance(s, list) else str(s or '')).lower()
+            return any(k in stage for k in done_kws)
+
+        # collect all employees per phase from tasks + timesheets
+        phase_members = {ph: {} for ph in phases}  # phase -> {emp -> {yesterday,inprogress,closed}}
+
+        for task in tasks:
+            tid    = task['id']
+            phase  = classify_phase(task)
+            if phase not in phase_members:
+                continue
+
+            uid_raw = task.get('user_id')
+            emp     = uid_raw[1] if isinstance(uid_raw, list) and len(uid_raw)>1 else None
+
+            # also collect from timesheets
+            emps_from_ts = set()
+            for emp_n in list(hrs_prev.keys()) + list(hrs_today.keys()):
+                if tid in hrs_prev.get(emp_n, {}) or tid in hrs_today.get(emp_n, {}):
+                    emps_from_ts.add(emp_n)
+
+            all_emps = set()
+            if emp: all_emps.add(emp)
+            all_emps.update(emps_from_ts)
+
+            planned   = float(task.get('planned_hours') or 0)
+            actual    = float(task.get('effective_hours') or 0)
+            remaining = max(0.0, planned - actual)
+            closed    = is_closed(task)
+            first_d   = first_entry_map.get(tid, '')
+
+            # stale days
+            stale = 0
+            wd = (task.get('write_date') or '')[:10]
+            if wd:
+                try:
+                    from datetime import date as _d
+                    stale = max(0, (_d.fromisoformat(query_date) - _d.fromisoformat(wd)).days)
+                except: pass
+
+            task_obj_base = {
+                'id': tid, 'name': task['name'],
+                'parent': (task.get('parent_id') or [None,''])[1] if isinstance(task.get('parent_id'), list) else '',
+                'planned_hrs': round(planned, 1), 'actual_hrs': round(actual, 1),
+                'remaining_hrs': round(remaining, 1), 'first_entry': first_d, 'stale': stale,
+            }
+
+            for e in all_emps:
+                if e not in phase_members[phase]:
+                    phase_members[phase][e] = {
+                        'name': e, 'logged_yesterday': False,
+                        'yesterday': [], 'inprogress': [], 'closed_with_remaining': []
+                    }
+                m = phase_members[phase][e]
+                h_prev  = hrs_prev.get(e, {}).get(tid, 0)
+                if h_prev > 0: m['logged_yesterday'] = True
+
+                if h_prev > 0:
+                    m['yesterday'].append({**task_obj_base, 'hrs': round(h_prev, 2),
+                                           'firstEntry': first_d == prev_date})
+                if not closed and (actual > 0 or remaining > 0):
+                    m['inprogress'].append(task_obj_base)
+                if closed and remaining > 0:
+                    m['closed_with_remaining'].append(task_obj_base)
+
+        # Sort members: logged first
+        result_phases = {}
+        for ph in phases:
+            members_list = sorted(
+                phase_members[ph].values(),
+                key=lambda m: (0 if m['logged_yesterday'] else 1, m['name'])
+            )
+            result_phases[ph] = members_list
+
+        return jsonify({'ok': True, 'date': query_date, 'prev_date': prev_date,
+                        'phases': result_phases, 'is_bog': is_bog,
+                        'project_name': proj_name})
+
+    except Exception as e:
+        import traceback
+        logger.error(f'standup error: {traceback.format_exc()}')
+        return jsonify({'error': str(e), 'ok': False}), 500
 
     try:
         if not odoo.uid:
