@@ -2140,10 +2140,21 @@ pres.writeFile({ fileName: process.argv[3] });
         # Output PPTX path
         out_path = tempfile.mktemp(suffix='.pptx')
 
+        # Ensure pptxgenjs is installed (Railway has no package.json)
+        node_check = subprocess.run(
+            ['node', '-e', "require('pptxgenjs')"],
+            capture_output=True, text=True, timeout=15
+        )
+        if node_check.returncode != 0:
+            subprocess.run(
+                ['npm', 'install', '-g', 'pptxgenjs'],
+                capture_output=True, text=True, timeout=120
+            )
+
         # Run node
         result = subprocess.run(
             ['node', script_path, data_path, out_path],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, timeout=60
         )
         if result.returncode != 0:
             return jsonify({'error': result.stderr or 'node script failed'}), 500
