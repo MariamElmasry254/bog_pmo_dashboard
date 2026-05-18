@@ -3,134 +3,208 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PMO Dashboard — Login</title>
+<title>Envnt PMO — Login</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
   body {
     min-height: 100vh;
-    background: #0F1A35;
-    display: flex; align-items: center; justify-content: center;
+    display: flex;
     font-family: 'Inter', sans-serif;
+    background: #EEF2F7;
   }
-  /* Subtle grid background */
-  body::before {
+
+  /* ── Left navy panel ── */
+  .lp-side {
+    width: 38%;
+    min-height: 100vh;
+    background: #1B2A4E;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 56px 48px;
+    position: relative;
+    overflow: hidden;
+  }
+  /* subtle grid on navy */
+  .lp-side::before {
     content: '';
-    position: fixed; inset: 0;
+    position: absolute; inset: 0;
     background-image:
-      linear-gradient(rgba(59,130,246,.06) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(59,130,246,.06) 1px, transparent 1px);
-    background-size: 40px 40px;
+      linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px);
+    background-size: 36px 36px;
     pointer-events: none;
   }
-  .card {
-    background: #1B2A4E;
-    border: 1px solid rgba(255,255,255,.08);
-    border-radius: 16px;
-    padding: 48px 44px;
-    width: 100%; max-width: 420px;
+  .lp-logo {
+    display: flex; flex-direction: column;
+    margin-bottom: 56px;
     position: relative;
-    box-shadow: 0 24px 64px rgba(0,0,0,.4);
   }
-  .card::before {
-    content: '';
-    position: absolute; top: 0; left: 0; right: 0;
-    height: 3px;
-    background: linear-gradient(90deg, #F59E0B, #3B82F6, #10B981);
-    border-radius: 16px 16px 0 0;
+  .lp-logo img {
+    height: 26px; width: auto;
+    /* grey logo → white */
+    filter: brightness(0) invert(1);
+    margin-bottom: 8px;
   }
-  .logo {
-    display: flex; align-items: center; gap: 10px; margin-bottom: 32px;
+  .lp-logo-tag {
+    font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .14em;
+    color: rgba(255,255,255,.35);
   }
-  .logo-icon {
-    width: 40px; height: 40px; border-radius: 10px;
-    background: linear-gradient(135deg, #3B82F6, #1B2A4E);
-    border: 1px solid rgba(59,130,246,.4);
+  .lp-quote {
+    font-size: 14px; line-height: 1.75;
+    color: rgba(255,255,255,.55);
+    border-left: 2px solid rgba(255,255,255,.15);
+    padding-left: 16px;
+    margin-bottom: 48px;
+    position: relative;
+  }
+  .lp-dots {
+    display: flex; gap: 7px;
+    position: relative;
+  }
+  .lp-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: rgba(255,255,255,.2);
+  }
+  .lp-dot.on { background: rgba(255,255,255,.75); }
+
+  /* ── Right white panel ── */
+  .lp-right {
+    flex: 1;
     display: flex; align-items: center; justify-content: center;
-    font-size: 18px;
+    background: #fff;
+    padding: 40px 24px;
   }
-  .logo-text { font-size: 13px; font-weight: 700; color: white; letter-spacing: .02em; }
-  .logo-sub  { font-size: 10px; color: rgba(255,255,255,.4); text-transform: uppercase; letter-spacing: .12em; }
-  h1 { font-size: 22px; font-weight: 700; color: white; margin-bottom: 6px; }
-  .subtitle { font-size: 13px; color: rgba(255,255,255,.45); margin-bottom: 32px; }
-  .field { margin-bottom: 18px; }
-  .field label { display: block; font-size: 11px; font-weight: 600; color: rgba(255,255,255,.5);
-    text-transform: uppercase; letter-spacing: .06em; margin-bottom: 6px; }
-  .field input {
+  /* dot grid on white */
+  .lp-right::before {
+    content: '';
+    position: fixed; inset: 0; left: 38%;
+    background-image: radial-gradient(circle, rgba(27,42,78,.07) 1px, transparent 1px);
+    background-size: 24px 24px;
+    pointer-events: none;
+  }
+  .lp-form {
+    width: 100%; max-width: 340px;
+    position: relative;
+  }
+  .lp-hello   { font-size: 24px; font-weight: 700; color: #1B2A4E; margin-bottom: 6px; }
+  .lp-sub     { font-size: 13px; color: #94A3B8; margin-bottom: 36px; }
+
+  .lp-field   { margin-bottom: 18px; }
+  .lp-label   {
+    display: block; font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .07em;
+    color: #64748B; margin-bottom: 7px;
+  }
+  .lp-input {
     width: 100%; padding: 11px 14px;
-    background: rgba(255,255,255,.06);
-    border: 1px solid rgba(255,255,255,.1);
-    border-radius: 8px;
-    color: white; font-size: 14px; font-family: 'Inter', sans-serif;
-    transition: border-color .15s;
-    outline: none;
+    background: #F8FAFC; border: 1px solid #E2E8F0;
+    border-radius: 9px; font-size: 14px; color: #1E293B;
+    font-family: 'Inter', sans-serif;
+    outline: none; transition: border-color .15s, box-shadow .15s;
   }
-  .field input:focus { border-color: rgba(59,130,246,.6); background: rgba(59,130,246,.08); }
-  .field input::placeholder { color: rgba(255,255,255,.25); }
-  .btn {
+  .lp-input:focus {
+    border-color: #1B2A4E;
+    box-shadow: 0 0 0 3px rgba(27,42,78,.08);
+    background: #fff;
+  }
+  .lp-input::placeholder { color: #CBD5E1; }
+
+  .lp-btn {
     width: 100%; padding: 12px;
-    background: #3B82F6;
-    border: none; border-radius: 8px;
-    color: white; font-size: 14px; font-weight: 600;
-    cursor: pointer; transition: background .15s;
-    margin-top: 8px;
+    background: #1B2A4E; color: #fff;
+    border: none; border-radius: 9px;
+    font-size: 14px; font-weight: 600;
+    font-family: 'Inter', sans-serif;
+    cursor: pointer; margin-top: 10px;
+    letter-spacing: .01em;
+    transition: background .15s, transform .1s;
   }
-  .btn:hover { background: #2563EB; }
-  .btn:disabled { background: #374151; cursor: not-allowed; }
-  .error {
-    background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.3);
-    color: #FCA5A5; border-radius: 8px; padding: 10px 14px;
-    font-size: 13px; margin-bottom: 20px;
+  .lp-btn:hover  { background: #243660; }
+  .lp-btn:active { transform: scale(.99); }
+  .lp-btn:disabled { background: #94A3B8; cursor: not-allowed; }
+
+  .lp-error {
+    background: #FEF2F2; border: 1px solid #FECACA;
+    color: #DC2626; border-radius: 8px;
+    padding: 10px 14px; font-size: 13px;
+    margin-bottom: 20px; display: none;
   }
-  .footer { text-align: center; margin-top: 24px; font-size: 11px; color: rgba(255,255,255,.2); }
+
+  .lp-footer {
+    text-align: center; margin-top: 32px;
+    font-size: 11px; color: #CBD5E1;
+  }
+
+  /* ── Responsive: stack on small screens ── */
+  @media (max-width: 640px) {
+    body { flex-direction: column; }
+    .lp-side { width: 100%; min-height: auto; padding: 40px 28px 36px; }
+    .lp-quote, .lp-dots { display: none; }
+    .lp-logo { margin-bottom: 0; }
+    .lp-right::before { left: 0; }
+  }
 </style>
 </head>
 <body>
-<div class="card">
-  <div class="logo">
-    <div class="logo-icon">📊</div>
-    <div>
-      <div class="logo-text">Codelab PMO</div>
-      <div class="logo-sub">Dashboard v3</div>
+
+<!-- Left navy panel -->
+<div class="lp-side">
+  <div class="lp-logo">
+    <img src="data:image/png;base64,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" alt="Envnt">
+    <div class="lp-logo-tag">PMO Dashboard</div>
+  </div>
+  <div class="lp-quote">
+    Track projects, manage budgets,<br>
+    and deliver insights — all in one place.
+  </div>
+  <div class="lp-dots">
+    <div class="lp-dot on"></div>
+    <div class="lp-dot"></div>
+    <div class="lp-dot"></div>
+  </div>
+</div>
+
+<!-- Right white panel -->
+<div class="lp-right">
+  <div class="lp-form">
+    <h1 class="lp-hello">Welcome back</h1>
+    <p class="lp-sub">Sign in to access your dashboard</p>
+
+    {% if error %}
+    <div class="lp-error" style="display:block;">⚠️ {{ error }}</div>
+    {% endif %}
+    <div class="lp-error" id="errMsg"></div>
+
+    <div class="lp-field">
+      <label class="lp-label" for="username">Username</label>
+      <input class="lp-input" type="text" id="username" placeholder="Enter username" autocomplete="username">
     </div>
+    <div class="lp-field">
+      <label class="lp-label" for="password">Password</label>
+      <input class="lp-input" type="password" id="password" placeholder="Enter password"
+             autocomplete="current-password" onkeydown="if(event.key==='Enter') doLogin()">
+    </div>
+
+    <button class="lp-btn" onclick="doLogin()" id="loginBtn">Sign In →</button>
+
+    <div class="lp-footer">Envnt · Internal PMO Tool · {{ now.year if now else 2026 }}</div>
   </div>
-
-  <h1>Welcome back</h1>
-  <p class="subtitle">Sign in to access the PMO Dashboard</p>
-
-  {% if error %}
-  <div class="error">⚠️ {{ error }}</div>
-  {% endif %}
-
-  <div id="errMsg" class="error" style="display:none;"></div>
-
-  <div class="field">
-    <label>Username</label>
-    <input type="text" id="username" placeholder="Enter username" autocomplete="username">
-  </div>
-  <div class="field">
-    <label>Password</label>
-    <input type="password" id="password" placeholder="Enter password" autocomplete="current-password"
-           onkeydown="if(event.key==='Enter') doLogin()">
-  </div>
-  <button class="btn" onclick="doLogin()" id="loginBtn">Sign In →</button>
-
-  <div class="footer">Codelab · Internal PMO Tool · {{ now.year if now else 2026 }}</div>
 </div>
 
 <script>
 async function doLogin() {
-  const btn = document.getElementById('loginBtn');
+  const btn   = document.getElementById('loginBtn');
   const errEl = document.getElementById('errMsg');
   const u = document.getElementById('username').value.trim();
   const p = document.getElementById('password').value;
   if (!u || !p) { showErr('Please enter username and password.'); return; }
-
-  btn.disabled = true;
-  btn.textContent = 'Signing in…';
+  btn.disabled = true; btn.textContent = 'Signing in…';
   errEl.style.display = 'none';
-
   try {
     const res = await fetch('/login', {
       method: 'POST',
@@ -149,14 +223,11 @@ async function doLogin() {
     btn.disabled = false; btn.textContent = 'Sign In →';
   }
 }
-
 function showErr(msg) {
   const el = document.getElementById('errMsg');
   el.textContent = '⚠️ ' + msg;
   el.style.display = 'block';
 }
-
-// Auto-focus username
 document.getElementById('username').focus();
 </script>
 </body>
