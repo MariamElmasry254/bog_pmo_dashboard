@@ -47,7 +47,7 @@ body{font-family:'Inter',sans-serif;background:#F0F4F8;min-height:100vh;}
 .col-cnt{font-size:11px;font-weight:600;padding:1px 7px;border-radius:5px;background:#F1F5F9;color:#64748B;}
 .col-cnt.warn{background:#FEE2E2;color:#991B1B;}
 .col-body{padding:10px 12px;}
-.ti{padding:12px 12px;background:#F8FAFC;border-radius:10px;margin-bottom:8px;}
+.ti{padding:12px 12px;background:#F8FBFF;border:1px solid #E8EFF8;border-radius:10px;margin-bottom:8px;}
 .ti:last-child{margin-bottom:0;}
 .ti-name{font-size:13px;font-weight:600;color:#1B2A4E;line-height:1.4;}
 .ti-phase{font-size:10px;color:#3B82F6;margin-top:3px;font-weight:600;}
@@ -56,10 +56,6 @@ body{font-family:'Inter',sans-serif;background:#F0F4F8;min-height:100vh;}
 .ti-stat{display:flex;flex-direction:column;}
 .ti-stat-lbl{font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#94A3B8;}
 .ti-stat-val{font-size:13px;font-weight:700;color:#1B2A4E;margin-top:1px;}
-.ti-msg-row{display:flex;align-items:center;gap:6px;margin-top:10px;padding-top:8px;border-top:1px solid #E2E8F0;}
-.ti-msg-inp{flex:1;font-size:11px;border:none;background:transparent;padding:2px 0;outline:none;color:#1E293B;font-family:'Inter',sans-serif;border-bottom:1px solid #E2E8F0;}
-.ti-msg-inp::placeholder{color:#CBD5E1;}
-.ti-msg-btn{width:24px;height:24px;border-radius:6px;border:none;background:#1B2A4E;color:#fff;cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
 .prog-bg{background:#E2E8F0;border-radius:2px;height:3px;margin-top:5px;}
 .prog-fill{height:3px;border-radius:2px;}
 .tag{font-size:10px;padding:1px 6px;border-radius:5px;display:inline-block;margin-top:3px;}
@@ -67,10 +63,11 @@ body{font-family:'Inter',sans-serif;background:#F0F4F8;min-height:100vh;}
 .tag.stale{background:#FEF3C7;color:#92400E;}
 .tag.closed{background:#FEE2E2;color:#991B1B;}
 .empty-col{font-size:11px;color:#CBD5E1;text-align:center;padding:20px 0;}
-.note-card{background:#fff;border:1px solid #E2E8F0;border-radius:12px;padding:12px 16px;display:flex;align-items:center;gap:10px;}
-.note-card input{flex:1;font-size:13px;border:none;border-bottom:1px solid #E2E8F0;padding:4px 0;outline:none;background:transparent;color:#1E293B;font-family:'Inter',sans-serif;}
-.note-card input::placeholder{color:#CBD5E1;}
-.note-card button{padding:6px 16px;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;background:#1B2A4E;color:#fff;border:none;}
+/* motivational banner */
+.motiv{background:#1B2A4E;border-radius:10px;padding:12px 18px;display:flex;align-items:center;gap:12px;margin-bottom:4px;}
+.motiv-emoji{font-size:22px;}
+.motiv-text{font-size:13px;font-weight:600;color:#fff;}
+.motiv-sub{font-size:11px;color:rgba(255,255,255,.5);margin-top:1px;}
 .loading{text-align:center;padding:40px;color:#94A3B8;font-size:13px;}
 </style>
 </head>
@@ -215,26 +212,37 @@ function taskCard(t, mode, idx) {
       +'</div>';
   }
 
-  // Per-task message box — use task id to avoid name issues
-  var tid_safe = 'tid_'+t.id+'_'+mode;
-  html+='<div class="ti-msg-row">'
-    +'<input class="ti-msg-inp" id="'+tid_safe+'" placeholder="Add note...">'
-    +'<button class="ti-msg-btn" onclick="saveTaskNote(\''+tid_safe+'\','+t.id+')">&#x2713;</button>'
-    +'</div>';
-
+  // no per-task note box
   return html+'</div>';
 }
 
 function col(title, tasks, mode) {
   var warn = (title.indexOf('Closed')>=0&&tasks.length>0)?' warn':'';
-  var missingWarn = (mode==='m'&&tasks.length>0)?' warn':'';
-  var headStyle = mode==='m'&&tasks.length>0 ? ' style="background:#FEF3C7;"' : '';
   var body = tasks.length
     ? tasks.map(function(t,i){return taskCard(t,mode,i);}).join('')
-    : '<div class="empty-col">'+(mode==='c'?'All clear &#x2713;':mode==='y'?'No hours logged':mode==='m'?'All accounted for':'No open tasks')+'</div>';
-  return '<div class="col-card"><div class="col-head"'+headStyle+'><span class="col-title">'+title+'</span>'
-    +'<span class="col-cnt'+(warn||missingWarn)+'">'+tasks.length+'</span></div>'
+    : '<div class="empty-col">'+(mode==='c'?'All clear &#x2713;':mode==='y'?'No hours logged':'No open tasks')+'</div>';
+  return '<div class="col-card"><div class="col-head"><span class="col-title">'+title+'</span>'
+    +'<span class="col-cnt'+warn+'">'+tasks.length+'</span></div>'
     +'<div class="col-body">'+body+'</div></div>';
+}
+
+var MOTIVATIONS = [
+  {e:'&#x1F525;', t:'Keep the momentum going!', s:'Every hour logged counts.'},
+  {e:'&#x1F3AF;', t:'Stay focused, ship it!', s:'Progress over perfection.'},
+  {e:'&#x1F4AA;', t:'Another day, another milestone.', s:'You\'re making it happen.'},
+  {e:'&#x26A1;', t:'Energy is high today!', s:'Let\'s close those tasks.'},
+  {e:'&#x1F680;', t:'Full speed ahead!', s:'The team is on track.'},
+  {e:'&#x2728;', t:'Great work so far!', s:'Keep delivering value.'},
+];
+
+function motivBanner(name) {
+  var m = MOTIVATIONS[Math.floor(Math.random()*MOTIVATIONS.length)];
+  var dName = strip(name);
+  return '<div class="motiv">'
+    +'<span class="motiv-emoji">'+m.e+'</span>'
+    +'<div><div class="motiv-text">'+dName+' — '+m.t+'</div>'
+    +'<div class="motiv-sub">'+m.s+'</div></div>'
+    +'</div>';
 }
 
 function renderContent() {
@@ -242,18 +250,10 @@ function renderContent() {
   var m=null;
   for (var i=0;i<allMembers.length;i++){if(allMembers[i].name===selName){m=allMembers[i];break;}}
   if (!m) return;
-
-  // Missing hours = inprogress tasks where hrs_yesterday === 0
-  // Compare inprogress task ids vs yesterday task ids
-  var ystIds = (m.yesterday||[]).map(function(t){return t.id;});
-  var missing = (m.inprogress||[]).filter(function(t){
-    return ystIds.indexOf(t.id) < 0;
-  });
-
-  var html='<div class="four-col">'
+  var html = motivBanner(m.name)
+    +'<div class="three-col">'
     +col('Logged Yesterday', m.yesterday||[], 'y')
     +col('In Progress', m.inprogress||[], 'i')
-    +col('Missing Yesterday', missing, 'm')
     +col('Closed — Has Remaining', m.closed_with_remaining||[], 'c')
     +'</div>';
   document.getElementById('contentArea').innerHTML=html;
