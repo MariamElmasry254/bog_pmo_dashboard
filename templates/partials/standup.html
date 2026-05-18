@@ -16,8 +16,6 @@ body{font-family:'Inter',sans-serif;background:#F0F4F8;min-height:100vh;}
 .nav-btn{padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid rgba(255,255,255,.2);color:rgba(255,255,255,.8);background:transparent;text-decoration:none;}
 .nav-btn:hover{background:rgba(255,255,255,.1);}
 .wrap{max-width:1100px;margin:0 auto;padding:24px 20px;}
-
-/* header */
 .hrow{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px;}
 .hrow h1{font-size:20px;font-weight:700;color:#1B2A4E;}
 .hrow p{font-size:12px;color:#64748B;margin-top:3px;}
@@ -25,20 +23,10 @@ body{font-family:'Inter',sans-serif;background:#F0F4F8;min-height:100vh;}
 .date-nav button{width:32px;height:32px;border-radius:8px;border:1px solid #E2E8F0;background:#fff;cursor:pointer;font-size:16px;}
 .date-nav button:hover{background:#F1F5F9;}
 .date-lbl{font-size:13px;font-weight:600;color:#1B2A4E;min-width:160px;text-align:center;}
-
-/* phase tabs */
-.phase-tabs{display:flex;gap:8px;margin-bottom:20px;}
-.ph-tab{padding:8px 20px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;border:1px solid #E2E8F0;background:#fff;color:#64748B;transition:all .15s;}
-.ph-tab.active{background:#1B2A4E;color:#fff;border-color:#1B2A4E;}
-.ph-tab:hover:not(.active){background:#F1F5F9;}
-
-/* layout: left sidebar + right content */
-.layout{display:grid;grid-template-columns:220px 1fr;gap:16px;min-height:400px;}
-
-/* members sidebar */
-.sidebar{background:#fff;border:1px solid #E2E8F0;border-radius:12px;overflow:hidden;}
-.sidebar-head{padding:12px 16px;border-bottom:1px solid #F1F5F9;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#94A3B8;}
-.mem-item{display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;border-bottom:0.5px solid #F8FAFC;transition:background .1s;}
+.layout{display:grid;grid-template-columns:230px 1fr;gap:16px;min-height:400px;}
+.sidebar{background:#fff;border:1px solid #E2E8F0;border-radius:12px;overflow:hidden;align-self:start;}
+.sidebar-head{padding:12px 16px;border-bottom:1px solid #F1F5F9;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#94A3B8;}
+.mem-item{display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;border-bottom:0.5px solid #F8FAFC;}
 .mem-item:last-child{border-bottom:none;}
 .mem-item:hover{background:#F8FAFC;}
 .mem-item.active{background:#EFF6FF;}
@@ -49,12 +37,8 @@ body{font-family:'Inter',sans-serif;background:#F0F4F8;min-height:100vh;}
 .mem-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
 .mem-dot.logged{background:#10B981;}
 .mem-dot.absent{background:#E2E8F0;}
-
-/* content area */
 .content{display:flex;flex-direction:column;gap:12px;}
 .empty-select{background:#fff;border:1px solid #E2E8F0;border-radius:12px;padding:60px;text-align:center;color:#94A3B8;font-size:14px;}
-
-/* 3 col sections */
 .three-col{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;}
 .col-card{background:#fff;border:1px solid #E2E8F0;border-radius:12px;overflow:hidden;}
 .col-head{padding:10px 14px;border-bottom:1px solid #F1F5F9;display:flex;align-items:center;justify-content:space-between;}
@@ -62,12 +46,11 @@ body{font-family:'Inter',sans-serif;background:#F0F4F8;min-height:100vh;}
 .col-cnt{font-size:11px;font-weight:600;padding:1px 7px;border-radius:5px;background:#F1F5F9;color:#64748B;}
 .col-cnt.warn{background:#FEE2E2;color:#991B1B;}
 .col-body{padding:10px 12px;}
-
-/* task item */
 .ti{padding:9px 10px;background:#F8FAFC;border-radius:8px;margin-bottom:6px;}
 .ti:last-child{margin-bottom:0;}
 .ti-name{font-size:12px;font-weight:600;color:#1B2A4E;line-height:1.35;}
-.ti-parent{font-size:10px;color:#94A3B8;margin-top:2px;}
+.ti-phase{font-size:10px;color:#3B82F6;margin-top:2px;font-weight:500;}
+.ti-parent{font-size:10px;color:#94A3B8;margin-top:1px;}
 .ti-row{display:flex;align-items:center;justify-content:space-between;margin-top:5px;}
 .ti-meta{font-size:10px;color:#64748B;}
 .ti-val{font-size:12px;font-weight:700;color:#1B2A4E;}
@@ -78,14 +61,11 @@ body{font-family:'Inter',sans-serif;background:#F0F4F8;min-height:100vh;}
 .tag.stale{background:#FEF3C7;color:#92400E;}
 .tag.closed{background:#FEE2E2;color:#991B1B;}
 .empty-col{font-size:11px;color:#CBD5E1;text-align:center;padding:20px 0;}
-
-/* note */
 .note-card{background:#fff;border:1px solid #E2E8F0;border-radius:12px;padding:12px 16px;display:flex;align-items:center;gap:10px;}
 .note-card input{flex:1;font-size:13px;border:none;border-bottom:1px solid #E2E8F0;padding:4px 0;outline:none;background:transparent;color:#1E293B;font-family:'Inter',sans-serif;}
 .note-card input::placeholder{color:#CBD5E1;}
 .note-card button{padding:6px 16px;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;background:#1B2A4E;color:#fff;border:none;}
-
-.loading{text-align:center;padding:60px;color:#94A3B8;font-size:14px;}
+.loading{text-align:center;padding:40px;color:#94A3B8;font-size:13px;}
 </style>
 </head>
 <body>
@@ -95,276 +75,200 @@ body{font-family:'Inter',sans-serif;background:#F0F4F8;min-height:100vh;}
     <span class="nav-sep"></span>
     <span class="nav-title" id="navTitle">Daily Standup</span>
   </div>
-  <a href="javascript:history.back()" class="nav-btn">← Back</a>
+  <a href="javascript:history.back()" class="nav-btn">Back</a>
 </nav>
 
 <div class="wrap">
   <div class="hrow">
     <div>
       <h1>Daily Standup</h1>
-      <p id="pageSubtitle">Loading…</p>
+      <p id="pageSubtitle">Loading...</p>
     </div>
     <div class="date-nav">
-      <button onclick="changeDay(-1)">←</button>
+      <button onclick="changeDay(-1)">&#8592;</button>
       <span class="date-lbl" id="dateLbl"></span>
-      <button onclick="changeDay(1)">→</button>
+      <button onclick="changeDay(1)">&#8594;</button>
     </div>
   </div>
-
-  <!-- Phase tabs -->
-  <div class="phase-tabs" id="phaseTabs"></div>
-
-  <!-- Layout -->
   <div class="layout">
     <div class="sidebar">
       <div class="sidebar-head">Team Members</div>
-      <div id="membersList"><div class="loading" style="padding:20px;font-size:12px;">Loading…</div></div>
+      <div id="membersList"><div class="loading">Loading...</div></div>
     </div>
     <div class="content" id="contentArea">
-      <div class="empty-select">← Select a team member to view their tasks</div>
+      <div class="empty-select">Select a team member</div>
     </div>
   </div>
 </div>
 
 <script>
-const AV_COLORS=[
+var AV_COLORS = [
   {bg:'#E6F1FB',c:'#0C447C'},{bg:'#E1F5EE',c:'#085041'},
   {bg:'#FAEEDA',c:'#633806'},{bg:'#FBEAF0',c:'#72243E'},
   {bg:'#EEEDFE',c:'#3C3489'},{bg:'#FAECE7',c:'#712B13'},
-  {bg:'#F0FDF4',c:'#166534'},{bg:'#FFF7ED',c:'#92400E'},
+  {bg:'#F0FDF4',c:'#166534'},{bg:'#FFF7ED',c:'#92400E'}
 ];
+var urlParams   = new URLSearchParams(window.location.search);
+var projId      = urlParams.get('project_id') || '';
+var projName    = urlParams.get('project_name') || '';
+var currentDate = new Date();
+var allMembers  = [];
+var selName     = null;
+var colorMap    = {};
 
-function displayName(name){
-  // Strip [Exxx] or [Rxxx] prefix
-  return (name||'').replace(/^\[[A-Z]\d+\]\s*/,'').trim();
+function strip(name) {
+  return (name || '').replace(/^\[[A-Za-z]\d+\s*\]\s*/, '').trim();
 }
-function initials(name){
-  const n = displayName(name);
-  return n.split(' ').filter(Boolean).slice(0,2).map(w=>w[0]).join('').toUpperCase();
+function initials(name) {
+  return strip(name).split(' ').filter(function(p){return p.length>0;}).slice(0,2).map(function(p){return p[0];}).join('').toUpperCase();
 }
-function esc(s){ return (s||'').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-
-// Get project info from URL or referrer
-const urlParams = new URLSearchParams(window.location.search);
-let projId   = urlParams.get('project_id') || '';
-let projName = urlParams.get('project_name') || '';
-
-// Try to get from opener (parent window)
-try{
-  if(!projId && window.opener){
-    projId   = window.opener.AppState?._overviewData?.project_id || '';
-    projName = window.opener.AppState?._overviewData?.project_name || '';
-  }
-}catch(e){}
-
-let currentDate = new Date();
-let currentPhase = '';
-let allData = {};
-let selectedMember = null;
-let memberColorMap = {};
-
-function formatDate(d){
+function esc(s) {
+  return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function fmtDate(d) {
   return d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short',year:'numeric'});
 }
-function toISO(d){ return d.toISOString().slice(0,10); }
-
-function changeDay(delta){
+function toISO(d) {
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function changeDay(delta) {
   currentDate.setDate(currentDate.getDate()+delta);
   loadStandup();
 }
-
-function selectPhase(ph){
-  currentPhase = ph;
-  document.querySelectorAll('.ph-tab').forEach(t=>t.classList.toggle('active', t.dataset.phase===ph));
-  renderMembers();
-  clearContent();
+function phaseOf(task) {
+  var p = (task.parent||'').toLowerCase();
+  var n = (task.name||'').toLowerCase();
+  if (p.indexOf('consult')>=0||n.indexOf('consult')>=0) return 'Consultation';
+  if (p.indexOf('support')>=0||n.indexOf('support')>=0) return 'Support';
+  if (p.indexOf('develop')>=0||n.indexOf('develop')>=0) return 'Development';
+  if (p.indexOf('analys')>=0||n.indexOf('analys')>=0)  return 'Analysis';
+  if (p.indexOf('service')>=0||n.indexOf('service')>=0) return 'Services';
+  return '';
 }
-
-function selectMember(name){
-  selectedMember = name;
-  document.querySelectorAll('.mem-item').forEach(m=>m.classList.toggle('active', m.dataset.name===name));
-  renderContent(name);
+function selectMember(idx) {
+  selName = allMembers[idx].name;
+  document.querySelectorAll('.mem-item').forEach(function(el){
+    el.classList.toggle('active', el.getAttribute('data-idx')===String(idx));
+  });
+  renderContent();
 }
-
-function clearContent(){
-  selectedMember = null;
-  document.getElementById('contentArea').innerHTML='<div class="empty-select">← Select a team member to view their tasks</div>';
-}
-
-function renderPhases(phases){
-  const labels = {development:'Development',consultation:'Consultation',services:'Services',support:'Support'};
-  document.getElementById('phaseTabs').innerHTML = phases.map(ph=>
-    `<button class="ph-tab${ph===currentPhase?' active':''}" data-phase="${ph}" onclick="selectPhase('${ph}')">${labels[ph]||ph}</button>`
-  ).join('');
-}
-
-function renderMembers(){
-  const members = allData.phases?.[currentPhase] || [];
-  if(!members.length){
-    document.getElementById('membersList').innerHTML='<div class="loading" style="padding:20px;font-size:12px;color:#CBD5E1;">No members in this phase</div>';
+function renderMembers() {
+  if (!allMembers.length) {
+    document.getElementById('membersList').innerHTML='<div class="loading" style="color:#CBD5E1;font-size:12px;">No data for this date</div>';
     return;
   }
-  // assign colors
-  members.forEach((m,i)=>{ if(!memberColorMap[m.name]) memberColorMap[m.name]=AV_COLORS[Object.keys(memberColorMap).length%AV_COLORS.length]; });
-
-  document.getElementById('membersList').innerHTML = members.map(m=>{
-    const c = memberColorMap[m.name]||AV_COLORS[0];
-    const dName = displayName(m.name);
-    const ini = initials(m.name);
-    const isActive = m.name === selectedMember;
-    const ystCount = (m.yesterday||[]).length;
-    const inpCount = (m.inprogress||[]).length;
-    return `<div class="mem-item${isActive?' active':''}" data-name="${esc(m.name)}" onclick="selectMember(${JSON.stringify(m.name)})">
-      <div class="av" style="background:${c.bg};color:${c.c};">${ini}</div>
-      <div class="mem-info">
-        <div class="mem-name">${esc(dName)}</div>
-        <div class="mem-sub">${ystCount} yesterday · ${inpCount} open</div>
-      </div>
-      <div class="mem-dot ${m.logged_yesterday?'logged':'absent'}"></div>
-    </div>`;
-  }).join('');
+  var html = '';
+  allMembers.forEach(function(m, i) {
+    if (!colorMap[m.name]) colorMap[m.name]=AV_COLORS[Object.keys(colorMap).length%AV_COLORS.length];
+    var c    = colorMap[m.name];
+    var act  = m.name===selName?' active':'';
+    var dot  = m.logged_yesterday?'logged':'absent';
+    var yCnt = (m.yesterday||[]).length;
+    var iCnt = (m.inprogress||[]).length;
+    html += '<div class="mem-item'+act+'" data-idx="'+i+'" onclick="selectMember('+i+')">'
+      +'<div class="av" style="background:'+c.bg+';color:'+c.c+';">'+initials(m.name)+'</div>'
+      +'<div class="mem-info"><div class="mem-name">'+esc(strip(m.name))+'</div>'
+      +'<div class="mem-sub">'+yCnt+' yesterday &middot; '+iCnt+' open</div></div>'
+      +'<div class="mem-dot '+dot+'"></div></div>';
+  });
+  document.getElementById('membersList').innerHTML=html;
 }
-
-function renderContent(memberName){
-  const members = allData.phases?.[currentPhase] || [];
-  const m = members.find(x=>x.name===memberName);
-  if(!m){ document.getElementById('contentArea').innerHTML='<div class="empty-select">Member not found</div>'; return; }
-
-  function colYst(tasks){
-    if(!tasks||!tasks.length) return '<div class="empty-col">No hours logged</div>';
-    return tasks.map(t=>`
-      <div class="ti">
-        <div class="ti-name">${esc(t.name)}</div>
-        <div class="ti-parent">${esc(t.parent||'')}</div>
-        <div class="ti-row">
-          <span>${t.firstEntry?'<span class="tag first">First entry</span>':''}</span>
-          <span class="ti-val">${t.hrs}h</span>
-        </div>
-      </div>`).join('');
+function taskCard(t, mode) {
+  var ph  = phaseOf(t);
+  var pct = t.planned_hrs>0?Math.min(100,Math.round(t.actual_hrs/t.planned_hrs*100)):0;
+  var fc  = t.stale>=2?'#F59E0B':'#3B82F6';
+  var html = '<div class="ti">'
+    +'<div class="ti-name">'+esc(t.name)+'</div>'
+    +(ph?'<div class="ti-phase">'+ph+'</div>':'')
+    +(t.parent?'<div class="ti-parent">'+esc(t.parent)+'</div>':'');
+  if (mode==='y') {
+    html+='<div class="ti-row"><span>'+(t.firstEntry?'<span class="tag first">First entry</span>':'')+'</span><span class="ti-val">'+t.hrs+'h</span></div>';
+  } else if (mode==='i') {
+    html+='<div class="prog-bg"><div class="prog-fill" style="width:'+pct+'%;background:'+fc+';"></div></div>'
+      +'<div class="ti-row" style="margin-top:4px;">'
+      +'<span class="ti-meta">'+(t.first_entry?'Since '+t.first_entry:'')+(t.stale>=2?' <span class="tag stale">'+t.stale+'d stale</span>':'')+'</span>'
+      +'<span class="ti-val">'+t.remaining_hrs.toFixed(1)+'h left</span></div>';
+  } else {
+    html+='<div class="ti-row" style="margin-top:5px;"><span class="tag closed">Closed w/ remaining</span><span class="ti-val" style="color:#DC2626;">'+t.remaining_hrs.toFixed(1)+'h</span></div>';
   }
-
-  function colInp(tasks){
-    if(!tasks||!tasks.length) return '<div class="empty-col">No open tasks</div>';
-    return tasks.map(t=>{
-      const pct = t.planned_hrs>0?Math.min(100,Math.round(t.actual_hrs/t.planned_hrs*100)):0;
-      const fc  = t.stale>=2?'#F59E0B':'#3B82F6';
-      return `<div class="ti">
-        <div class="ti-name">${esc(t.name)}</div>
-        <div class="ti-parent">${esc(t.parent||'')}</div>
-        <div class="prog-bg"><div class="prog-fill" style="width:${pct}%;background:${fc};"></div></div>
-        <div class="ti-row" style="margin-top:4px;">
-          <span class="ti-meta">
-            ${t.first_entry?'Since '+t.first_entry:''}
-            ${t.stale>=2?' · <span class="tag stale">'+t.stale+'d stale</span>':''}
-          </span>
-          <span class="ti-val">${t.remaining_hrs.toFixed(1)}h left</span>
-        </div>
-      </div>`;
-    }).join('');
-  }
-
-  function colClosed(tasks){
-    if(!tasks||!tasks.length) return '<div class="empty-col">All clear ✓</div>';
-    return tasks.map(t=>`
-      <div class="ti">
-        <div class="ti-name">${esc(t.name)}</div>
-        <div class="ti-parent">${esc(t.parent||'')}</div>
-        <div class="ti-row" style="margin-top:5px;">
-          <span class="tag closed">Closed w/ remaining</span>
-          <span class="ti-val" style="color:#DC2626;">${t.remaining_hrs.toFixed(1)}h</span>
-        </div>
-      </div>`).join('');
-  }
-
-  const hasIssues = (m.closed_with_remaining||[]).length > 0;
-
-  document.getElementById('contentArea').innerHTML = `
-    <div class="three-col">
-      <div class="col-card">
-        <div class="col-head">
-          <span class="col-title">Logged Yesterday</span>
-          <span class="col-cnt">${(m.yesterday||[]).length}</span>
-        </div>
-        <div class="col-body">${colYst(m.yesterday)}</div>
-      </div>
-      <div class="col-card">
-        <div class="col-head">
-          <span class="col-title">In Progress</span>
-          <span class="col-cnt">${(m.inprogress||[]).length}</span>
-        </div>
-        <div class="col-body">${colInp(m.inprogress)}</div>
-      </div>
-      <div class="col-card">
-        <div class="col-head">
-          <span class="col-title">Closed — Has Remaining</span>
-          <span class="col-cnt ${hasIssues?'warn':''}">${(m.closed_with_remaining||[]).length}</span>
-        </div>
-        <div class="col-body">${colClosed(m.closed_with_remaining)}</div>
-      </div>
-    </div>
-    <div class="note-card">
-      <input id="noteInp" placeholder="PM standup note for ${esc(m.name)}…">
-      <button onclick="saveNote()">Save Note</button>
-    </div>`;
+  return html+'</div>';
 }
-
-async function saveNote(){
-  const inp = document.getElementById('noteInp');
-  const btn = inp.nextElementSibling;
-  if(!inp||!inp.value.trim()) return;
-  btn.textContent='Saving…'; btn.disabled=true;
-  try{
-    await fetch('/api/standup/note',{
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({member:selectedMember, date:toISO(currentDate), note:inp.value.trim()})
+function col(title, tasks, mode) {
+  var warn = (title.indexOf('Closed')>=0&&tasks.length>0)?' warn':'';
+  var body = tasks.length
+    ? tasks.map(function(t){return taskCard(t,mode);}).join('')
+    : '<div class="empty-col">'+(mode==='c'?'All clear &#x2713;':mode==='y'?'No hours logged':'No open tasks')+'</div>';
+  return '<div class="col-card"><div class="col-head"><span class="col-title">'+title+'</span>'
+    +'<span class="col-cnt'+warn+'">'+tasks.length+'</span></div>'
+    +'<div class="col-body">'+body+'</div></div>';
+}
+function renderContent() {
+  if (!selName) { document.getElementById('contentArea').innerHTML='<div class="empty-select">Select a team member</div>'; return; }
+  var m=null;
+  for (var i=0;i<allMembers.length;i++){if(allMembers[i].name===selName){m=allMembers[i];break;}}
+  if (!m) return;
+  var html='<div class="three-col">'
+    +col('Logged Yesterday', m.yesterday||[], 'y')
+    +col('In Progress', m.inprogress||[], 'i')
+    +col('Closed — Has Remaining', m.closed_with_remaining||[], 'c')
+    +'</div>'
+    +'<div class="note-card">'
+    +'<input id="noteInp" placeholder="PM note for '+esc(strip(m.name))+'...">'
+    +'<button onclick="saveNote()">Save Note</button></div>';
+  document.getElementById('contentArea').innerHTML=html;
+}
+function saveNote() {
+  var inp=document.getElementById('noteInp');
+  var btn=inp?inp.nextElementSibling:null;
+  if (!inp||!inp.value.trim()||!btn) return;
+  btn.textContent='Saving...'; btn.disabled=true;
+  fetch('/api/standup/note',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({member:selName,date:toISO(currentDate),note:inp.value.trim()})
+  }).then(function(){
+    btn.textContent='Saved'; setTimeout(function(){btn.textContent='Save Note';btn.disabled=false;},2000);
+  }).catch(function(){btn.textContent='Save Note';btn.disabled=false;});
+}
+async function loadStandup() {
+  document.getElementById('dateLbl').textContent=fmtDate(currentDate);
+  var ds=toISO(currentDate);
+  var prev=new Date(currentDate); prev.setDate(prev.getDate()-1);
+  var ps=toISO(prev);
+  var url='/api/standup?date='+ds+'&prev='+ps;
+  if (projId)   url+='&project_id='+encodeURIComponent(projId);
+  if (projName) url+='&project_name='+encodeURIComponent(projName);
+  document.getElementById('membersList').innerHTML='<div class="loading">Loading...</div>';
+  try {
+    var resp=await fetch(url);
+    var data=await resp.json();
+    if (!data.ok) throw new Error(data.error||'Failed');
+    var merged={};
+    Object.keys(data.phases||{}).forEach(function(ph){
+      (data.phases[ph]||[]).forEach(function(m){
+        if (!merged[m.name]) {
+          merged[m.name]=JSON.parse(JSON.stringify(m));
+        } else {
+          var ex=merged[m.name];
+          (m.yesterday||[]).forEach(function(t){if(!ex.yesterday.find(function(x){return x.id===t.id;}))ex.yesterday.push(t);});
+          (m.inprogress||[]).forEach(function(t){if(!ex.inprogress.find(function(x){return x.id===t.id;}))ex.inprogress.push(t);});
+          (m.closed_with_remaining||[]).forEach(function(t){if(!ex.closed_with_remaining.find(function(x){return x.id===t.id;}))ex.closed_with_remaining.push(t);});
+          if (m.logged_yesterday) ex.logged_yesterday=true;
+        }
+      });
     });
-    btn.textContent='Saved ✓';
-    setTimeout(()=>{btn.textContent='Save Note';btn.disabled=false;},2000);
-  }catch(e){btn.textContent='Save Note';btn.disabled=false;}
-}
-
-async function loadStandup(){
-  document.getElementById('dateLbl').textContent = formatDate(currentDate);
-  const dateStr = toISO(currentDate);
-  const prevDate = new Date(currentDate); prevDate.setDate(prevDate.getDate()-1);
-  const prevStr  = toISO(prevDate);
-
-  let url = `/api/standup?date=${dateStr}&prev=${prevStr}`;
-  if(projId)   url += `&project_id=${projId}`;
-  if(projName) url += `&project_name=${encodeURIComponent(projName)}`;
-
-  document.getElementById('membersList').innerHTML='<div class="loading" style="padding:20px;font-size:12px;">Loading…</div>';
-
-  try{
-    const resp = await fetch(url);
-    const data = await resp.json();
-    if(!data.ok){ throw new Error(data.error||'Failed'); }
-
-    allData = data;
-    const phases = Object.keys(data.phases||{});
-    // Pick first phase that has members, or just first phase
-    const firstWithMembers = phases.find(ph => (data.phases[ph]||[]).length > 0) || phases[0] || '';
-    if(!currentPhase || !phases.includes(currentPhase) || !(data.phases[currentPhase]||[]).length) {
-      currentPhase = firstWithMembers;
-    }
-
-    document.getElementById('navTitle').textContent = data.project_name || 'Daily Standup';
-    document.getElementById('pageSubtitle').textContent = formatDate(currentDate);
-
-    renderPhases(phases);
+    allMembers=Object.values(merged).sort(function(a,b){
+      if (a.logged_yesterday&&!b.logged_yesterday) return -1;
+      if (!a.logged_yesterday&&b.logged_yesterday) return 1;
+      return strip(a.name).localeCompare(strip(b.name));
+    });
+    document.getElementById('navTitle').textContent=data.project_name||'Daily Standup';
+    document.getElementById('pageSubtitle').textContent=allMembers.length+' team members';
     renderMembers();
-
-    if(selectedMember){
-      const members = allData.phases?.[currentPhase]||[];
-      if(members.find(m=>m.name===selectedMember)) renderContent(selectedMember);
-      else clearContent();
-    }
-
-  }catch(e){
-    document.getElementById('membersList').innerHTML=`<div class="loading" style="padding:20px;font-size:12px;color:#DC2626;">${e.message}</div>`;
+    if (selName&&allMembers.find(function(m){return m.name===selName;})) renderContent();
+    else { selName=null; document.getElementById('contentArea').innerHTML='<div class="empty-select">Select a team member</div>'; }
+  } catch(e) {
+    document.getElementById('membersList').innerHTML='<div class="loading" style="color:#DC2626;font-size:12px;">'+e.message+'</div>';
   }
 }
-
 loadStandup();
 </script>
 </body>
