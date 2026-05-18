@@ -6391,10 +6391,10 @@ def api_effort_all_months(phase_key):
         odoo_pos = odoo_info.get('position')
         sar_rate = odoo_info.get('sar_rate', 0)
         # Use position override if Odoo has no position
+        import re as _re_pos_ovr
         _pos_ovr = load_plan_overrides().get('position_overrides', {})
-        _pos_ovr_val = _pos_ovr.get(emp_name) or _pos_ovr.get(
-            __import__('re').sub(r'^\[[A-Z]\d+\s*\]\s*', '', emp_name).strip()
-        )
+        _clean_emp = _re_pos_ovr.sub(r'^\[[A-Z]\d+\s*\]\s*', '', emp_name).strip()
+        _pos_ovr_val = _pos_ovr.get(emp_name) or _pos_ovr.get(_clean_emp)
         if _pos_ovr_val and not odoo_pos:
             odoo_pos = _pos_ovr_val
 
@@ -6745,7 +6745,7 @@ def api_positions_list():
     return jsonify({'positions': names})
 
 @app.route('/api/position-overrides/save', methods=['POST'])
-def api_position_overrides_save_v2():
+def api_position_overrides_save_alias():
     body = request.json or {}
     name = body.get('name'); position = body.get('position')
     if not name: return jsonify({'error': 'name required'}), 400
@@ -6860,6 +6860,16 @@ def api_project_employees():
                 info['position'] = None
                 info['source'] = None
 
+    # Add rate info for display
+    for name, info in seen.items():
+        try:
+            pos_ovr = load_plan_overrides().get('position_overrides', {})
+            disp_name = info.get('name', name)
+            pos = info.get('position') or pos_ovr.get(name) or pos_ovr.get(disp_name)
+            rate_info = get_employee_rate(name, pos, False)
+            info['hour_rate'] = rate_info.get('hour_rate') if rate_info else None
+        except Exception:
+            info['hour_rate'] = None
     employees = sorted(seen.values(), key=lambda x: x['name'].lower())
     return jsonify({'employees': employees, 'connected': True, 'count': len(employees)})
 
