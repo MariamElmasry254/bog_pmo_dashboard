@@ -40,20 +40,26 @@ body{font-family:'Inter',sans-serif;background:#F0F4F8;min-height:100vh;}
 .content{display:flex;flex-direction:column;gap:12px;}
 .empty-select{background:#fff;border:1px solid #E2E8F0;border-radius:12px;padding:60px;text-align:center;color:#94A3B8;font-size:14px;}
 .three-col{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;}
+.four-col{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;}
 .col-card{background:#fff;border:1px solid #E2E8F0;border-radius:12px;overflow:hidden;}
 .col-head{padding:10px 14px;border-bottom:1px solid #F1F5F9;display:flex;align-items:center;justify-content:space-between;}
 .col-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#94A3B8;}
 .col-cnt{font-size:11px;font-weight:600;padding:1px 7px;border-radius:5px;background:#F1F5F9;color:#64748B;}
 .col-cnt.warn{background:#FEE2E2;color:#991B1B;}
 .col-body{padding:10px 12px;}
-.ti{padding:9px 10px;background:#F8FAFC;border-radius:8px;margin-bottom:6px;}
+.ti{padding:12px 12px;background:#F8FAFC;border-radius:10px;margin-bottom:8px;}
 .ti:last-child{margin-bottom:0;}
-.ti-name{font-size:12px;font-weight:600;color:#1B2A4E;line-height:1.35;}
-.ti-phase{font-size:10px;color:#3B82F6;margin-top:2px;font-weight:500;}
-.ti-parent{font-size:10px;color:#94A3B8;margin-top:1px;}
-.ti-row{display:flex;align-items:center;justify-content:space-between;margin-top:5px;}
-.ti-meta{font-size:10px;color:#64748B;}
-.ti-val{font-size:12px;font-weight:700;color:#1B2A4E;}
+.ti-name{font-size:13px;font-weight:600;color:#1B2A4E;line-height:1.4;}
+.ti-phase{font-size:10px;color:#3B82F6;margin-top:3px;font-weight:600;}
+.ti-parent{font-size:10px;color:#94A3B8;margin-top:2px;}
+.ti-stats{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;align-items:center;}
+.ti-stat{display:flex;flex-direction:column;}
+.ti-stat-lbl{font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#94A3B8;}
+.ti-stat-val{font-size:13px;font-weight:700;color:#1B2A4E;margin-top:1px;}
+.ti-msg-row{display:flex;align-items:center;gap:6px;margin-top:10px;padding-top:8px;border-top:1px solid #E2E8F0;}
+.ti-msg-inp{flex:1;font-size:11px;border:none;background:transparent;padding:2px 0;outline:none;color:#1E293B;font-family:'Inter',sans-serif;border-bottom:1px solid #E2E8F0;}
+.ti-msg-inp::placeholder{color:#CBD5E1;}
+.ti-msg-btn{width:24px;height:24px;border-radius:6px;border:none;background:#1B2A4E;color:#fff;cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
 .prog-bg{background:#E2E8F0;border-radius:2px;height:3px;margin-top:5px;}
 .prog-fill{height:3px;border-radius:2px;}
 .tag{font-size:10px;padding:1px 6px;border-radius:5px;display:inline-block;margin-top:3px;}
@@ -173,49 +179,98 @@ function renderMembers() {
   });
   document.getElementById('membersList').innerHTML=html;
 }
-function taskCard(t, mode) {
+function taskCard(t, mode, idx) {
   var ph  = phaseOf(t);
   var pct = t.planned_hrs>0?Math.min(100,Math.round(t.actual_hrs/t.planned_hrs*100)):0;
   var fc  = t.stale>=2?'#F59E0B':'#3B82F6';
+  var nid = 'tnote_'+mode+'_'+idx;
+
   var html = '<div class="ti">'
     +'<div class="ti-name">'+esc(t.name)+'</div>'
     +(ph?'<div class="ti-phase">'+ph+'</div>':'')
     +(t.parent?'<div class="ti-parent">'+esc(t.parent)+'</div>':'');
+
   if (mode==='y') {
-    html+='<div class="ti-row"><span>'+(t.firstEntry?'<span class="tag first">First entry</span>':'')+'</span><span class="ti-val">'+t.hrs+'h</span></div>';
+    // Stats row
+    html+='<div class="ti-stats">'
+      +'<div class="ti-stat"><span class="ti-stat-lbl">Logged</span><span class="ti-stat-val">'+t.hrs+'h</span></div>'
+      +(t.planned_hrs>0?'<div class="ti-stat"><span class="ti-stat-lbl">Planned</span><span class="ti-stat-val">'+t.planned_hrs+'h</span></div>':'')
+      +(t.actual_hrs>0?'<div class="ti-stat"><span class="ti-stat-lbl">Actual</span><span class="ti-stat-val">'+t.actual_hrs+'h</span></div>':'')
+      +(t.firstEntry?'<div class="ti-stat"><span class="tag first">First entry</span></div>':'')
+      +'</div>';
   } else if (mode==='i') {
     html+='<div class="prog-bg"><div class="prog-fill" style="width:'+pct+'%;background:'+fc+';"></div></div>'
-      +'<div class="ti-row" style="margin-top:4px;">'
-      +'<span class="ti-meta">'+(t.first_entry?'Since '+t.first_entry:'')+(t.stale>=2?' <span class="tag stale">'+t.stale+'d stale</span>':'')+'</span>'
-      +'<span class="ti-val">'+t.remaining_hrs.toFixed(1)+'h left</span></div>';
+      +'<div class="ti-stats" style="margin-top:6px;">'
+      +(t.planned_hrs>0?'<div class="ti-stat"><span class="ti-stat-lbl">Planned</span><span class="ti-stat-val">'+t.planned_hrs+'h</span></div>':'')
+      +(t.actual_hrs>0?'<div class="ti-stat"><span class="ti-stat-lbl">Actual</span><span class="ti-stat-val">'+t.actual_hrs+'h</span></div>':'')
+      +'<div class="ti-stat"><span class="ti-stat-lbl">Remaining</span><span class="ti-stat-val" style="color:'+(t.remaining_hrs>0?'#1B2A4E':'#94A3B8')+';">'+t.remaining_hrs.toFixed(1)+'h</span></div>'
+      +(t.first_entry?'<div class="ti-stat"><span class="ti-stat-lbl">Since</span><span class="ti-stat-val" style="color:#64748B;">'+t.first_entry+'</span></div>':'')
+      +(t.stale>=2?'<div class="ti-stat"><span class="tag stale">'+t.stale+'d stale</span></div>':'')
+      +'</div>';
   } else {
-    html+='<div class="ti-row" style="margin-top:5px;"><span class="tag closed">Closed w/ remaining</span><span class="ti-val" style="color:#DC2626;">'+t.remaining_hrs.toFixed(1)+'h</span></div>';
+    html+='<div class="ti-stats" style="margin-top:6px;">'
+      +(t.planned_hrs>0?'<div class="ti-stat"><span class="ti-stat-lbl">Planned</span><span class="ti-stat-val">'+t.planned_hrs+'h</span></div>':'')
+      +(t.actual_hrs>0?'<div class="ti-stat"><span class="ti-stat-lbl">Actual</span><span class="ti-stat-val">'+t.actual_hrs+'h</span></div>':'')
+      +'<div class="ti-stat"><span class="tag closed">'+t.remaining_hrs.toFixed(1)+'h remaining</span></div>'
+      +'</div>';
   }
+
+  // Per-task message box — use task id to avoid name issues
+  var tid_safe = 'tid_'+t.id+'_'+mode;
+  html+='<div class="ti-msg-row">'
+    +'<input class="ti-msg-inp" id="'+tid_safe+'" placeholder="Add note...">'
+    +'<button class="ti-msg-btn" onclick="saveTaskNote(\''+tid_safe+'\','+t.id+')">&#x2713;</button>'
+    +'</div>';
+
   return html+'</div>';
 }
+
 function col(title, tasks, mode) {
   var warn = (title.indexOf('Closed')>=0&&tasks.length>0)?' warn':'';
+  var missingWarn = (mode==='m'&&tasks.length>0)?' warn':'';
+  var headStyle = mode==='m'&&tasks.length>0 ? ' style="background:#FEF3C7;"' : '';
   var body = tasks.length
-    ? tasks.map(function(t){return taskCard(t,mode);}).join('')
-    : '<div class="empty-col">'+(mode==='c'?'All clear &#x2713;':mode==='y'?'No hours logged':'No open tasks')+'</div>';
-  return '<div class="col-card"><div class="col-head"><span class="col-title">'+title+'</span>'
-    +'<span class="col-cnt'+warn+'">'+tasks.length+'</span></div>'
+    ? tasks.map(function(t,i){return taskCard(t,mode,i);}).join('')
+    : '<div class="empty-col">'+(mode==='c'?'All clear &#x2713;':mode==='y'?'No hours logged':mode==='m'?'All accounted for':'No open tasks')+'</div>';
+  return '<div class="col-card"><div class="col-head"'+headStyle+'><span class="col-title">'+title+'</span>'
+    +'<span class="col-cnt'+(warn||missingWarn)+'">'+tasks.length+'</span></div>'
     +'<div class="col-body">'+body+'</div></div>';
 }
+
 function renderContent() {
   if (!selName) { document.getElementById('contentArea').innerHTML='<div class="empty-select">Select a team member</div>'; return; }
   var m=null;
   for (var i=0;i<allMembers.length;i++){if(allMembers[i].name===selName){m=allMembers[i];break;}}
   if (!m) return;
-  var html='<div class="three-col">'
+
+  // Missing hours = inprogress tasks where hrs_yesterday === 0
+  // Compare inprogress task ids vs yesterday task ids
+  var ystIds = (m.yesterday||[]).map(function(t){return t.id;});
+  var missing = (m.inprogress||[]).filter(function(t){
+    return ystIds.indexOf(t.id) < 0;
+  });
+
+  var html='<div class="four-col">'
     +col('Logged Yesterday', m.yesterday||[], 'y')
     +col('In Progress', m.inprogress||[], 'i')
+    +col('Missing Yesterday', missing, 'm')
     +col('Closed — Has Remaining', m.closed_with_remaining||[], 'c')
-    +'</div>'
-    +'<div class="note-card">'
-    +'<input id="noteInp" placeholder="PM note for '+esc(strip(m.name))+'...">'
-    +'<button onclick="saveNote()">Save Note</button></div>';
+    +'</div>';
   document.getElementById('contentArea').innerHTML=html;
+}
+
+function saveTaskNote(inputId, taskId) {
+  var inp = document.getElementById(inputId);
+  var btn = inp ? inp.nextElementSibling : null;
+  if (!inp||!inp.value.trim()||!btn) return;
+  var val = inp.value.trim();
+  btn.textContent='...'; btn.disabled=true;
+  fetch('/api/standup/note',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({member:selName, date:toISO(currentDate), task_id:taskId, note:val})
+  }).then(function(){
+    btn.innerHTML='&#x2713;'; btn.style.background='#10B981';
+    setTimeout(function(){btn.innerHTML='&#x2713;';btn.disabled=false;btn.style.background='';},3000);
+  }).catch(function(){btn.innerHTML='&#x2713;';btn.disabled=false;});
 }
 function saveNote() {
   var inp=document.getElementById('noteInp');
