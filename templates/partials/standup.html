@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Standup — Envnt PMO</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Inter',sans-serif;background:#F0F4F8;min-height:100vh;}
+.nav{background:#1B2A4E;padding:0 28px;display:flex;align-items:center;justify-content:space-between;height:54px;position:sticky;top:0;z-index:100;}
+.nav-logo{font-size:15px;font-weight:800;color:#fff;}
+.nav-sep{width:1px;height:18px;background:rgba(255,255,255,.15);margin:0 14px;}
+.nav-title{font-size:12px;color:rgba(255,255,255,.45);}
+.nav-btn{padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid rgba(255,255,255,.2);color:rgba(255,255,255,.8);background:transparent;text-decoration:none;display:inline-block;}
+.nav-btn:hover{background:rgba(255,255,255,.1);}
+.wrap{max-width:1100px;margin:0 auto;padding:24px 20px;}
+.hrow{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px;}
+.hrow h1{font-size:20px;font-weight:700;color:#1B2A4E;}
+.hrow p{font-size:12px;color:#64748B;margin-top:3px;}
+.date-nav{display:flex;align-items:center;gap:10px;}
+.date-nav button{width:32px;height:32px;border-radius:8px;border:1px solid #E2E8F0;background:#fff;cursor:pointer;font-size:16px;}
+.date-nav button:hover{background:#F1F5F9;}
+.date-lbl{font-size:13px;font-weight:600;color:#1B2A4E;min-width:160px;text-align:center;}
+
+/* member card */
+.mc{background:#fff;border:1px solid #E2E8F0;border-radius:12px;margin-bottom:10px;overflow:hidden;box-shadow:0 1px 3px rgba(27,42,78,.05);}
+.mc-head{display:flex;align-items:center;gap:12px;padding:13px 18px;cursor:pointer;user-select:none;}
+.mc-head:hover{background:#FAFBFD;}
+.av{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;flex-shrink:0;}
+.mi{flex:1;}
+.mn{font-size:13px;font-weight:700;color:#1B2A4E;}
+.mr{font-size:10px;color:#64748B;margin-top:2px;}
+.badges{display:flex;gap:6px;align-items:center;}
+.bdg{font-size:11px;padding:3px 10px;border-radius:20px;font-weight:500;}
+.bdg.logged{background:#D1FAE5;color:#065F46;}
+.bdg.absent{background:#F1F5F9;color:#64748B;}
+.bdg.issue{background:#FEE2E2;color:#991B1B;}
+.chev{font-size:18px;color:#CBD5E1;transition:transform .2s;margin-left:4px;}
+.chev.open{transform:rotate(180deg);}
+
+/* 3 col */
+.mc-body{border-top:1px solid #F1F5F9;display:none;}
+.mc-body.open{display:block;}
+.three-col{display:grid;grid-template-columns:1fr 1fr 1fr;}
+.col{padding:14px 16px;border-right:1px solid #F1F5F9;}
+.col:last-child{border-right:none;}
+.col-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+.col-lbl{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#94A3B8;}
+.col-cnt{font-size:10px;padding:1px 7px;border-radius:6px;font-weight:600;background:#F1F5F9;color:#64748B;}
+.col-cnt.warn{background:#FEE2E2;color:#991B1B;}
+
+/* task item */
+.ti{padding:8px 10px;background:#F8FAFC;border-radius:8px;margin-bottom:5px;}
+.ti:last-child{margin-bottom:0;}
+.ti-name{font-size:11.5px;font-weight:600;color:#1B2A4E;line-height:1.35;}
+.ti-parent{font-size:10px;color:#94A3B8;margin-top:2px;}
+.ti-foot{display:flex;align-items:center;justify-content:space-between;margin-top:5px;}
+.ti-meta{font-size:10px;color:#64748B;}
+.ti-val{font-size:12px;font-weight:700;color:#1B2A4E;}
+
+/* progress */
+.prog-bg{background:#E2E8F0;border-radius:2px;height:3px;margin-top:5px;}
+.prog-fill{height:3px;border-radius:2px;}
+
+/* tags */
+.tag{font-size:10px;padding:1px 6px;border-radius:5px;display:inline-block;}
+.tag.first{background:#D1FAE5;color:#065F46;}
+.tag.stale{background:#FEF3C7;color:#92400E;}
+.tag.closed-rem{background:#FEE2E2;color:#991B1B;}
+
+.empty{font-size:11px;color:#CBD5E1;text-align:center;padding:16px 0;}
+
+/* note */
+.note-row{padding:10px 18px;border-top:1px solid #F1F5F9;display:flex;align-items:center;gap:8px;}
+.note-row input{flex:1;font-size:12px;border:none;border-bottom:1px solid #E2E8F0;padding:4px 0;outline:none;background:transparent;color:#1E293B;font-family:'Inter',sans-serif;}
+.note-row input::placeholder{color:#CBD5E1;}
+.note-row button{padding:5px 14px;border-radius:7px;font-size:11px;font-weight:600;cursor:pointer;background:#1B2A4E;color:#fff;border:none;}
+.note-row button:hover{background:#243660;}
+
+/* loading */
+.loading{text-align:center;padding:60px;color:#94A3B8;font-size:14px;}
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <div style="display:flex;align-items:center;">
+    <span class="nav-logo">envnt.</span>
+    <span class="nav-sep"></span>
+    <span class="nav-title">Daily Standup</span>
+  </div>
+  <div style="display:flex;gap:10px;">
+    <a href="javascript:history.back()" class="nav-btn">← Back</a>
+  </div>
+</nav>
+
+<div class="wrap">
+  <div class="hrow">
+    <div>
+      <h1 id="pageTitle">Daily Standup</h1>
+      <p id="pageSubtitle">Loading…</p>
+    </div>
+    <div class="date-nav">
+      <button onclick="changeDay(-1)">←</button>
+      <span class="date-lbl" id="dateLbl"></span>
+      <button onclick="changeDay(1)">→</button>
+    </div>
+  </div>
+  <div id="grid"><div class="loading">Loading team data…</div></div>
+</div>
+
+<script>
+const AV_COLORS=[
+  {bg:'#E6F1FB',c:'#0C447C'},{bg:'#E1F5EE',c:'#085041'},
+  {bg:'#FAEEDA',c:'#633806'},{bg:'#FBEAF0',c:'#72243E'},
+  {bg:'#EEEDFE',c:'#3C3489'},{bg:'#FAECE7',c:'#712B13'},
+];
+
+function initials(name){
+  return (name||'').split(' ').filter(Boolean).slice(0,2).map(w=>w[0]).join('').toUpperCase();
+}
+
+let currentDate = new Date();
+
+function formatDate(d){
+  return d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short',year:'numeric'});
+}
+
+function toISO(d){
+  return d.toISOString().slice(0,10);
+}
+
+function changeDay(delta){
+  currentDate.setDate(currentDate.getDate()+delta);
+  document.getElementById('dateLbl').textContent = formatDate(currentDate);
+  loadStandup();
+}
+
+function toggle(i){
+  document.getElementById('mb'+i).classList.toggle('open');
+  document.getElementById('ch'+i).classList.toggle('open');
+}
+
+async function saveNote(i, btn){
+  const inp = document.getElementById('note'+i);
+  const val = inp.value.trim();
+  if(!val) return;
+  btn.textContent='Saving…'; btn.disabled=true;
+  try{
+    await fetch('/api/standup/note',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({member: window._members[i].name, date: toISO(currentDate), note: val})
+    });
+    btn.textContent='Saved ✓';
+    setTimeout(()=>{btn.textContent='Save';btn.disabled=false;},2000);
+  }catch(e){btn.textContent='Save';btn.disabled=false;}
+}
+
+function colYst(tasks){
+  if(!tasks||!tasks.length) return '<div class="empty">No hours logged</div>';
+  return tasks.map(t=>`
+    <div class="ti">
+      <div class="ti-name">${esc(t.name)}</div>
+      <div class="ti-parent">${esc(t.parent||'')}</div>
+      <div class="ti-foot">
+        <span class="ti-meta">${t.firstEntry?'<span class="tag first">First entry</span>':''}</span>
+        <span class="ti-val">${t.hrs}h</span>
+      </div>
+    </div>`).join('');
+}
+
+function colInp(tasks){
+  if(!tasks||!tasks.length) return '<div class="empty">No open tasks</div>';
+  return tasks.map(t=>{
+    const pct = t.planned_hrs>0 ? Math.min(100,Math.round(t.actual_hrs/t.planned_hrs*100)):0;
+    const fc  = t.stale>=2 ? '#F59E0B':'#3B82F6';
+    return `<div class="ti">
+      <div class="ti-name">${esc(t.name)}</div>
+      <div class="ti-parent">${esc(t.parent||'')}</div>
+      <div class="prog-bg"><div class="prog-fill" style="width:${pct}%;background:${fc};"></div></div>
+      <div class="ti-foot" style="margin-top:4px;">
+        <span class="ti-meta">
+          ${t.first_entry?'Since '+t.first_entry:''}
+          ${t.stale>=2?' · <span class="tag stale">'+t.stale+'d stale</span>':''}
+        </span>
+        <span class="ti-val">${t.remaining_hrs.toFixed(1)}h left</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function colClosed(tasks){
+  if(!tasks||!tasks.length) return '<div class="empty">All clear ✓</div>';
+  return tasks.map(t=>`
+    <div class="ti">
+      <div class="ti-name">${esc(t.name)}</div>
+      <div class="ti-parent">${esc(t.parent||'')}</div>
+      <div class="ti-foot" style="margin-top:5px;">
+        <span class="tag closed-rem">Closed — has remaining</span>
+        <span class="ti-val" style="color:#DC2626;">${t.remaining_hrs.toFixed(1)}h</span>
+      </div>
+    </div>`).join('');
+}
+
+function esc(s){ return (s||'').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+window._members = [];
+
+async function loadStandup(){
+  document.getElementById('dateLbl').textContent = formatDate(currentDate);
+  const dateStr = toISO(currentDate);
+  const prevDate = new Date(currentDate); prevDate.setDate(prevDate.getDate()-1);
+  const prevStr  = toISO(prevDate);
+
+  document.getElementById('grid').innerHTML = '<div class="loading">Loading…</div>';
+
+  try{
+    const resp = await fetch(`/api/standup?date=${dateStr}&prev=${prevStr}`);
+    const data = await resp.json();
+    if(!data.ok){ throw new Error(data.error||'Failed'); }
+
+    const members = data.members||[];
+    window._members = members;
+    document.getElementById('pageSubtitle').textContent =
+      members.length+' team members · '+formatDate(currentDate);
+
+    if(!members.length){
+      document.getElementById('grid').innerHTML='<div class="loading">No team data for this date.</div>';
+      return;
+    }
+
+    document.getElementById('grid').innerHTML = members.map((m,i)=>{
+      const c = AV_COLORS[i%AV_COLORS.length];
+      const ini = initials(m.name);
+      const loggedYest = m.logged_yesterday || false;
+      const closedRem  = m.closed_with_remaining || [];
+      const hasIssue   = closedRem.length > 0;
+
+      const logBdg = loggedYest
+        ? `<span class="bdg logged">Logged yesterday</span>`
+        : `<span class="bdg absent">No hours yesterday</span>`;
+      const issueBdg = hasIssue
+        ? `<span class="bdg issue">${closedRem.length} closed w/ remaining</span>` : '';
+
+      return `<div class="mc">
+        <div class="mc-head" onclick="toggle(${i})">
+          <div class="av" style="background:${c.bg};color:${c.c};">${ini}</div>
+          <div class="mi">
+            <div class="mn">${esc(m.name)}</div>
+            <div class="mr">${(m.inprogress||[]).length} in progress · ${(m.yesterday||[]).length} logged yesterday</div>
+          </div>
+          <div class="badges">${logBdg}${issueBdg}</div>
+          <i class="chev" id="ch${i}">⌄</i>
+        </div>
+        <div class="mc-body" id="mb${i}">
+          <div class="three-col">
+            <div class="col">
+              <div class="col-head">
+                <span class="col-lbl">Logged Yesterday</span>
+                <span class="col-cnt">${(m.yesterday||[]).length}</span>
+              </div>
+              ${colYst(m.yesterday)}
+            </div>
+            <div class="col">
+              <div class="col-head">
+                <span class="col-lbl">In Progress</span>
+                <span class="col-cnt">${(m.inprogress||[]).length}</span>
+              </div>
+              ${colInp(m.inprogress)}
+            </div>
+            <div class="col">
+              <div class="col-head">
+                <span class="col-lbl">Closed — Has Remaining</span>
+                <span class="col-cnt ${hasIssue?'warn':''}">${closedRem.length}</span>
+              </div>
+              ${colClosed(closedRem)}
+            </div>
+          </div>
+          <div class="note-row">
+            <input id="note${i}" placeholder="PM standup note…">
+            <button onclick="saveNote(${i},this)">Save</button>
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+
+  }catch(e){
+    document.getElementById('grid').innerHTML=`<div class="loading" style="color:#DC2626;">Error: ${e.message}</div>`;
+  }
+}
+
+loadStandup();
+</script>
+</body>
+</html>
