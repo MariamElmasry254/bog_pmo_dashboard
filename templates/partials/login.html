@@ -7,226 +7,257 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  min-height: 100vh;
+  background: #EEF2F7;
+  display: flex; align-items: center; justify-content: center;
+  font-family: 'Inter', sans-serif;
+  padding: 20px;
+}
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background-image: radial-gradient(circle, rgba(27,42,78,.08) 1px, transparent 1px);
+  background-size: 26px 26px;
+  pointer-events: none;
+}
 
-  body {
-    min-height: 100vh;
-    display: flex;
-    font-family: 'Inter', sans-serif;
-    background: #EEF2F7;
-  }
+.card {
+  width: 100%; max-width: 440px;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(27,42,78,.18), 0 4px 16px rgba(27,42,78,.1);
+  position: relative;
+}
 
-  /* ── Left navy panel ── */
-  .lp-side {
-    width: 38%;
-    min-height: 100vh;
-    background: #1B2A4E;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    padding: 56px 48px;
-    position: relative;
-    overflow: hidden;
-  }
-  /* subtle grid on navy */
-  .lp-side::before {
-    content: '';
-    position: absolute; inset: 0;
-    background-image:
-      linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px);
-    background-size: 36px 36px;
-    pointer-events: none;
-  }
-  .lp-logo {
-    display: flex; flex-direction: column;
-    margin-bottom: 56px;
-    position: relative;
-  }
-  .lp-logo img {
-    height: 32px; width: auto;
-    mix-blend-mode: screen;
-    margin-bottom: 8px;
-    display: block;
-  }
-  .lp-logo-tag {
-    font-size: 10px; font-weight: 600;
-    text-transform: uppercase; letter-spacing: .14em;
-    color: rgba(255,255,255,.35);
-  }
-  .lp-quote {
-    font-size: 14px; line-height: 1.75;
-    color: rgba(255,255,255,.55);
-    border-left: 2px solid rgba(255,255,255,.15);
-    padding-left: 16px;
-    margin-bottom: 48px;
-    position: relative;
-  }
-  .lp-dots {
-    display: flex; gap: 7px;
-    position: relative;
-  }
-  .lp-dot {
-    width: 6px; height: 6px; border-radius: 50%;
-    background: rgba(255,255,255,.2);
-  }
-  .lp-dot.on { background: rgba(255,255,255,.75); }
+/* ── Top dark section ── */
+.card-top {
+  background: #1B2A4E;
+  padding: 32px 36px 28px;
+  position: relative;
+}
+/* gold bottom border */
+.card-top::after {
+  content: '';
+  position: absolute; bottom: 0; left: 0; right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #C49A3C, #E8C060, #C49A3C);
+}
 
-  /* ── Right white panel ── */
-  .lp-right {
-    flex: 1;
-    display: flex; align-items: center; justify-content: center;
-    background: #fff;
-    padding: 40px 24px;
-  }
-  /* dot grid on white */
-  .lp-right::before {
-    content: '';
-    position: fixed; inset: 0; left: 38%;
-    background-image: radial-gradient(circle, rgba(27,42,78,.07) 1px, transparent 1px);
-    background-size: 24px 24px;
-    pointer-events: none;
-  }
-  .lp-form {
-    width: 100%; max-width: 340px;
-    position: relative;
-  }
-  .lp-hello   { font-size: 24px; font-weight: 700; color: #1B2A4E; margin-bottom: 6px; }
-  .lp-sub     { font-size: 13px; color: #94A3B8; margin-bottom: 36px; }
+/* logo row */
+.logo-row {
+  display: flex; align-items: center; gap: 16px;
+  margin-bottom: 28px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid rgba(255,255,255,.1);
+}
+.logo-img {
+  height: 28px; width: auto;
+  mix-blend-mode: screen;
+  opacity: .85;
+}
+.logo-year {
+  font-size: 11px; font-weight: 700; color: rgba(255,255,255,.4);
+  text-transform: uppercase; letter-spacing: .15em;
+}
 
-  .lp-field   { margin-bottom: 18px; }
-  .lp-label   {
-    display: block; font-size: 11px; font-weight: 600;
-    text-transform: uppercase; letter-spacing: .07em;
-    color: #64748B; margin-bottom: 7px;
-  }
-  .lp-input {
-    width: 100%; padding: 11px 14px;
-    background: #F8FAFC; border: 1px solid #E2E8F0;
-    border-radius: 9px; font-size: 14px; color: #1E293B;
-    font-family: 'Inter', sans-serif;
-    outline: none; transition: border-color .15s, box-shadow .15s;
-  }
-  .lp-input:focus {
-    border-color: #1B2A4E;
-    box-shadow: 0 0 0 3px rgba(27,42,78,.08);
-    background: #fff;
-  }
-  .lp-input::placeholder { color: #CBD5E1; }
+.portal-tag {
+  font-size: 10px; font-weight: 700; color: #C49A3C;
+  text-transform: uppercase; letter-spacing: .14em;
+  margin-bottom: 8px;
+}
+.card-title {
+  font-size: 26px; font-weight: 800; color: #fff;
+  letter-spacing: -.3px; margin-bottom: 10px;
+}
+.card-sub {
+  font-size: 13px; color: rgba(255,255,255,.5);
+  line-height: 1.6; max-width: 320px;
+}
 
-  .lp-btn {
-    width: 100%; padding: 12px;
-    background: #1B2A4E; color: #fff;
-    border: none; border-radius: 9px;
-    font-size: 14px; font-weight: 600;
-    font-family: 'Inter', sans-serif;
-    cursor: pointer; margin-top: 10px;
-    letter-spacing: .01em;
-    transition: background .15s, transform .1s;
-  }
-  .lp-btn:hover  { background: #243660; }
-  .lp-btn:active { transform: scale(.99); }
-  .lp-btn:disabled { background: #94A3B8; cursor: not-allowed; }
+/* ── Restricted badge ── */
+.restricted {
+  background: #F8F7F0;
+  border-bottom: 1px solid #E8E0C8;
+  padding: 10px 36px;
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; color: #8B7A45; font-weight: 500;
+}
+.restricted-dot {
+  width: 18px; height: 18px; border-radius: 4px;
+  background: #1B2A4E; color: #fff;
+  font-size: 9px; font-weight: 800;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
 
-  .lp-error {
-    background: #FEF2F2; border: 1px solid #FECACA;
-    color: #DC2626; border-radius: 8px;
-    padding: 10px 14px; font-size: 13px;
-    margin-bottom: 20px; display: none;
-  }
+/* ── Bottom white section ── */
+.card-bottom {
+  background: #fff;
+  padding: 28px 36px 32px;
+}
 
-  .lp-footer {
-    text-align: center; margin-top: 32px;
-    font-size: 11px; color: #CBD5E1;
-  }
+.field { margin-bottom: 18px; }
+.field label {
+  display: block; font-size: 10px; font-weight: 700;
+  color: #C49A3C; text-transform: uppercase; letter-spacing: .1em;
+  margin-bottom: 8px;
+}
+.field input {
+  width: 100%; padding: 13px 16px;
+  background: #fff; border: 1.5px solid #E2E8F0;
+  border-radius: 8px; font-size: 14px; color: #1B2A4E;
+  font-family: 'Inter', sans-serif; outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+.field input:focus {
+  border-color: #1B2A4E;
+  box-shadow: 0 0 0 3px rgba(27,42,78,.08);
+}
+.field input::placeholder { color: #CBD5E1; }
 
-  /* ── Responsive: stack on small screens ── */
-  @media (max-width: 640px) {
-    body { flex-direction: column; }
-    .lp-side { width: 100%; min-height: auto; padding: 40px 28px 36px; }
-    .lp-quote, .lp-dots { display: none; }
-    .lp-logo { margin-bottom: 0; }
-    .lp-right::before { left: 0; }
-  }
+.btn {
+  width: 100%; padding: 13px;
+  background: #1B2A4E; color: #fff;
+  border: none; border-radius: 8px;
+  font-size: 14px; font-weight: 700;
+  font-family: 'Inter', sans-serif;
+  cursor: pointer; letter-spacing: .01em;
+  transition: background .15s;
+}
+.btn:hover { background: #243660; }
+.btn:disabled { background: #94A3B8; cursor: not-allowed; }
+
+.error {
+  background: #FEF2F2; border: 1px solid #FECACA;
+  color: #DC2626; border-radius: 6px;
+  padding: 10px 14px; font-size: 13px;
+  margin-bottom: 16px; display: none;
+}
+
+/* ── Access list ── */
+.access-section { margin-top: 24px; }
+.access-lbl {
+  font-size: 9px; font-weight: 700; color: #94A3B8;
+  text-transform: uppercase; letter-spacing: .1em;
+  margin-bottom: 12px;
+}
+.access-items { display: flex; flex-direction: column; gap: 8px; }
+.access-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px;
+  background: #F8FAFC; border-radius: 8px;
+  border: 1px solid #F1F5F9;
+}
+.access-icon {
+  width: 28px; height: 28px; border-radius: 6px;
+  background: #1B2A4E; display: flex; align-items: center;
+  justify-content: center; flex-shrink: 0;
+}
+.access-icon svg { width: 14px; height: 14px; fill: none; stroke: rgba(255,255,255,.8); stroke-width: 2; }
+.access-text-title { font-size: 12px; font-weight: 600; color: #1B2A4E; }
+.access-text-sub   { font-size: 10px; color: #94A3B8; margin-top: 1px; }
 </style>
 </head>
 <body>
 
-<!-- Left navy panel -->
-<div class="lp-side">
-  <div class="lp-logo">
-    <img src="/static/envnt-logo.png" alt="Envnt">
-    <div class="lp-logo-tag">PMO Dashboard</div>
+<div class="card">
+  <!-- Top dark section -->
+  <div class="card-top">
+    <div class="logo-row">
+      <img class="logo-img" src="/static/envnt-logo.png" alt="Envnt">
+      <div class="logo-year">FY 2026 Reporting</div>
+    </div>
+    <div class="portal-tag">Internal Portal</div>
+    <div class="card-title">PMO Reports</div>
+    <div class="card-sub">Track projects, manage budgets, and deliver insights — all in one place.</div>
   </div>
-  <div class="lp-quote">
-    Track projects, manage budgets,<br>
-    and deliver insights — all in one place.
-  </div>
-  <div class="lp-dots">
-    <div class="lp-dot on"></div>
-    <div class="lp-dot"></div>
-    <div class="lp-dot"></div>
-  </div>
-</div>
 
-<!-- Right white panel -->
-<div class="lp-right">
-  <div class="lp-form">
-    <h1 class="lp-hello">Welcome back</h1>
-    <p class="lp-sub">Sign in to access your dashboard</p>
+  <!-- Restricted badge -->
+  <div class="restricted">
+    <div class="restricted-dot">🔒</div>
+    Restricted access — Authorized personnel only
+  </div>
+
+  <!-- Bottom white section -->
+  <div class="card-bottom">
 
     {% if error %}
-    <div class="lp-error" style="display:block;">⚠️ {{ error }}</div>
+    <div class="error" style="display:block;">⚠️ {{ error }}</div>
     {% endif %}
-    <div class="lp-error" id="errMsg"></div>
+    <div class="error" id="errMsg"></div>
 
-    <div class="lp-field">
-      <label class="lp-label" for="username">Username</label>
-      <input class="lp-input" type="text" id="username" placeholder="Enter username" autocomplete="username">
+    <div class="field">
+      <label for="username">Username</label>
+      <input type="text" id="username" placeholder="Enter your username" autocomplete="username">
     </div>
-    <div class="lp-field">
-      <label class="lp-label" for="password">Password</label>
-      <input class="lp-input" type="password" id="password" placeholder="Enter password"
+    <div class="field">
+      <label for="password">Password</label>
+      <input type="password" id="password" placeholder="Enter your password"
              autocomplete="current-password" onkeydown="if(event.key==='Enter') doLogin()">
     </div>
+    <button class="btn" onclick="doLogin()" id="loginBtn">Sign In</button>
 
-    <button class="lp-btn" onclick="doLogin()" id="loginBtn">Sign In →</button>
+    <!-- Access list -->
+    <div class="access-section">
+      <div class="access-lbl">You will have access to</div>
+      <div class="access-items">
+        <div class="access-item">
+          <div class="access-icon">
+            <svg viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+          </div>
+          <div>
+            <div class="access-text-title">Portfolio Overview</div>
+            <div class="access-text-sub">Revenue, cost, completion across all projects</div>
+          </div>
+        </div>
+        <div class="access-item">
+          <div class="access-icon">
+            <svg viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          </div>
+          <div>
+            <div class="access-text-title">Cashflow & Invoices</div>
+            <div class="access-text-sub">Issued, collected and virtual invoices</div>
+          </div>
+        </div>
+        <div class="access-item">
+          <div class="access-icon">
+            <svg viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+          </div>
+          <div>
+            <div class="access-text-title">Project Timelines</div>
+            <div class="access-text-sub">Planned vs expected delivery dates</div>
+          </div>
+        </div>
+      </div>
+    </div>
 
-    <div class="lp-footer">Envnt · Internal PMO Tool · {{ now.year if now else 2026 }}</div>
   </div>
 </div>
 
 <script>
 async function doLogin() {
-  const btn   = document.getElementById('loginBtn');
-  const errEl = document.getElementById('errMsg');
-  const u = document.getElementById('username').value.trim();
-  const p = document.getElementById('password').value;
-  if (!u || !p) { showErr('Please enter username and password.'); return; }
-  btn.disabled = true; btn.textContent = 'Signing in…';
-  errEl.style.display = 'none';
-  try {
-    const res = await fetch('/login', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({username: u, password: p})
+  var btn=document.getElementById('loginBtn');
+  var errEl=document.getElementById('errMsg');
+  var u=document.getElementById('username').value.trim();
+  var p=document.getElementById('password').value;
+  if(!u||!p){ showErr('Please enter username and password.'); return; }
+  btn.disabled=true; btn.textContent='Signing in…';
+  errEl.style.display='none';
+  try{
+    var res=await fetch('/login',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({username:u,password:p})
     });
-    const d = await res.json();
-    if (d.ok) {
-      window.location.href = d.redirect || '/projects';
-    } else {
-      showErr(d.error || 'Invalid credentials');
-      btn.disabled = false; btn.textContent = 'Sign In →';
-    }
-  } catch(e) {
-    showErr('Connection error — please try again.');
-    btn.disabled = false; btn.textContent = 'Sign In →';
-  }
+    var d=await res.json();
+    if(d.ok){ window.location.href=d.redirect||'/projects'; }
+    else{ showErr(d.error||'Invalid credentials'); btn.disabled=false; btn.textContent='Sign In'; }
+  }catch(e){ showErr('Connection error — please try again.'); btn.disabled=false; btn.textContent='Sign In'; }
 }
-function showErr(msg) {
-  const el = document.getElementById('errMsg');
-  el.textContent = '⚠️ ' + msg;
-  el.style.display = 'block';
+function showErr(msg){
+  var el=document.getElementById('errMsg');
+  el.textContent='⚠️ '+msg; el.style.display='block';
 }
 document.getElementById('username').focus();
 </script>
