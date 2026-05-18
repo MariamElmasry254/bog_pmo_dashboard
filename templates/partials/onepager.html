@@ -7,14 +7,14 @@
 .op-lbl{font-size:9px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;}
 .op-val{font-size:16px;font-weight:700;color:var(--text);}
 .op-card{background:var(--bg-card);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:12px;}
-.op-ch{padding:8px 12px;font-size:11px;font-weight:700;color:#ffffff!important;text-transform:uppercase;letter-spacing:.5px;background:#1B2A4E!important;}
-.op-ch.g{background:#1D7A4A!important;} .op-ch.a{background:#D4560A!important;}
+.op-ch{padding:8px 12px;font-size:11px;font-weight:700;color:white;text-transform:uppercase;letter-spacing:.5px;background:#1B2A4E;}
+.op-ch.g{background:#1D7A4A;} .op-ch.a{background:#D4560A;}
 .op-t{width:100%;border-collapse:collapse;font-size:11px;}
 .op-t th{padding:6px 10px;background:var(--bg-subtle);color:var(--text-muted);font-weight:600;font-size:10px;text-transform:uppercase;}
 .op-t td{padding:7px 10px;border-bottom:1px solid var(--border-light);color:var(--text);}
 .op-t tr:last-child td{border-bottom:none;}
 .op-t tbody tr:nth-child(even) td{background:var(--bg-subtle);}
-.op-t tfoot td{background:#1B2A4E!important;color:#ffffff!important;font-weight:700;}
+.op-t tfoot td{background:#1B2A4E!important;color:white!important;font-weight:700;}
 .op-st{display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;cursor:pointer;border:none;}
 .op-st.ontrack{background:#D1FAE5;color:#065F46;} .op-st.concern{background:#FEF3C7;color:#92400E;}
 .op-st.delayed{background:#FEE2E2;color:#991B1B;} .op-st.onhold{background:#F1F5F9;color:#64748B;border:1px solid #CBD5E1;}
@@ -23,6 +23,37 @@
 .op-grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;}
 .op-notes-a{border:1px solid var(--border);border-radius:8px;padding:12px 14px;background:var(--bg-subtle);margin-bottom:12px;}
 .op-notes-a textarea{width:100%;border:none;background:transparent;font-size:12px;font-family:inherit;color:var(--text);resize:vertical;min-height:60px;outline:none;box-sizing:border-box;}
+
+/* ── Print / PDF styles ───────────────────────────────────────────── */
+@media print {
+  /* Hide everything except the one-pager content */
+  body > *:not(#op-print-root) { display:none !important; }
+  #op-print-root {
+    display:block !important;
+    position:fixed; top:0; left:0; width:100%; height:100%;
+    background:#fff; z-index:99999;
+  }
+  /* Reset colours to explicit values so Chrome prints them */
+  #op-print-root .op-ch          { background:#1B2A4E !important; color:#fff !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  #op-print-root .op-ch.g        { background:#1D7A4A !important; }
+  #op-print-root .op-ch.a        { background:#D4560A !important; }
+  #op-print-root .op-t tfoot td  { background:#1B2A4E !important; color:#fff !important; }
+  #op-print-root .op-t tbody tr:nth-child(even) td { background:#F8FAFC !important; }
+  #op-print-root .op-t th        { background:#F1F5F9 !important; }
+  #op-print-root .op-card        { border:1px solid #CBD5E1 !important; border-radius:6px; overflow:hidden; margin-bottom:10px; }
+  #op-print-root .op-chip        { border:1px solid #CBD5E1 !important; }
+  /* Status badges */
+  #op-print-root .op-st.ontrack  { background:#D1FAE5 !important; color:#065F46 !important; }
+  #op-print-root .op-st.concern  { background:#FEF3C7 !important; color:#92400E !important; }
+  #op-print-root .op-st.delayed  { background:#FEE2E2 !important; color:#991B1B !important; }
+  #op-print-root .op-st.onhold   { background:#F1F5F9 !important; color:#64748B !important; }
+  /* Profit colours */
+  #op-print-root .op-profit-pos  { color:#065F46 !important; }
+  #op-print-root .op-profit-neg  { color:#DC2626 !important; }
+  /* Page setup */
+  @page { size:A4 landscape; margin:12mm 14mm; }
+  * { -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
+}
 </style>
 
 <div class="op-bar">
@@ -325,12 +356,10 @@ function opBuildInvoices(){
     var vi=lm.accVI||0;               // Accumulative virtual invoice
     var issued=lm.issuedUpToMonth||0; // Total issued cumulative
     var coll=collectedByPhase[ph]||0;
-    // VI can be negative if production < 0, show as-is (it's a valid business indicator)
     totVI+=vi; totIssued+=issued; totColl+=coll;
-    var viColor=vi>=0?'':'color:#DC2626;';
     tbody.innerHTML+='<tr>'
       +'<td style="font-weight:600;">'+ph.charAt(0).toUpperCase()+ph.slice(1)+'</td>'
-      +'<td style="text-align:right;'+viColor+'">'+fSAR(vi)+'</td>'
+      +'<td style="text-align:right;">'+fSAR(vi)+'</td>'
       +'<td style="text-align:right;">'+fSAR(issued)+'</td>'
       +'<td style="text-align:right;">'+fSAR(coll)+'</td>'
       +'</tr>';
@@ -452,37 +481,52 @@ window.opSave=async function(){
 };
 
 window.opExportPDF=function(){
-  var pn=document.getElementById('opProjName');
-  var title=(pn?pn.textContent:'Project')+' - One Pager';
-  document.title=title;
-  // Inject print styles
-  var sid='_opPrintCSS';
-  var old=document.getElementById(sid); if(old) old.remove();
-  var s=document.createElement('style'); s.id=sid;
-  s.textContent=[
-    '@media print{',
-    '  @page{size:A4 landscape;margin:8mm;}',
-    '  body>*{display:none!important;}',
-    '  #onepager{display:block!important;padding:0!important;background:#fff!important;}',
-    '  .op-bar button{display:none!important;}',
-    '  .op-ch{background:#1B2A4E!important;color:#fff!important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}',
-    '  .op-ch.g{background:#1D7A4A!important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}',
-    '  .op-ch.a{background:#D4560A!important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}',
-    '  .op-t tfoot td{background:#1B2A4E!important;color:#fff!important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}',
-    '  .op-t tbody tr:nth-child(even) td{background:#F1F5F9!important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}',
-    '  nav,header,.main-nav,.exec-tabs,.tabs-bar{display:none!important;}',
-    '  #onepager{font-size:10px;}',
-    '  .op-chip-row{flex-wrap:nowrap;}',
-    '}'
-  ].join('');
-  document.head.appendChild(s);
+  // ── Snapshot editable inputs → plain text for print ──────────────
+  var snapshots=[]; // {el, parent, placeholder}
+  document.querySelectorAll('#onepager input.op-in, #onepager textarea').forEach(function(el){
+    var val=el.value||el.placeholder||'';
+    var span=document.createElement('span');
+    span.textContent=val;
+    span.style.cssText=el.style.cssText;
+    span.className=el.className;
+    el.parentNode.insertBefore(span,el);
+    el.style.display='none';
+    snapshots.push({el:el,span:span});
+  });
+  // Snapshot selects (status badges) → span with class
+  var selSnaps=[];
+  document.querySelectorAll('#onepager select.op-st').forEach(function(sel){
+    var labels={ontrack:'On Track',concern:'Concern',delayed:'Delayed',onhold:'On Hold'};
+    var span=document.createElement('span');
+    span.className='op-st '+sel.value;
+    span.textContent=labels[sel.value]||sel.value;
+    sel.parentNode.insertBefore(span,sel);
+    sel.style.display='none';
+    selSnaps.push({sel:sel,span:span});
+  });
+
+  // ── Build isolated print root ─────────────────────────────────────
+  var src=document.getElementById('onepager');
+  var root=document.createElement('div');
+  root.id='op-print-root';
+  root.style.cssText='position:fixed;top:0;left:0;width:100%;background:#fff;z-index:99999;padding:16px 20px;box-sizing:border-box;';
+  root.innerHTML=src.innerHTML;
+  // Remove the top bar (Export / Save buttons) from print copy
+  var bar=root.querySelector('.op-bar');
+  if(bar) bar.style.display='none';
+  // Remove script tags from clone
+  root.querySelectorAll('script,style').forEach(function(s){s.remove();});
+  document.body.appendChild(root);
+
+  // ── Trigger print then clean up ───────────────────────────────────
   setTimeout(function(){
     window.print();
-    setTimeout(function(){
-      s.remove();
-      document.title=pn?pn.textContent:'Dashboard';
-    },1000);
-  },200);
+    // Restore inputs
+    snapshots.forEach(function(s){ s.el.style.display=''; s.span.remove(); });
+    selSnaps.forEach(function(s){ s.sel.style.display=''; s.span.remove(); });
+    // Remove print root after dialog closes
+    setTimeout(function(){ if(root.parentNode) root.parentNode.removeChild(root); },500);
+  },120);
 };
 
 window.loadOnepager=opLoad;
