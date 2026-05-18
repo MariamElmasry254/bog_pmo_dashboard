@@ -4602,7 +4602,7 @@ def api_roadmap():
 @app.route('/api/budget')
 def api_budget():
     return jsonify({
-        'project_name': session.get('project_name', PROJECT_NAME),
+        'project_name': PROJECT_NAME,
         'pm': 'Abdelrahman Doghish',
         'support_start': '2027-05-18',
         'support_end': '2028-05-17',
@@ -6390,13 +6390,6 @@ def api_effort_all_months(phase_key):
         odoo_info = odoo_data.get(emp_name, {})
         odoo_pos = odoo_info.get('position')
         sar_rate = odoo_info.get('sar_rate', 0)
-        # Use position override if Odoo has no position
-        import re as _re_pos_ovr
-        _pos_ovr = load_plan_overrides().get('position_overrides', {})
-        _clean_emp = _re_pos_ovr.sub(r'^\[[A-Z]\d+\s*\]\s*', '', emp_name).strip()
-        _pos_ovr_val = _pos_ovr.get(emp_name) or _pos_ovr.get(_clean_emp)
-        if _pos_ovr_val and not odoo_pos:
-            odoo_pos = _pos_ovr_val
 
         # ── Travel periods (match by Odoo ID, code, or name) ──
         emp_travel_periods = []
@@ -6737,21 +6730,6 @@ def api_plan_overrides_get():
     return jsonify(load_plan_overrides())
 
 
-@app.route('/api/positions-list')
-@login_required
-def api_positions_list():
-    all_pos = get_all_positions(db)
-    names = sorted(set(p.get('position') or p.get('name','') for p in all_pos if p.get('position') or p.get('name')))
-    return jsonify({'positions': names})
-
-@app.route('/api/position-overrides/save', methods=['POST'])
-def api_position_overrides_save_alias():
-    body = request.json or {}
-    name = body.get('name'); position = body.get('position')
-    if not name: return jsonify({'error': 'name required'}), 400
-    db.set_override('position', '', name, position if position else None)
-    return jsonify({'ok': True})
-
 @app.route('/api/position-overrides', methods=['POST'])
 def api_position_overrides_save():
     """Manual position override for an employee (when Odoo doesn't have it)"""
@@ -6830,48 +6808,101 @@ def api_db_audit():
 
 @app.route('/api/project-employees')
 def api_project_employees():
-    """Get list of employees who have logged time on the project, with their positions"""
+    """Get list of employees who have logged time on the project, with their positions and rates"""
     raw = odoo.get_timesheets()
-    if raw is None:
-        return jsonify({'employees': [], 'connected': False})
-
+    connected = raw is not None
     seen = {}
     import re as _re_emp
-    for e in raw:
-        emp = e.get('employee_id')
-        if emp and emp[1]:
-            full_name = emp[1]
-            display_name = _re_emp.sub(r'^\s*\[[A-Z]\d+\s*\]\s*', '', full_name).strip()
-            if full_name not in seen:
-                seen[full_name] = {'name': display_name, 'full_name': full_name}
+    if raw:
+        for e in raw:
+            emp = e.get('employee_id')
+            if emp and emp[1]:
+                full_name = emp[1]
+                display_name = _re_emp.sub(r'^\s*\[[A-Z]\d+\s*\]\s*', '', full_name).strip()
+                if full_name not in seen:
+                    seen[full_name] = {'name': display_name, 'full_name': full_name, 'source_type': 'odoo'}
 
-    # Try to fetch positions
-    overrides = load_plan_overrides().get('position_overrides', {})
+    # Also include manually added employees (resigned/external)
+    pfx = active_db_prefix()
+    manual_ns = f'{pfx}_manual_employees' if pfx else 'manual_employees'
+    manual_emps = db.get_namespace_overrides(manual_ns, '') or {}
+    for full_name, info in manual_emps.items():
+        if full_name not in seen:
+            display_name = _re_emp.sub(r'^\s*\[[A-Z]\d+\s*\]\s*', '', full_name).strip()
+            seen[full_name] = {
+                'name': display_name, 'full_name': full_name,
+                'source_type': 'manual',
+                'position': info.get('position') if isinstance(info, dict) else info,
+                'resigned_date': info.get('resigned_date','') if isinstance(info, dict) else '',
+                'note': info.get('note','') if isinstance(info, dict) else '',
+            }
+
+    # Fetch positions and rates
+    pos_overrides = load_plan_overrides().get('position_overrides', {})
     for name, info in seen.items():
-        if name in overrides:
-            info['position'] = overrides[name]
-            info['source'] = 'override'
+        if info.get('source_type') == 'manual':
+            pass  # position already set above
+        elif name in pos_overrides:
+            info['position'] = pos_overrides[name]; info['source'] = 'override'
         else:
             pos = get_odoo_position_for_employee(name)
-            if pos:
-                info['position'] = pos
-                info['source'] = 'odoo'
-            else:
-                info['position'] = None
-                info['source'] = None
+            if pos: info['position'] = pos; info['source'] = 'odoo'
+            else:   info['position'] = None; info['source'] = None
 
-    # Add rate info for display
-    for name, info in seen.items():
+        # Get rate
         try:
-            pos_ovr = load_plan_overrides().get('position_overrides', {})
-            disp_name = info.get('name', name)
-            pos = info.get('position') or pos_ovr.get(name) or pos_ovr.get(disp_name)
-            rate_info = get_employee_rate(name, pos, False)
+            rate_info = get_employee_rate(name, info.get('position'), False)
             info['hour_rate'] = rate_info.get('hour_rate') if rate_info else None
+            info['rate_source'] = rate_info.get('source','') if rate_info else ''
         except Exception:
-            info['hour_rate'] = None
+            info['hour_rate'] = None; info['rate_source'] = ''
+
     employees = sorted(seen.values(), key=lambda x: x['name'].lower())
-    return jsonify({'employees': employees, 'connected': True, 'count': len(employees)})
+    return jsonify({'employees': employees, 'connected': connected, 'count': len(employees)})
+
+@app.route('/api/project-employees/manual', methods=['POST'])
+@login_required
+def api_project_employees_manual_add():
+    """Add a manually-tracked employee (resigned/external) with position"""
+    body = request.json or {}
+    full_name = (body.get('full_name') or '').strip()
+    position  = (body.get('position') or '').strip()
+    resigned_date = (body.get('resigned_date') or '').strip()
+    note = (body.get('note') or '').strip()
+    if not full_name: return jsonify({'error': 'full_name required'}), 400
+    pfx = active_db_prefix()
+    manual_ns = f'{pfx}_manual_employees' if pfx else 'manual_employees'
+    db.set_override(manual_ns, '', full_name, {
+        'position': position, 'resigned_date': resigned_date, 'note': note
+    })
+    # Also set position override so rate lookup works
+    if position:
+        db.set_override('position', '', full_name, position)
+    return jsonify({'ok': True})
+
+@app.route('/api/project-employees/manual/<path:full_name>', methods=['DELETE'])
+@login_required
+def api_project_employees_manual_delete(full_name):
+    """Remove a manually-added employee"""
+    pfx = active_db_prefix()
+    manual_ns = f'{pfx}_manual_employees' if pfx else 'manual_employees'
+    db.set_override(manual_ns, '', full_name, None)
+    return jsonify({'ok': True})
+
+@app.route('/api/positions-list')
+@login_required
+def api_positions_list():
+    all_pos = get_all_positions(db)
+    names = sorted(set(p.get('position') or p.get('name','') for p in all_pos if p.get('position') or p.get('name')))
+    return jsonify({'positions': names})
+
+@app.route('/api/position-overrides/save', methods=['POST'])
+def api_position_overrides_save_v2():
+    body = request.json or {}
+    name = body.get('name'); position = body.get('position')
+    if not name: return jsonify({'error': 'name required'}), 400
+    db.set_override('position', '', name, position if position else None)
+    return jsonify({'ok': True})
 
 
 # Main API endpoint for variance data
@@ -7953,7 +7984,7 @@ def debug_timesheets():
     info = {
         'date_from': date_from,
         'date_to': date_to,
-        'project_name': session.get('project_name', PROJECT_NAME),
+        'project_name': PROJECT_NAME,
         'odoo_uid': odoo.uid,
         'odoo_last_error': odoo.last_error,
     }
