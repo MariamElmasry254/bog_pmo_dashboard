@@ -1,0 +1,461 @@
+<section class="tab-panel" id="onepager">
+<style>
+.op-header{display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;margin-bottom:16px;}
+.op-chips{display:flex;gap:8px;flex-wrap:wrap;}
+.op-chip{background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:7px 14px;text-align:center;min-width:80px;}
+.op-chip-label{font-size:9px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;}
+.op-chip-value{font-size:16px;font-weight:700;color:var(--text);}
+.op-grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;}
+.op-card{background:var(--bg-card);border:1px solid var(--border);border-radius:8px;overflow:hidden;}
+.op-card-head{background:#1B2A4E;padding:8px 12px;font-size:11px;font-weight:700;color:white;text-transform:uppercase;letter-spacing:.5px;}
+.op-card-head.green{background:#1D7A4A;}
+.op-card-head.amber{background:#D4560A;}
+.op-table{width:100%;border-collapse:collapse;font-size:11px;}
+.op-table th{padding:6px 10px;background:var(--bg-subtle);color:var(--text-muted);font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.3px;}
+.op-table td{padding:7px 10px;border-bottom:1px solid var(--border-light);color:var(--text);}
+.op-table tr:last-child td{border-bottom:none;}
+.op-table tr:nth-child(even) td{background:var(--bg-subtle);}
+.op-status{display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;}
+.op-status.concern{background:#FEF3C7;color:#92400E;}
+.op-status.ontrack{background:#D1FAE5;color:#065F46;}
+.op-status.onhold{background:#F1F5F9;color:#64748B;border:1px solid #CBD5E1;}
+.op-status.delayed{background:#FEE2E2;color:#991B1B;}
+.op-editable{border:none;background:transparent;font-size:11px;font-family:inherit;color:var(--text);width:100%;outline:none;padding:0;}
+.op-editable:focus{border-bottom:1px solid var(--blue);}
+.op-notes{border:1px solid var(--border);border-radius:8px;padding:12px 14px;background:var(--bg-subtle);margin-bottom:12px;}
+.op-notes textarea{width:100%;border:none;background:transparent;font-size:12px;font-family:inherit;color:var(--text);resize:vertical;min-height:60px;outline:none;}
+.op-save-bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px;}
+</style>
+
+<div class="op-save-bar">
+  <div style="font-size:13px;font-weight:700;color:var(--navy);">One Pager <span style="font-weight:400;color:var(--text-muted);font-size:12px;" id="opSavedMsg"></span></div>
+  <div style="display:flex;gap:8px;">
+    <button onclick="opExportPDF()" style="padding:6px 16px;border:1px solid var(--border);border-radius:6px;background:white;cursor:pointer;font-size:12px;font-weight:600;">
+      ⬇ Export PDF
+    </button>
+    <button onclick="opSave()" style="padding:6px 16px;border:none;border-radius:6px;background:#1B2A4E;color:white;cursor:pointer;font-size:12px;font-weight:600;">
+      Save changes
+    </button>
+  </div>
+</div>
+
+<!-- Header -->
+<div class="op-header" id="opHeader">
+  <div>
+    <div style="font-size:22px;font-weight:700;color:var(--navy);" id="opProjName">—</div>
+    <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">
+      <span id="opPM">—</span>
+      <span style="margin:0 8px;opacity:.3;">|</span>
+      Start: <span id="opStart">—</span>
+    </div>
+  </div>
+  <div class="op-chips">
+    <div class="op-chip">
+      <div class="op-chip-label">Contract</div>
+      <div style="font-size:12px;font-weight:600;color:var(--text);"><input class="op-editable" id="opContract" value="Fixed scope" style="width:90px;text-align:center;"></div>
+    </div>
+    <div class="op-chip">
+      <div class="op-chip-label">Market Unit</div>
+      <div style="font-size:12px;font-weight:600;color:var(--text);"><input class="op-editable" id="opMarket" value="—" style="width:70px;text-align:center;"></div>
+    </div>
+    <div class="op-chip">
+      <div class="op-chip-label">Team (<span id="opTeamMonth">—</span>)</div>
+      <div class="op-chip-value" id="opTeamCount">—</div>
+    </div>
+    <div class="op-chip">
+      <div class="op-chip-label">% Complete</div>
+      <div class="op-chip-value" id="opTotalPct" style="color:var(--blue);">—</div>
+    </div>
+    <div class="op-chip">
+      <div class="op-chip-label">Exp. Overrun</div>
+      <div class="op-chip-value" id="opOverrun" style="color:#DC2626;">—</div>
+    </div>
+  </div>
+</div>
+
+<!-- Dates -->
+<div class="op-grid2" style="margin-bottom:12px;">
+  <div class="op-card">
+    <div class="op-card-head">Planned completion</div>
+    <div style="padding:10px 14px;font-size:14px;font-weight:700;" id="opPlannedEnd">—</div>
+  </div>
+  <div class="op-card">
+    <div class="op-card-head amber">Expected completion</div>
+    <div style="padding:10px 14px;font-size:14px;font-weight:700;color:#DC2626;" id="opExpectedEnd">—</div>
+  </div>
+</div>
+
+<!-- Phases table -->
+<div class="op-card" style="margin-bottom:12px;">
+  <div class="op-card-head">Phases</div>
+  <table class="op-table">
+    <thead>
+      <tr>
+        <th style="text-align:left;">Phase</th>
+        <th style="text-align:center;">Est. MDs</th>
+        <th style="text-align:center;">Actual MDs</th>
+        <th style="text-align:center;">% Done</th>
+        <th style="text-align:center;">Planned date</th>
+        <th style="text-align:center;">Expected date</th>
+        <th style="text-align:center;">Status</th>
+      </tr>
+    </thead>
+    <tbody id="opPhasesBody"></tbody>
+  </table>
+</div>
+
+<!-- Budget + Invoices + Chart -->
+<div style="display:grid;grid-template-columns:1.1fr 0.9fr;gap:12px;margin-bottom:12px;">
+  <div>
+    <!-- Budget table -->
+    <div class="op-card" style="margin-bottom:12px;">
+      <div class="op-card-head green">Budget (SAR)</div>
+      <table class="op-table">
+        <thead>
+          <tr>
+            <th style="text-align:left;">Phase</th>
+            <th style="text-align:right;">Revenue</th>
+            <th style="text-align:right;">Plan. Cost</th>
+            <th style="text-align:right;">Curr. Cost</th>
+            <th style="text-align:right;">Profitability</th>
+          </tr>
+        </thead>
+        <tbody id="opBudgetBody"></tbody>
+      </table>
+    </div>
+    <!-- Invoices table -->
+    <div class="op-card">
+      <div class="op-card-head">Invoices (SAR)</div>
+      <table class="op-table">
+        <thead>
+          <tr>
+            <th style="text-align:left;">Phase</th>
+            <th style="text-align:right;">Virtual</th>
+            <th style="text-align:right;">Issued</th>
+            <th style="text-align:right;">Collected</th>
+          </tr>
+        </thead>
+        <tbody id="opInvBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Chart -->
+  <div class="op-card" style="display:flex;flex-direction:column;">
+    <div class="op-card-head">Cost vs EAC trend (SAR)</div>
+    <div style="flex:1;padding:10px;display:flex;flex-direction:column;justify-content:flex-end;min-height:200px;">
+      <canvas id="opChart"></canvas>
+      <div style="display:flex;gap:10px;justify-content:center;margin-top:8px;flex-wrap:wrap;">
+        <span style="font-size:10px;color:var(--text-muted);display:flex;align-items:center;gap:4px;">
+          <span style="display:inline-block;width:18px;height:2px;background:#1B2A4E;border-radius:1px;"></span>Current cost
+        </span>
+        <span style="font-size:10px;color:var(--text-muted);display:flex;align-items:center;gap:4px;">
+          <span style="display:inline-block;width:18px;height:2px;background:#1D7A4A;border-radius:1px;"></span>VI+Issued
+        </span>
+        <span style="font-size:10px;color:var(--text-muted);display:flex;align-items:center;gap:4px;">
+          <span style="display:inline-block;width:12px;height:8px;background:rgba(27,42,78,0.15);border-radius:2px;"></span>EAC
+        </span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Notes -->
+<div class="op-notes">
+  <div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Monthly notes / highlights</div>
+  <textarea id="opNotes" placeholder="Add monthly notes, key highlights, risks…"></textarea>
+</div>
+
+<script>
+(function(){
+var _opData = {};
+var _opChart = null;
+
+var STATUS_OPTS = ['ontrack','concern','delayed','onhold'];
+var STATUS_LABEL = {ontrack:'On Track', concern:'Concern', delayed:'Delayed', onhold:'On Hold'};
+
+function fSAR(v){ if(!v||isNaN(v)) return '—'; var n=Math.abs(v); var s=n>=1000000?(n/1000000).toFixed(2)+'M':n>=1000?(n/1000).toFixed(0)+'K':Math.round(n)+''; return (v<0?'-':'')+s; }
+function fMDs(v){ return (v&&!isNaN(v))?Math.round(v).toLocaleString():'—'; }
+
+async function opLoad(){
+  try{
+    var r = await fetch('/api/onepager');
+    var d = await r.json();
+    _opData = d;
+    opRender(d);
+  }catch(e){ console.warn('onepager load error:', e); }
+
+  // Load chart data from AppState if available
+  setTimeout(opUpdateChart, 500);
+}
+
+function opRender(d){
+  var manual = d.manual || {};
+
+  // Header
+  document.getElementById('opProjName').textContent = d.project_name || '—';
+  document.getElementById('opPM').textContent = d.pm_name ? ('PM: ' + d.pm_name) : '—';
+  document.getElementById('opStart').textContent = d.start_date || '—';
+  document.getElementById('opTeamCount').textContent = d.team_count_last_month || '—';
+  document.getElementById('opTeamMonth').textContent = d.team_month || '—';
+  document.getElementById('opPlannedEnd').textContent = d.end_date || '—';
+
+  // Manual fields
+  if(manual.contract) document.getElementById('opContract').value = manual.contract;
+  if(manual.market)   document.getElementById('opMarket').value   = manual.market;
+  if(manual.expected_end) document.getElementById('opExpectedEnd').textContent = manual.expected_end;
+  else document.getElementById('opExpectedEnd').textContent = '—';
+  if(manual.notes) document.getElementById('opNotes').value = manual.notes;
+
+  // Phases
+  var phases = d.phases || [];
+  var totalPct = 0, pCount = 0;
+  var tbody = document.getElementById('opPhasesBody');
+  tbody.innerHTML = '';
+  phases.forEach(function(ph, i){
+    var key = ph.phase;
+    var mPh = manual['phase_'+key] || {};
+    var pct = ph.completion_pct || 0;
+    if(pct > 0){ totalPct += pct; pCount++; }
+    var statusVal = mPh.status || (pct > 0 ? 'ontrack' : 'onhold');
+    var bg = i%2===0 ? '' : 'background:var(--bg-subtle);';
+    var statusSel = '<select onchange="_opPhaseStatusChange(\''+key+'\',this.value)" style="border:none;background:transparent;font-size:10px;font-weight:700;cursor:pointer;color:inherit;padding:2px 6px;border-radius:10px;" class="op-status '+statusVal+'">'
+      + STATUS_OPTS.map(function(s){ return '<option value="'+s+'"'+(s===statusVal?' selected':'')+'>'+STATUS_LABEL[s]+'</option>'; }).join('')
+      + '</select>';
+    tbody.innerHTML += '<tr style="'+bg+'">'
+      + '<td style="font-weight:700;">'+ph.phase.charAt(0).toUpperCase()+ph.phase.slice(1)+'</td>'
+      + '<td style="text-align:center;">'+fMDs(ph.budget_mds)+'</td>'
+      + '<td style="text-align:center;color:var(--green);">'+(pct>0?fMDs(ph.budget_mds*(pct/100)):'—')+'</td>'
+      + '<td style="text-align:center;">'+(pct>0?pct.toFixed(1)+'%':'0%')+'</td>'
+      + '<td style="text-align:center;"><input class="op-editable" data-ph="'+key+'" data-f="planned_date" value="'+(mPh.planned_date||'—')+'" style="width:90px;text-align:center;"></td>'
+      + '<td style="text-align:center;"><input class="op-editable" data-ph="'+key+'" data-f="expected_date" value="'+(mPh.expected_date||'—')+'" style="width:90px;text-align:center;color:#DC2626;"></td>'
+      + '<td style="text-align:center;">'+statusSel+'</td>'
+      + '</tr>';
+  });
+
+  // Total % complete
+  var avgPct = pCount > 0 ? Math.round(totalPct / pCount) : 0;
+  document.getElementById('opTotalPct').textContent = avgPct + '%';
+
+  // Budget from AppState
+  opUpdateBudget(phases, manual);
+  opUpdateInvoices(manual);
+}
+
+function opUpdateBudget(phases, manual){
+  var tbody = document.getElementById('opBudgetBody');
+  tbody.innerHTML = '';
+  var totRev=0, totCost=0, totCurr=0;
+  phases.forEach(function(ph, i){
+    var key = ph.phase;
+    var latestProf = (window.AppState && AppState._latestProfData && AppState._latestProfData[key]) || {};
+    var rev  = (window.AppState && AppState._savedRevenue && AppState._savedRevenue[key]) || latestProf.totalRevSAR || ph.budget_rev_sar || 0;
+    var cost = (window.AppState && AppState._budgetFinalCost && AppState._budgetFinalCost[key]) || ph.budget_cost_sar || 0;
+    var curr = latestProf.currentCostSAR || 0;
+    var profit = rev - cost;
+    totRev += rev; totCost += cost; totCurr += curr;
+    var bg = i%2===0?'':'background:var(--bg-subtle);';
+    tbody.innerHTML += '<tr style="'+bg+'">'
+      + '<td style="font-weight:600;">'+ph.phase.charAt(0).toUpperCase()+ph.phase.slice(1)+'</td>'
+      + '<td style="text-align:right;">'+fSAR(rev)+'</td>'
+      + '<td style="text-align:right;">'+fSAR(cost)+'</td>'
+      + '<td style="text-align:right;">'+fSAR(curr)+'</td>'
+      + '<td style="text-align:right;color:'+(profit>=0?'var(--green)':'#DC2626')+';">'+fSAR(profit)+'</td>'
+      + '</tr>';
+  });
+  tbody.innerHTML += '<tr style="background:#1B2A4E;">'
+    + '<td style="color:white;font-weight:700;">Total</td>'
+    + '<td style="text-align:right;color:white;font-weight:700;">'+fSAR(totRev)+'</td>'
+    + '<td style="text-align:right;color:white;">'+fSAR(totCost)+'</td>'
+    + '<td style="text-align:right;color:white;font-weight:700;">'+fSAR(totCurr)+'</td>'
+    + '<td style="text-align:right;color:white;">'+fSAR(totRev-totCost)+'</td>'
+    + '</tr>';
+}
+
+function opUpdateInvoices(manual){
+  var tbody = document.getElementById('opInvBody');
+  tbody.innerHTML = '';
+  // Get from AppState
+  var invCum = (window.AppState && AppState._invoiceCumulative) || {};
+  var salesInv = (window.AppState && AppState._salesInvoicesByPhase) || {};
+  // Build rows
+  var rows = [];
+  if(window.AppState && AppState._overviewData){
+    var isBog = AppState._overviewData.is_bog !== false;
+    var phs = isBog ? ['development','consultation'] : ['services','support'];
+    phs.forEach(function(ph){
+      var cum = invCum[ph] || {};
+      var months = Object.keys(cum).sort();
+      var lastCum = months.length ? cum[months[months.length-1]] : 0;
+      var latestProf = (AppState._latestProfData && AppState._latestProfData[ph]) || {};
+      var vi = latestProf.totalRevSAR ? (latestProf.eacCostSAR ? latestProf.totalRevSAR - latestProf.eacCostSAR : 0) : 0;
+      rows.push({label: ph.charAt(0).toUpperCase()+ph.slice(1), vi: vi, issued: lastCum, collected: lastCum});
+    });
+  }
+  if(rows.length === 0){
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:14px;">Load Variance tab first</td></tr>';
+    return;
+  }
+  rows.forEach(function(row, i){
+    var bg = i%2===0?'':'background:var(--bg-subtle);';
+    tbody.innerHTML += '<tr style="'+bg+'">'
+      + '<td style="font-weight:600;">'+row.label+'</td>'
+      + '<td style="text-align:right;">'+fSAR(row.vi)+'</td>'
+      + '<td style="text-align:right;">'+fSAR(row.issued)+'</td>'
+      + '<td style="text-align:right;">'+fSAR(row.collected)+'</td>'
+      + '</tr>';
+  });
+}
+
+function opUpdateChart(){
+  // Build chart from AppState._varianceMonthData
+  if(!window.AppState || !AppState._varianceMonthData) return;
+  var allMonths = new Set();
+  var phData = {};
+  var isBog = !AppState._overviewData || AppState._overviewData.is_bog !== false;
+  var phs = isBog ? ['development','consultation'] : ['services','support'];
+
+  phs.forEach(function(ph){
+    var mdata = AppState._varianceMonthData[ph] || [];
+    phData[ph] = {};
+    mdata.forEach(function(m){
+      allMonths.add(m.month);
+      phData[ph][m.month] = m;
+    });
+  });
+
+  var months = Array.from(allMonths).sort();
+  if(months.length < 2) return;
+
+  // Aggregate across phases per month
+  var costArr=[], viArr=[], eacArr=[];
+  months.forEach(function(mk){
+    var cost=0, vi=0, eac=0;
+    phs.forEach(function(ph){
+      var m = (phData[ph]||{})[mk] || {};
+      cost += m.currentCostSAR || 0;
+      vi   += m.accVI || 0;
+      eac  += m.estAtCompletion || 0;
+    });
+    costArr.push(Math.round(cost));
+    viArr.push(Math.round(vi));
+    eacArr.push(Math.round(eac));
+  });
+
+  var labels = months.map(function(m){ return m.slice(0,7); });
+
+  var canvas = document.getElementById('opChart');
+  if(!canvas) return;
+
+  if(_opChart){ _opChart.destroy(); }
+
+  var isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme:dark)').matches;
+  var gridC = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.07)';
+  var labelC = isDark ? 'rgba(255,255,255,0.45)' : 'rgba(0,0,0,0.4)';
+
+  var ctx = canvas.getContext('2d');
+  _opChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [
+        { type:'bar', label:'EAC', data: eacArr, backgroundColor: isDark?'rgba(255,255,255,0.1)':'rgba(27,42,78,0.12)', borderWidth:0, borderRadius:2, order:2 },
+        { type:'line', label:'Current cost', data: costArr, borderColor:'#1B2A4E', backgroundColor:'transparent', borderWidth:2, pointRadius:2, tension:0.3, order:1 },
+        { type:'line', label:'VI+Issued', data: viArr, borderColor:'#1D7A4A', backgroundColor:'transparent', borderWidth:2, pointRadius:2, tension:0.3, order:0 }
+      ]
+    },
+    options: {
+      responsive:true, maintainAspectRatio:true, animation:false,
+      plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:function(c){ return c.dataset.label+': '+fSAR(c.raw); } } } },
+      scales:{
+        x:{ grid:{color:gridC}, ticks:{color:labelC, font:{size:10}} },
+        y:{ grid:{color:gridC}, ticks:{color:labelC, font:{size:10}, callback:function(v){ return fSAR(v); } } }
+      }
+    }
+  });
+}
+
+window._opPhaseStatusChange = function(phKey, val){
+  var sel = event.target;
+  sel.className = 'op-status ' + val;
+};
+
+async function opSave(){
+  var body = {
+    contract: document.getElementById('opContract').value,
+    market:   document.getElementById('opMarket').value,
+    notes:    document.getElementById('opNotes').value,
+  };
+  // Phase manual fields
+  var inputs = document.querySelectorAll('#opPhasesBody input[data-ph]');
+  inputs.forEach(function(inp){
+    var ph = inp.getAttribute('data-ph');
+    var f  = inp.getAttribute('data-f');
+    if(!body['phase_'+ph]) body['phase_'+ph] = {};
+    body['phase_'+ph][f] = inp.value;
+  });
+  // Phase status selects
+  var sels = document.querySelectorAll('#opPhasesBody select');
+  sels.forEach(function(sel, i){
+    var row = sel.closest('tr');
+    var inp = row ? row.querySelector('input[data-ph]') : null;
+    if(inp){
+      var ph = inp.getAttribute('data-ph');
+      if(!body['phase_'+ph]) body['phase_'+ph] = {};
+      body['phase_'+ph]['status'] = sel.value;
+    }
+  });
+  // Flatten phase objects
+  var flat = {};
+  Object.keys(body).forEach(function(k){
+    if(typeof body[k] === 'object' && body[k] !== null){
+      flat[k] = JSON.stringify(body[k]);
+    } else { flat[k] = body[k]; }
+  });
+  try{
+    await fetch('/api/onepager/save', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(flat)});
+    var msg = document.getElementById('opSavedMsg');
+    msg.textContent = '✓ Saved ' + new Date().toLocaleTimeString();
+    setTimeout(function(){ msg.textContent = ''; }, 3000);
+  }catch(e){ alert('Save failed: '+e.message); }
+}
+
+function opExportPDF(){
+  var el = document.getElementById('onepager');
+  if(!el){ alert('Cannot find section'); return; }
+  // Use print API
+  var orig = document.title;
+  document.title = _opData.project_name ? _opData.project_name + ' — One Pager' : 'One Pager';
+  var style = document.createElement('style');
+  style.id = '_opPrintStyle';
+  style.textContent = '@media print { body > * { display:none!important; } #onepager { display:block!important; } .op-save-bar button{display:none;} nav,header,.main-nav,.tabs-bar{display:none!important;} }';
+  document.head.appendChild(style);
+  window.print();
+  setTimeout(function(){ document.title = orig; var s=document.getElementById('_opPrintStyle'); if(s) s.remove(); }, 1000);
+}
+
+// Expose load function
+window.loadOnepager = function(){
+  // Load Chart.js if not loaded
+  if(typeof Chart === 'undefined'){
+    var s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js';
+    s.onload = opLoad;
+    document.head.appendChild(s);
+  } else {
+    opLoad();
+  }
+};
+
+// Auto-update chart when variance data changes
+var _origUpdateProfKPIs = window._overviewUpdateProfKPIs;
+window._overviewUpdateProfKPIs = function(phaseKey){
+  if(_origUpdateProfKPIs) _origUpdateProfKPIs(phaseKey);
+  // If one pager tab is visible, update chart
+  var op = document.getElementById('onepager');
+  if(op && op.classList.contains('active')) setTimeout(opUpdateChart, 300);
+};
+
+})();
+</script>
+</section>
