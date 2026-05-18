@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Portfolio Summary — Envnt PMO</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Inter',sans-serif;background:#F0F4F8;color:#1E293B;min-height:100vh;}
+.nav{background:#1B2A4E;padding:0 28px;display:flex;align-items:center;justify-content:space-between;height:54px;position:sticky;top:0;z-index:100;}
+.nav-logo{font-size:15px;font-weight:800;color:#fff;letter-spacing:-.3px;}
+.nav-sep{width:1px;height:18px;background:rgba(255,255,255,.15);margin:0 14px;}
+.nav-title{font-size:12px;color:rgba(255,255,255,.45);font-weight:500;}
+.nav-btn{padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid rgba(255,255,255,.2);color:rgba(255,255,255,.8);background:transparent;text-decoration:none;display:inline-block;transition:background .15s;}
+.nav-btn:hover{background:rgba(255,255,255,.1);}
+.wrap{max-width:1600px;margin:0 auto;padding:24px 20px;}
+.hrow{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:10px;}
+.hrow h1{font-size:20px;font-weight:700;color:#1B2A4E;}
+.hrow p{font-size:12px;color:#64748B;margin-top:3px;}
+.card{background:#fff;border:1px solid #E2E8F0;border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(27,42,78,.05);}
+.card-head{background:#1B2A4E;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;}
+.card-head h2{font-size:13px;font-weight:700;color:#fff;}
+.card-head span{font-size:10px;color:rgba(255,255,255,.45);}
+.tbl-wrap{overflow-x:auto;}
+table{width:100%;border-collapse:collapse;font-size:12px;}
+/* group header */
+thead tr.grp th{padding:5px 6px;font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;text-align:center;}
+th.g-blank{background:transparent;width:185px;}
+th.g-fin{background:#1B2A4E;color:#CADCFC;}
+th.g-md{background:#14532D;color:#BBF7D0;}
+th.g-pct{background:#312E81;color:#C7D2FE;}
+th.g-dt{background:#7C2D12;color:#FED7AA;}
+/* sub headers */
+thead tr.sub th{padding:6px 8px;font-size:7.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#64748B;background:#F8FAFC;text-align:right;border-bottom:1px solid #E2E8F0;white-space:nowrap;}
+thead tr.sub th:first-child{text-align:left;}
+/* body */
+tbody tr{border-bottom:1px solid #F1F5F9;}
+tbody tr:last-child{border-bottom:none;}
+tbody tr:hover td{background:#FAFBFD!important;}
+tbody td{padding:12px 8px;text-align:right;border-left:1px solid #F5F7FA;vertical-align:middle;}
+tbody td:first-child{text-align:left;border-left:none;padding-left:20px;}
+tbody td:last-child{padding-right:20px;}
+/* footer */
+tfoot td{background:#0F172A;padding:11px 8px;font-size:11px;font-weight:700;color:#93C5FD;text-align:right;border:none;}
+tfoot td:first-child{text-align:left;color:#fff;padding-left:20px;}
+tfoot td.red{color:#FCA5A5;}
+.ps-loading{text-align:center;padding:60px 20px;color:#94A3B8;font-size:14px;}
+</style>
+</head>
+<body>
+<nav class="nav">
+  <div style="display:flex;align-items:center;">
+    <span class="nav-logo">envnt.</span>
+    <span class="nav-sep"></span>
+    <span class="nav-title">Portfolio Summary</span>
+  </div>
+  <div style="display:flex;gap:10px;">
+    <a href="/projects" class="nav-btn">← Projects</a>
+    <a href="/manage"   class="nav-btn">Manage</a>
+  </div>
+</nav>
+
+<div class="wrap">
+  <div class="hrow">
+    <div>
+      <h1>Portfolio Overview</h1>
+      <p>All projects with variance data — sorted by Total Revenue</p>
+    </div>
+    <div style="font-size:10px;color:#94A3B8;" id="psDate"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <h2>All Projects</h2>
+      <span id="psSubtitle">Loading…</span>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr class="grp">
+            <th class="g-blank"></th>
+            <th class="g-fin" colspan="6">Financials (SAR)</th>
+            <th class="g-md"  colspan="3">Man-Days</th>
+            <th class="g-pct" colspan="2">% Performance</th>
+            <th class="g-dt"  colspan="3">Dates</th>
+          </tr>
+          <tr class="sub">
+            <th style="text-align:left;">Project</th>
+            <th>Revenue</th><th>License</th><th>Curr. Cost</th>
+            <th>EAC</th><th>Issued</th><th>Collected</th>
+            <th>Planned</th><th>Actual</th><th>EAC</th>
+            <th>Completion</th><th>Exp. Overrun</th>
+            <th>Start</th><th>Planned End</th><th>Expected End</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"><tr><td colspan="15" class="ps-loading">Loading…</td></tr></tbody>
+        <tfoot id="tfoot"></tfoot>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+var NAV='#1B2A4E';
+function fS(v){
+  if(!v||v===0) return '<span style="color:#CBD5E1;">—</span>';
+  var n=Math.abs(v),s;
+  if(n>=1e9) s=(n/1e9).toFixed(2)+'B';
+  else if(n>=1e6) s=(n/1e6).toFixed(2)+'M';
+  else if(n>=1e3) s=Math.round(n/1e3)+'K';
+  else s=Math.round(n).toLocaleString();
+  return '<span style="font-size:13px;font-weight:700;color:'+NAV+';">'+(v<0?'-':'')+s+'</span>';
+}
+function fD(v,red){
+  if(!v) return '<span style="color:#CBD5E1;font-size:9px;">—</span>';
+  return '<span style="font-size:9px;font-weight:600;color:'+(red?'#DC2626':NAV)+';">'+v+'</span>';
+}
+function pctCell(pct){
+  if(!pct||pct===0) return '<span style="color:#CBD5E1;">—</span>';
+  var w=Math.min(pct,100);
+  return '<div style="font-size:11px;font-weight:700;color:'+NAV+';margin-bottom:3px;">'+pct.toFixed(1)+'%</div>'
+        +'<div style="background:#E2E8F0;border-radius:2px;height:3px;min-width:50px;">'
+        +'<div style="height:3px;border-radius:2px;background:'+NAV+';width:'+w+'%;"></div></div>';
+}
+function esc(s){ return (s||'').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+async function loadSummary(){
+  try{
+    var resp=await fetch('/api/summary');
+    var data=await resp.json();
+    if(!data.ok){ showErr(data.error||'Failed'); return; }
+    var projects=data.projects||[];
+    document.getElementById('psSubtitle').textContent=projects.length+' projects with data';
+    document.getElementById('psDate').textContent='Generated '+new Date().toLocaleString();
+    if(!projects.length){
+      document.getElementById('tbody').innerHTML='<tr><td colspan="15" class="ps-loading">No projects with variance data found.</td></tr>';
+      return;
+    }
+    var totRev=0,totCost=0,totEac=0,totIss=0,totCol=0,totOvr=0;
+    projects.forEach(function(p){ totRev+=p.total_revenue||0; totCost+=p.current_cost||0; totEac+=p.eac||0; totIss+=p.total_issued||0; totCol+=p.collected||0; totOvr+=p.overrun||0; });
+
+    document.getElementById('tbody').innerHTML=projects.map(function(p,i){
+      var bg=i%2===0?'#fff':'#F8FAFC';
+      var rc=i<3?'#D4560A':'#CBD5E1';
+      var over=p.overrun>0?'<span style="font-size:12px;font-weight:700;color:#DC2626;">+'+((p.overrun/1e6).toFixed(2))+'M</span>':'<span style="color:#CBD5E1;">—</span>';
+      return '<tr>'
+        +'<td style="background:'+bg+';padding:12px 20px;white-space:nowrap;">'
+          +'<div style="display:flex;align-items:flex-start;gap:8px;">'
+            +'<span style="font-size:20px;font-weight:800;line-height:1;color:'+rc+';min-width:28px;">'+String(i+1).padStart(2,'0')+'</span>'
+            +'<div>'
+              +'<div style="font-size:11.5px;font-weight:700;color:'+NAV+';line-height:1.3;">'+esc(p.name)+'</div>'
+              +'<div style="font-size:9px;color:#64748B;margin-top:1px;">'+esc(p.pm||'—')+'</div>'
+              +(p.latest_month?'<div style="font-size:8px;color:#94A3B8;background:#F1F5F9;border-radius:3px;padding:1px 5px;display:inline-block;margin-top:3px;">as of '+p.latest_month.slice(0,7)+'</div>':'')
+            +'</div>'
+          +'</div>'
+        +'</td>'
+        +'<td style="background:'+bg+';">'+fS(p.total_revenue)+'</td>'
+        +'<td style="background:'+bg+';"><span style="color:#CBD5E1;">—</span></td>'
+        +'<td style="background:'+bg+';">'+fS(p.current_cost)+'</td>'
+        +'<td style="background:'+bg+';">'+fS(p.eac)+'</td>'
+        +'<td style="background:'+bg+';">'+fS(p.total_issued)+'</td>'
+        +'<td style="background:'+bg+';">'+fS(p.collected)+'</td>'
+        +'<td style="background:'+bg+';"><span style="color:#CBD5E1;">—</span></td>'
+        +'<td style="background:'+bg+';"><span style="color:#CBD5E1;">—</span></td>'
+        +'<td style="background:'+bg+';"><span style="color:#CBD5E1;">—</span></td>'
+        +'<td style="background:'+bg+';">'+pctCell(p.completion_pct)+'</td>'
+        +'<td style="background:'+bg+';">'+over+'</td>'
+        +'<td style="background:'+bg+';">'+fD(p.date_start,false)+'</td>'
+        +'<td style="background:'+bg+';">'+fD(p.end_date,false)+'</td>'
+        +'<td style="background:'+bg+';padding-right:20px;">'+fD(p.expected_end,true)+'</td>'
+        +'</tr>';
+    }).join('');
+
+    function fT(v){ if(!v||v===0) return '—'; var n=Math.abs(v); return (v<0?'-':'')+(n>=1e6?(n/1e6).toFixed(2)+'M':Math.round(n/1e3)+'K'); }
+    document.getElementById('tfoot').innerHTML='<tr>'
+      +'<td>TOTAL</td>'
+      +'<td>'+fT(totRev)+'</td><td>—</td><td>'+fT(totCost)+'</td><td>'+fT(totEac)+'</td><td>'+fT(totIss)+'</td><td>'+fT(totCol)+'</td>'
+      +'<td>—</td><td>—</td><td>—</td><td>—</td>'
+      +'<td class="red">+'+fT(totOvr)+'</td>'
+      +'<td>—</td><td>—</td><td>—</td>'
+      +'</tr>';
+  }catch(e){ showErr(e.message); }
+}
+function showErr(msg){
+  document.getElementById('tbody').innerHTML='<tr><td colspan="15" class="ps-loading" style="color:#DC2626;">'+msg+'</td></tr>';
+  document.getElementById('psSubtitle').textContent='Error';
+}
+loadSummary();
+</script>
+</body>
+</html>
