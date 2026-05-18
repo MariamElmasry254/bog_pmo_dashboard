@@ -192,9 +192,32 @@ async function opLoad(){
     }
     opBuildInvoices();
   }catch(e){}
-  // Try chart now, retry after variance loads
-  setTimeout(opBuildChart, 600);
-  setTimeout(opBuildChart, 3000); // retry after variance auto-load
+  // If variance data missing, load it then build chart
+  var _isBog2=!window.AppState||!AppState._overviewData||AppState._overviewData.is_bog!==false;
+  var _phs=_isBog2?['development','consultation']:['services','support'];
+  var _hasData=window.AppState&&AppState._varianceMonthData&&_phs.some(function(ph){return (AppState._varianceMonthData[ph]||[]).length>0;});
+  if(_hasData){
+    setTimeout(opBuildChart, 300);
+  } else {
+    // Switch variance tabs silently to load data, then come back
+    setTimeout(async function(){
+      try{
+        for(var _i=0;_i<_phs.length;_i++){
+          if(window.switchSubTab) await switchSubTab(_phs[_i]);
+          await new Promise(function(r){setTimeout(r,800);});
+        }
+      }catch(e){}
+      // Return to one pager
+      document.querySelectorAll('.exec-tab').forEach(function(b){b.classList.remove('active');});
+      document.querySelectorAll('.tab-panel').forEach(function(p){p.classList.remove('active');});
+      var _opBtn=document.querySelector('.exec-tab[data-tab="onepager"]');
+      var _opPan=document.getElementById('onepager');
+      if(_opBtn) _opBtn.classList.add('active');
+      if(_opPan){_opPan.classList.add('active');_opPan.style.display='block';}
+      setTimeout(opBuildChart,300);
+      setTimeout(opBuildInvoices,300);
+    },300);
+  }
 }
 
 function opRender(d){
