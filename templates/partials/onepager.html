@@ -62,6 +62,7 @@
   </div>
   <div style="display:flex;gap:8px;">
     <button onclick="opExportPDF()" style="padding:6px 14px;border:1px solid var(--border);border-radius:6px;background:var(--bg-card);cursor:pointer;font-size:12px;font-weight:600;color:var(--text);">Export PDF</button>
+    <button onclick="opExportPPTX()" id="opPptxBtn" style="padding:6px 14px;border:1px solid #7C3AED;border-radius:6px;background:#F5F3FF;cursor:pointer;font-size:12px;font-weight:600;color:#7C3AED;">Export PPTX</button>
     <button onclick="opSave()" style="padding:6px 14px;border:none;border-radius:6px;background:#1B2A4E;color:white;cursor:pointer;font-size:12px;font-weight:600;">Save changes</button>
   </div>
 </div>
@@ -481,8 +482,21 @@ window.opSave=async function(){
 };
 
 window.opExportPDF=function(){
-  // ── Snapshot editable inputs → plain text for print ──────────────
-  var snapshots=[]; // {el, parent, placeholder}
+  // ── 1. Convert canvas → <img> BEFORE cloning (canvas data lost in innerHTML clone) ──
+  var canvasSnaps=[];
+  document.querySelectorAll('#onepager canvas').forEach(function(cv){
+    try{
+      var img=document.createElement('img');
+      img.src=cv.toDataURL('image/png');
+      img.style.cssText='width:100%;height:auto;display:block;';
+      cv.parentNode.insertBefore(img,cv);
+      cv.style.display='none';
+      canvasSnaps.push({cv:cv,img:img});
+    }catch(e){}
+  });
+
+  // ── 2. Snapshot inputs → spans ────────────────────────────────────
+  var snapshots=[];
   document.querySelectorAll('#onepager input.op-in, #onepager textarea').forEach(function(el){
     var val=el.value||el.placeholder||'';
     var span=document.createElement('span');
@@ -493,7 +507,8 @@ window.opExportPDF=function(){
     el.style.display='none';
     snapshots.push({el:el,span:span});
   });
-  // Snapshot selects (status badges) → span with class
+
+  // ── 3. Snapshot selects → spans ───────────────────────────────────
   var selSnaps=[];
   document.querySelectorAll('#onepager select.op-st').forEach(function(sel){
     var labels={ontrack:'On Track',concern:'Concern',delayed:'Delayed',onhold:'On Hold'};
@@ -505,28 +520,141 @@ window.opExportPDF=function(){
     selSnaps.push({sel:sel,span:span});
   });
 
-  // ── Build isolated print root ─────────────────────────────────────
+  // ── 4. Clone into isolated print root ────────────────────────────
   var src=document.getElementById('onepager');
   var root=document.createElement('div');
   root.id='op-print-root';
   root.style.cssText='position:fixed;top:0;left:0;width:100%;background:#fff;z-index:99999;padding:16px 20px;box-sizing:border-box;';
   root.innerHTML=src.innerHTML;
-  // Remove the top bar (Export / Save buttons) from print copy
   var bar=root.querySelector('.op-bar');
   if(bar) bar.style.display='none';
-  // Remove script tags from clone
-  root.querySelectorAll('script,style').forEach(function(s){s.remove();});
+  root.querySelectorAll('script,style,canvas').forEach(function(s){s.remove();});
   document.body.appendChild(root);
 
-  // ── Trigger print then clean up ───────────────────────────────────
+  // ── 5. Print then restore ─────────────────────────────────────────
   setTimeout(function(){
     window.print();
-    // Restore inputs
+    canvasSnaps.forEach(function(s){ s.cv.style.display=''; s.img.remove(); });
     snapshots.forEach(function(s){ s.el.style.display=''; s.span.remove(); });
     selSnaps.forEach(function(s){ s.sel.style.display=''; s.span.remove(); });
-    // Remove print root after dialog closes
     setTimeout(function(){ if(root.parentNode) root.parentNode.removeChild(root); },500);
-  },120);
+  },150);
+};
+
+window.opExportPPTX=async function(){
+  var btn=document.getElementById('opPptxBtn');
+  if(btn){btn.disabled=true;btn.textContent='Building…';}
+
+  // ── Collect all data from AppState + DOM ──────────────────────────
+  var isBog=!window.AppState||!AppState._overviewData||AppState._overviewData.is_bog!==false;
+  var phs=isBog?['development','consultation']:['services','support'];
+
+  function getLastMonth(ph){
+    if(!window.AppState||!AppState._varianceMonthData) return null;
+    var arr=AppState._varianceMonthData[ph]||[];
+    return arr.length?arr[arr.length-1]:null;
+  }
+
+  // Phases rows
+  var phaseRows=phs.map(function(ph){
+    var lm=getLastMonth(ph)||{};
+    var row=document.querySelector('#opPhasesBody tr:nth-child('+(phs.indexOf(ph)+1)+')');
+    var statusSel=row&&row.querySelector('select.op-st');
+    var plannedInp=row&&row.querySelector('input[data-f="planned_date"]');
+    var expectedInp=row&&row.querySelector('input[data-f="expected_date"]');
+    return {
+      name:ph.charAt(0).toUpperCase()+ph.slice(1),
+      est_mds:lm.totalEstMDs||0, actual_mds:lm.actualMDs||0,
+      pct_done:lm.completionPct||0,
+      planned_date:(plannedInp&&plannedInp.value)||'—',
+      expected_date:(expectedInp&&expectedInp.value)||'—',
+      status:(statusSel&&statusSel.value)||'ontrack'
+    };
+  });
+
+  // Budget rows
+  var budgetRows=phs.map(function(ph){
+    var lm=getLastMonth(ph)||{};
+    return {
+      name:ph.charAt(0).toUpperCase()+ph.slice(1),
+      revenue:lm.totalRevSAR||0, plan_cost:lm.totalEstCostSAR||0,
+      curr_cost:lm.currentCostSAR||0, profit:lm.profitAtComp||0,
+      profit_pct:lm.profitAtCompPct||0, rem_mds:lm.remainingMDs||0
+    };
+  });
+
+  // Invoice rows
+  var directInvs=(window.AppState&&AppState._directInvoicesData)||[];
+  var collByPh={};
+  phs.forEach(function(ph){collByPh[ph]=0;});
+  directInvs.forEach(function(inv){
+    if(['paid','partial','in_payment'].indexOf(inv.payment_state)<0) return;
+    if(inv.phase in collByPh) collByPh[inv.phase]+=parseFloat(inv.amount_untaxed||0);
+  });
+  var invoiceRows=phs.map(function(ph){
+    var lm=getLastMonth(ph)||{};
+    return { name:ph.charAt(0).toUpperCase()+ph.slice(1), vi:lm.accVI||0, issued:lm.issuedUpToMonth||0, collected:collByPh[ph]||0 };
+  });
+
+  // Chart data
+  var allMonths=new Set();
+  var byPh={};
+  phs.forEach(function(ph){
+    byPh[ph]={};
+    ((window.AppState&&AppState._varianceMonthData&&AppState._varianceMonthData[ph])||[]).forEach(function(m){
+      allMonths.add(m.month); byPh[ph][m.month]=m;
+    });
+  });
+  var months=Array.from(allMonths).sort();
+  var chartCost=[],chartEst=[],chartProfit=[],chartVI=[];
+  months.forEach(function(mk){
+    var c=0,e=0,p=0,v=0;
+    phs.forEach(function(ph){
+      var m=(byPh[ph]||{})[mk]||{};
+      c+=m.currentCostSAR||0; e+=m.estCostToComplete||0;
+      p+=m.profitAtComp||0; v+=(m.accVI||0)+(m.issuedUpToMonth||0);
+    });
+    chartCost.push(Math.round(c)); chartEst.push(Math.round(e));
+    chartProfit.push(Math.round(p)); chartVI.push(Math.round(v));
+  });
+
+  var body={
+    project_name: document.getElementById('opProjName').textContent||'Project',
+    pm_name:      document.getElementById('opPM').textContent||'',
+    start_date:   document.getElementById('opStart').textContent||'',
+    planned_end:  document.getElementById('opPlannedEnd').textContent||'',
+    expected_end: document.getElementById('opExpectedEnd').value||'',
+    contract:     document.getElementById('opContract').value||'',
+    market:       document.getElementById('opMarket').value||'',
+    team_count:   document.getElementById('opTeamCount').textContent||'',
+    team_month:   document.getElementById('opTeamMonth').textContent||'',
+    total_pct:    document.getElementById('opTotalPct').textContent||'',
+    notes:        document.getElementById('opNotes').value||'',
+    phases:       phaseRows,
+    budget_rows:  budgetRows,
+    invoice_rows: invoiceRows,
+    chart_months: months.map(function(m){return m.slice(0,7);}),
+    chart_cost:   chartCost, chart_est: chartEst,
+    chart_profit: chartProfit, chart_vi: chartVI
+  };
+
+  try{
+    var resp=await fetch('/api/onepager/export-pptx',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(body)
+    });
+    if(!resp.ok){ var e=await resp.json(); alert('PPTX error: '+(e.error||resp.status)); return; }
+    var blob=await resp.blob();
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a');
+    a.href=url;
+    a.download=(body.project_name||'Project').replace(/\s+/g,'_')+'_OnePager.pptx';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){URL.revokeObjectURL(url);},2000);
+  }catch(e){ alert('Export failed: '+e.message); }
+  finally{
+    if(btn){btn.disabled=false;btn.textContent='Export PPTX';}
+  }
 };
 
 window.loadOnepager=opLoad;
