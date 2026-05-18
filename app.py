@@ -7246,6 +7246,8 @@ def api_project_employees_manual_add():
 @login_required
 def api_project_employees_manual_delete(full_name):
     """Delete a manual employee by full_name."""
+    import urllib.parse
+    full_name = urllib.parse.unquote(full_name)
     pfx = active_db_prefix()
     ns = f'{pfx}_manual_employees' if pfx else 'manual_employees'
     key = full_name.lower().replace(' ', '_')
@@ -7291,19 +7293,22 @@ def api_project_employees():
     pfx = active_db_prefix()
     ns = f'{pfx}_manual_employees' if pfx else 'manual_employees'
     manual_map = db.get_namespace_overrides(ns, '') or {}
+    positions_map = {p['name']: p for p in get_all_positions(db)}
     for key, val in manual_map.items():
         if not isinstance(val, dict): continue
         fn = val.get('full_name', '')
         if not fn: continue
+        pos_name = val.get('position', '')
+        pos_data = positions_map.get(pos_name, {})
         employees.append({
             'name':         fn,
             'full_name':    fn,
-            'position':     val.get('position'),
+            'position':     pos_name,
             'source':       'override',
             'source_type':  'manual',
             'resigned_date':val.get('resigned_date', ''),
             'note':         val.get('note', ''),
-            'hour_rate':    0,
+            'hour_rate':    pos_data.get('hour_rate', 0) or 0,
         })
 
     return jsonify({'employees': employees, 'connected': True, 'count': len(employees)})
