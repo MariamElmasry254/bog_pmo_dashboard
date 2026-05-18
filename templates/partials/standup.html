@@ -166,12 +166,14 @@ function renderMembers() {
     var c    = colorMap[m.name];
     var act  = m.name===selName?' active':'';
     var dot  = m.logged_yesterday?'logged':'absent';
-    var yCnt = (m.yesterday||[]).length;
-    var iCnt = (m.inprogress||[]).length;
+    var yCnt  = (m.yesterday||[]).length;
+    var iCnt  = (m.inprogress||[]).length;
+    var totHrs = (m.yesterday||[]).reduce(function(s,t){return s+(t.hrs||0);},0);
+    var hrsStr = totHrs>0 ? ' &nbsp;<span style="color:#1B2A4E;font-weight:600;">'+totHrs.toFixed(1)+'h</span>' : '';
     html += '<div class="mem-item'+act+'" data-idx="'+i+'" onclick="selectMember('+i+')">'
       +'<div class="av" style="background:'+c.bg+';color:'+c.c+';">'+initials(m.name)+'</div>'
       +'<div class="mem-info"><div class="mem-name">'+esc(strip(m.name))+'</div>'
-      +'<div class="mem-sub">'+yCnt+' yesterday &middot; '+iCnt+' open</div></div>'
+      +'<div class="mem-sub">'+yCnt+' yesterday &middot; '+iCnt+' open'+hrsStr+'</div></div>'
       +'<div class="mem-dot '+dot+'"></div></div>';
   });
   document.getElementById('membersList').innerHTML=html;
