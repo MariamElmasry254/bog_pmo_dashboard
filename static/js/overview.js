@@ -795,7 +795,7 @@ async function _loadPhaseCostKPIs() {
     }
     const _avg = _cc > 0 ? Math.round(_tc / _cc) : 0;
     ['kpiCostAsOf','kpiEACAsOf'].forEach(id => { const el=document.getElementById(id); if(el) el.textContent = _lmk ? 'as of '+_lmk : ''; });
-    ['kpiCostPct','kpiEACPct'].forEach(id => { const el=document.getElementById(id); if(el) el.textContent = _avg > 0 ? _avg+'% complete' : ''; });
+    // % complete intentionally not shown under Current Cost / EAC cards
     if (AppState._latestProfData) {
       Object.keys(AppState._latestProfData).forEach(ph => _saveKPISnapshot(ph, AppState._latestProfData[ph]));
     }
