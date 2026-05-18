@@ -1,68 +1,69 @@
 <section class="tab-panel" id="onepager">
 <style>
 #onepager{padding:20px 24px;}
-.op-save-bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;}
-.op-chip-row{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start;}
-.op-chip{background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:7px 14px;text-align:center;min-width:80px;}
-.op-chip-lbl{font-size:9px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;}
-.op-chip-val{font-size:16px;font-weight:700;color:var(--text);}
+.op-bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;}
+.op-chip-row{display:flex;gap:8px;flex-wrap:wrap;}
+.op-chip{background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:7px 14px;text-align:center;}
+.op-lbl{font-size:9px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;}
+.op-val{font-size:16px;font-weight:700;color:var(--text);}
 .op-card{background:var(--bg-card);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:12px;}
-.op-ch{background:#1B2A4E;padding:8px 12px;font-size:11px;font-weight:700;color:white;text-transform:uppercase;letter-spacing:.5px;}
-.op-ch.green{background:#1D7A4A;} .op-ch.amber{background:#D4560A;}
-.op-tbl{width:100%;border-collapse:collapse;font-size:11px;}
-.op-tbl th{padding:6px 10px;background:var(--bg-subtle);color:var(--text-muted);font-weight:600;font-size:10px;text-transform:uppercase;}
-.op-tbl td{padding:7px 10px;border-bottom:1px solid var(--border-light);color:var(--text);}
-.op-tbl tr:last-child td{border-bottom:none;}
-.op-tbl tbody tr:nth-child(even) td{background:var(--bg-subtle);}
-.op-tbl tfoot td{background:#1B2A4E!important;color:white;font-weight:700;}
-.op-st{display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;cursor:pointer;}
+.op-ch{padding:8px 12px;font-size:11px;font-weight:700;color:white;text-transform:uppercase;letter-spacing:.5px;background:#1B2A4E;}
+.op-ch.g{background:#1D7A4A;} .op-ch.a{background:#D4560A;}
+.op-t{width:100%;border-collapse:collapse;font-size:11px;}
+.op-t th{padding:6px 10px;background:var(--bg-subtle);color:var(--text-muted);font-weight:600;font-size:10px;text-transform:uppercase;}
+.op-t td{padding:7px 10px;border-bottom:1px solid var(--border-light);color:var(--text);}
+.op-t tr:last-child td{border-bottom:none;}
+.op-t tbody tr:nth-child(even) td{background:var(--bg-subtle);}
+.op-t tfoot td{background:#1B2A4E!important;color:white!important;font-weight:700;}
+.op-st{display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;cursor:pointer;border:none;}
 .op-st.ontrack{background:#D1FAE5;color:#065F46;} .op-st.concern{background:#FEF3C7;color:#92400E;}
 .op-st.delayed{background:#FEE2E2;color:#991B1B;} .op-st.onhold{background:#F1F5F9;color:#64748B;border:1px solid #CBD5E1;}
 .op-in{border:none;background:transparent;font-size:11px;font-family:inherit;color:var(--text);width:100%;outline:none;padding:0;}
 .op-in:focus{border-bottom:1px solid var(--blue);}
 .op-grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;}
-.op-notes-area{border:1px solid var(--border);border-radius:8px;padding:12px 14px;background:var(--bg-subtle);}
-.op-notes-area textarea{width:100%;border:none;background:transparent;font-size:12px;font-family:inherit;color:var(--text);resize:vertical;min-height:60px;outline:none;box-sizing:border-box;}
+.op-notes-a{border:1px solid var(--border);border-radius:8px;padding:12px 14px;background:var(--bg-subtle);margin-bottom:12px;}
+.op-notes-a textarea{width:100%;border:none;background:transparent;font-size:12px;font-family:inherit;color:var(--text);resize:vertical;min-height:60px;outline:none;box-sizing:border-box;}
 </style>
 
-<div class="op-save-bar">
-  <div style="font-size:15px;font-weight:700;color:var(--navy);">One Pager <span id="opSavedMsg" style="font-size:11px;font-weight:400;color:var(--green);margin-left:8px;"></span></div>
+<div class="op-bar">
+  <div style="font-size:15px;font-weight:700;color:var(--navy);">One Pager
+    <span id="opSavedMsg" style="font-size:11px;font-weight:400;color:var(--green);margin-left:8px;"></span>
+  </div>
   <div style="display:flex;gap:8px;">
     <button onclick="opExportPDF()" style="padding:6px 14px;border:1px solid var(--border);border-radius:6px;background:var(--bg-card);cursor:pointer;font-size:12px;font-weight:600;color:var(--text);">Export PDF</button>
     <button onclick="opSave()" style="padding:6px 14px;border:none;border-radius:6px;background:#1B2A4E;color:white;cursor:pointer;font-size:12px;font-weight:600;">Save changes</button>
   </div>
 </div>
 
-<!-- Header -->
+<!-- Header info -->
 <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;margin-bottom:14px;">
   <div>
     <div style="font-size:20px;font-weight:700;color:var(--navy);" id="opProjName">—</div>
     <div style="font-size:12px;color:var(--text-muted);margin-top:3px;">
       PM: <span id="opPM">—</span>
-      <span style="margin:0 8px;opacity:.3;">|</span>
-      Start: <span id="opStart">—</span>
+      <span style="margin:0 8px;opacity:.3;">|</span>Start: <span id="opStart">—</span>
     </div>
   </div>
   <div class="op-chip-row">
-    <div class="op-chip"><div class="op-chip-lbl">Contract</div><input class="op-in" id="opContract" value="Fixed scope" style="text-align:center;font-size:12px;font-weight:600;width:90px;"></div>
-    <div class="op-chip"><div class="op-chip-lbl">Market Unit</div><input class="op-in" id="opMarket" value="—" style="text-align:center;font-size:12px;font-weight:600;width:70px;"></div>
-    <div class="op-chip"><div class="op-chip-lbl">Team (<span id="opTeamMonth">—</span>)</div><div class="op-chip-val" id="opTeamCount">—</div></div>
-    <div class="op-chip"><div class="op-chip-lbl">% Complete</div><div class="op-chip-val" id="opTotalPct" style="color:var(--blue);">—</div></div>
+    <div class="op-chip"><div class="op-lbl">Contract</div><input class="op-in" id="opContract" value="Fixed scope" style="text-align:center;font-size:12px;font-weight:600;width:90px;"></div>
+    <div class="op-chip"><div class="op-lbl">Market Unit</div><input class="op-in" id="opMarket" value="—" style="text-align:center;font-size:12px;font-weight:600;width:70px;"></div>
+    <div class="op-chip"><div class="op-lbl">Team (<span id="opTeamMonth">—</span>)</div><div class="op-val" id="opTeamCount">—</div></div>
+    <div class="op-chip"><div class="op-lbl">% Complete</div><div class="op-val" id="opTotalPct" style="color:var(--blue);">—</div></div>
   </div>
 </div>
 
 <!-- Dates -->
 <div class="op-grid2">
   <div class="op-card"><div class="op-ch">Planned completion</div><div style="padding:10px 14px;font-size:14px;font-weight:700;" id="opPlannedEnd">—</div></div>
-  <div class="op-card"><div class="op-ch amber">Expected completion <span style="font-size:9px;opacity:.7;">(editable)</span></div>
+  <div class="op-card"><div class="op-ch a">Expected completion</div>
     <div style="padding:10px 14px;"><input class="op-in" id="opExpectedEnd" placeholder="e.g. 2 Jul 2026" style="font-size:14px;font-weight:700;color:#DC2626;"></div>
   </div>
 </div>
 
-<!-- Phases -->
+<!-- Phases table -->
 <div class="op-card">
   <div class="op-ch">Phases</div>
-  <table class="op-tbl">
+  <table class="op-t">
     <thead><tr>
       <th style="text-align:left;">Phase</th>
       <th style="text-align:center;">Est. MDs</th>
@@ -76,78 +77,124 @@
   </table>
 </div>
 
-<!-- Budget + Chart -->
-<div style="display:grid;grid-template-columns:1.1fr 0.9fr;gap:12px;margin-bottom:12px;">
+<!-- Budget + Chart grid -->
+<div style="display:grid;grid-template-columns:1.15fr 0.85fr;gap:12px;margin-bottom:12px;">
   <div>
+    <!-- Budget -->
     <div class="op-card">
-      <div class="op-ch green">Budget (SAR)</div>
-      <table class="op-tbl">
+      <div class="op-ch g">Budget (SAR) — from last variance month</div>
+      <table class="op-t">
         <thead><tr>
-          <th style="text-align:left;"></th>
+          <th style="text-align:left;">Phase</th>
           <th style="text-align:right;">Revenue</th>
           <th style="text-align:right;">Plan. Cost</th>
           <th style="text-align:right;">Curr. Cost</th>
-          <th style="text-align:right;">Profit</th>
+          <th style="text-align:right;">Profit at Comp.</th>
+          <th style="text-align:center;">Profit %</th>
+          <th style="text-align:center;">Remaining MDs</th>
         </tr></thead>
         <tbody id="opBudgetBody"></tbody>
         <tfoot id="opBudgetFoot"></tfoot>
       </table>
     </div>
+    <!-- Invoices -->
     <div class="op-card" style="margin-top:0;">
-      <div class="op-ch">Invoices (SAR)</div>
-      <table class="op-tbl">
+      <div class="op-ch">Invoices (SAR) — from last variance month</div>
+      <table class="op-t">
         <thead><tr>
-          <th style="text-align:left;"></th>
-          <th style="text-align:right;">Virtual</th>
-          <th style="text-align:right;">Issued</th>
-          <th style="text-align:right;">Collected</th>
+          <th style="text-align:left;">Phase</th>
+          <th style="text-align:right;">Acc. Virtual Invoice</th>
+          <th style="text-align:right;">Total Issued</th>
+          <th style="text-align:right;">Collected (Paid/Partial)</th>
         </tr></thead>
         <tbody id="opInvBody"></tbody>
+        <tfoot id="opInvFoot"></tfoot>
       </table>
     </div>
   </div>
+
+  <!-- Chart -->
   <div class="op-card" style="display:flex;flex-direction:column;">
-    <div class="op-ch">Cost & Invoice trend (SAR)</div>
-    <div style="flex:1;padding:10px;min-height:220px;display:flex;flex-direction:column;justify-content:flex-end;">
+    <div class="op-ch">Monthly trend — from variance</div>
+    <div style="flex:1;padding:10px;min-height:240px;display:flex;flex-direction:column;justify-content:flex-end;">
       <canvas id="opChart"></canvas>
-      <div style="display:flex;gap:10px;justify-content:center;margin-top:8px;flex-wrap:wrap;">
-        <span style="font-size:10px;color:var(--text-muted);display:flex;align-items:center;gap:4px;"><span style="width:20px;height:3px;background:#1B2A4E;display:inline-block;border-radius:2px;"></span>Current Cost</span>
-        <span style="font-size:10px;color:var(--text-muted);display:flex;align-items:center;gap:4px;"><span style="width:20px;height:3px;background:#1D7A4A;display:inline-block;border-radius:2px;"></span>VI + Issued</span>
-        <span style="font-size:10px;color:var(--text-muted);display:flex;align-items:center;gap:4px;"><span style="width:14px;height:9px;background:rgba(27,42,78,0.15);display:inline-block;border-radius:2px;"></span>EAC</span>
+      <div style="display:flex;gap:8px;justify-content:center;margin-top:8px;flex-wrap:wrap;">
+        <span style="font-size:10px;color:var(--text-muted);display:flex;align-items:center;gap:3px;"><span style="width:16px;height:3px;background:#1B2A4E;display:inline-block;border-radius:2px;"></span>Curr. Cost</span>
+        <span style="font-size:10px;color:var(--text-muted);display:flex;align-items:center;gap:3px;"><span style="width:16px;height:3px;background:#D4560A;display:inline-block;border-radius:2px;border:1px dashed #D4560A;"></span>Est. to Complete</span>
+        <span style="font-size:10px;color:var(--text-muted);display:flex;align-items:center;gap:3px;"><span style="width:16px;height:3px;background:#1D7A4A;display:inline-block;border-radius:2px;"></span>Profit at Comp.</span>
+        <span style="font-size:10px;color:var(--text-muted);display:flex;align-items:center;gap:3px;"><span style="width:16px;height:3px;background:#7C3AED;display:inline-block;border-radius:2px;"></span>VI+Issued</span>
       </div>
     </div>
   </div>
 </div>
 
 <!-- Notes -->
-<div class="op-notes-area">
-  <div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Monthly notes / highlights</div>
+<div class="op-notes-a">
+  <div class="op-lbl" style="margin-bottom:6px;">Monthly notes / highlights</div>
   <textarea id="opNotes" placeholder="Add monthly notes, key highlights, risks…"></textarea>
 </div>
 
 <script>
 (function(){
-var _opChart=null, _opPhaseStatuses={};
+var _opChart=null;
 
-function fSAR(v){
-  if(!v||isNaN(v)||v===0) return '—';
+function fSAR(v,showDash){
+  if(showDash===undefined) showDash=true;
+  if(!v||isNaN(v)||v===0) return showDash?'—':'0';
   var n=Math.abs(v), s, sign=v<0?'-':'';
   if(n>=1000000) s=(n/1000000).toFixed(2)+'M';
   else if(n>=1000) s=Math.round(n/1000)+'K';
-  else s=Math.round(n)+'';
+  else s=Math.round(n).toLocaleString();
   return sign+s;
 }
 function fMD(v){ return (v&&v>0)?Math.round(v).toLocaleString():'—'; }
-function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function fPct(v){ return (v&&v>0)?v.toFixed(1)+'%':'—'; }
+function esc(s){ return (s||'').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function profColor(v){ return v>0?'color:var(--green)':'color:#DC2626'; }
+
+// Get last month data per phase from AppState._varianceMonthData
+function getLastMonth(ph){
+  if(!window.AppState||!AppState._varianceMonthData) return null;
+  var arr=AppState._varianceMonthData[ph]||[];
+  if(!arr.length) return null;
+  return arr[arr.length-1]; // last month = most recent with data
+}
+
+// Get collected amount from _salesInvoicesByPhase (paid + partial invoices)
+function getCollected(ph){
+  if(!window.AppState) return 0;
+  // From direct invoices cached in AppState
+  var directInv=(AppState._directInvoicesData||[]);
+  var tot=0;
+  directInv.forEach(function(inv){
+    if(inv.phase!==ph) return;
+    if(['paid','partial','in_payment'].indexOf(inv.payment_state)<0) return;
+    tot+=parseFloat(inv.amount_untaxed||0);
+  });
+  // Also from SO-linked invoices if available
+  return tot;
+}
 
 async function opLoad(){
+  // Fetch base data
   try{
-    var r=await fetch('/api/onepager');
-    var d=await r.json();
-    opRender(d);
-  }catch(e){ console.warn('onepager load:',e); }
-  // Load chart after variance data
-  setTimeout(opBuildChart, 800);
+    var r=await fetch('/api/onepager'); var d=await r.json(); opRender(d);
+  }catch(e){ console.warn('onepager:',e); }
+  // Also fetch direct invoices for collected amounts
+  try{
+    var sr=await fetch('/api/sales-orders'); var sd=await sr.json();
+    if(sd.direct_invoices) window.AppState._directInvoicesData=sd.direct_invoices;
+    else if(sd.orders){
+      // Extract invoices from orders
+      var invs=[];
+      (sd.orders||[]).forEach(function(o){ (o.lines||[]).forEach(function(l){ (l.line_invoices||[]).forEach(function(li){ invs.push(li); }); }); });
+      window.AppState._directInvoicesData=invs;
+    }
+    opBuildInvoices();
+  }catch(e){}
+  // Try chart now, retry after variance loads
+  setTimeout(opBuildChart, 600);
+  setTimeout(opBuildChart, 3000); // retry after variance auto-load
 }
 
 function opRender(d){
@@ -167,21 +214,26 @@ function opRender(d){
   var phases=d.phases||[], totalPct=0, cnt=0;
   var tbody=document.getElementById('opPhasesBody');
   tbody.innerHTML='';
-  phases.forEach(function(ph,i){
+  phases.forEach(function(ph){
     var mPh={}; try{ mPh=m['phase_'+ph.phase]?JSON.parse(m['phase_'+ph.phase]):{} }catch(e){}
-    var pct=ph.completion_pct||0;
+    // Get live data from AppState last month
+    var lm=getLastMonth(ph.phase)||{};
+    var pct=lm.completionPct||ph.completion_pct||0;
     if(pct>0){totalPct+=pct;cnt++;}
     var st=mPh.status||(pct>0?'ontrack':'onhold');
-    _opPhaseStatuses[ph.phase]=st;
-    var stSel='<select onchange="_opSetStatus(\''+ph.phase+'\',this)" style="border:none;background:transparent;font-size:10px;font-weight:700;cursor:pointer;" class="op-st '+st+'">'
-      +['ontrack','concern','delayed','onhold'].map(function(s){return '<option value="'+s+'"'+(s===st?' selected':'')+'>'+{ontrack:'On Track',concern:'Concern',delayed:'Delayed',onhold:'On Hold'}[s]+'</option>';}).join('')+'</select>';
-    tbody.innerHTML+='<tr><td style="font-weight:700;">'+ph.phase.charAt(0).toUpperCase()+ph.phase.slice(1)+'</td>'
-      +'<td style="text-align:center;">'+fMD(ph.budget_mds)+'</td>'
-      +'<td style="text-align:center;color:var(--green);">'+(pct>0?fMD(ph.budget_mds*(pct/100)):'—')+'</td>'
-      +'<td style="text-align:center;">'+(pct>0?pct.toFixed(1)+'%':'0%')+'</td>'
+    var stSel='<select onchange="this.className=\'op-st \'+this.value" style="border:none;background:transparent;font-size:10px;font-weight:700;cursor:pointer;" class="op-st '+st+'">'
+      +['ontrack','concern','delayed','onhold'].map(function(s){
+        return '<option value="'+s+'"'+(s===st?' selected':'')+'>'+{ontrack:'On Track',concern:'Concern',delayed:'Delayed',onhold:'On Hold'}[s]+'</option>';
+      }).join('')+'</select>';
+    tbody.innerHTML+='<tr>'
+      +'<td style="font-weight:700;">'+ph.phase.charAt(0).toUpperCase()+ph.phase.slice(1)+'</td>'
+      +'<td style="text-align:center;">'+fMD(lm.totalEstMDs||ph.budget_mds)+'</td>'
+      +'<td style="text-align:center;color:var(--green);">'+fMD(lm.actualMDs)+'</td>'
+      +'<td style="text-align:center;">'+fPct(pct)+'</td>'
       +'<td style="text-align:center;"><input class="op-in" data-ph="'+ph.phase+'" data-f="planned_date" value="'+esc(mPh.planned_date||'—')+'" style="width:90px;text-align:center;"></td>'
       +'<td style="text-align:center;"><input class="op-in" data-ph="'+ph.phase+'" data-f="expected_date" value="'+esc(mPh.expected_date||'—')+'" style="width:90px;text-align:center;color:#DC2626;"></td>'
-      +'<td style="text-align:center;">'+stSel+'</td></tr>';
+      +'<td style="text-align:center;">'+stSel+'</td>'
+      +'</tr>';
   });
   document.getElementById('opTotalPct').textContent=(cnt>0?Math.round(totalPct/cnt):'—')+'%';
 
@@ -189,94 +241,145 @@ function opRender(d){
   opBuildInvoices();
 }
 
-function opBuildBudget(phases,m){
+function opBuildBudget(phases){
   var tbody=document.getElementById('opBudgetBody');
   var tfoot=document.getElementById('opBudgetFoot');
   tbody.innerHTML=''; tfoot.innerHTML='';
-  var totR=0,totC=0,totCurr=0;
-  phases.forEach(function(ph,i){
-    var lp=(window.AppState&&AppState._latestProfData&&AppState._latestProfData[ph.phase])||{};
-    var rev=(window.AppState&&AppState._savedRevenue&&AppState._savedRevenue[ph.phase])||lp.totalRevSAR||ph.budget_rev_sar||0;
-    var cost=(window.AppState&&AppState._budgetFinalCost&&AppState._budgetFinalCost[ph.phase])||ph.budget_cost_sar||0;
-    var curr=lp.currentCostSAR||0;
-    var prof=rev-cost;
-    totR+=rev; totC+=cost; totCurr+=curr;
-    tbody.innerHTML+='<tr><td style="font-weight:600;">'+ph.phase.charAt(0).toUpperCase()+ph.phase.slice(1)+'</td>'
+  var totRev=0,totCost=0,totCurr=0,totProf=0;
+  phases.forEach(function(ph){
+    var lm=getLastMonth(ph.phase)||{};
+    var rev=lm.totalRevSAR||0;
+    var planCost=lm.totalEstCostSAR||0;
+    var curr=lm.currentCostSAR||0;
+    var profit=lm.profitAtComp||0;
+    var profPct=lm.profitAtCompPct||0;
+    var rem=lm.remainingMDs||0;
+    totRev+=rev; totCost+=planCost; totCurr+=curr; totProf+=profit;
+    tbody.innerHTML+='<tr>'
+      +'<td style="font-weight:600;">'+ph.phase.charAt(0).toUpperCase()+ph.phase.slice(1)+'</td>'
       +'<td style="text-align:right;">'+fSAR(rev)+'</td>'
-      +'<td style="text-align:right;">'+fSAR(cost)+'</td>'
+      +'<td style="text-align:right;">'+fSAR(planCost)+'</td>'
       +'<td style="text-align:right;">'+fSAR(curr)+'</td>'
-      +'<td style="text-align:right;color:'+(prof>=0?'var(--green)':'#DC2626')+';">'+fSAR(prof)+'</td></tr>';
+      +'<td style="text-align:right;'+profColor(profit)+';">'+fSAR(profit)+'</td>'
+      +'<td style="text-align:center;'+profColor(profPct)+';">'+fPct(profPct)+'</td>'
+      +'<td style="text-align:center;">'+fMD(rem)+'</td>'
+      +'</tr>';
   });
-  tfoot.innerHTML='<tr><td>Total</td><td style="text-align:right;">'+fSAR(totR)+'</td>'
-    +'<td style="text-align:right;">'+fSAR(totC)+'</td>'
+  tfoot.innerHTML='<tr>'
+    +'<td>Total</td>'
+    +'<td style="text-align:right;">'+fSAR(totRev)+'</td>'
+    +'<td style="text-align:right;">'+fSAR(totCost)+'</td>'
     +'<td style="text-align:right;">'+fSAR(totCurr)+'</td>'
-    +'<td style="text-align:right;">'+fSAR(totR-totC)+'</td></tr>';
+    +'<td style="text-align:right;">'+fSAR(totProf)+'</td>'
+    +'<td></td><td></td></tr>';
 }
 
 function opBuildInvoices(){
   var tbody=document.getElementById('opInvBody');
-  tbody.innerHTML='';
+  var tfoot=document.getElementById('opInvFoot');
+  tbody.innerHTML=''; tfoot.innerHTML='';
   if(!window.AppState||!AppState._overviewData){
     tbody.innerHTML='<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:12px;">Open Variance tab first</td></tr>'; return;
   }
   var isBog=AppState._overviewData.is_bog!==false;
   var phs=isBog?['development','consultation']:['services','support'];
-  var invCum=(AppState._invoiceCumulative)||{};
+  var invCum=AppState._invoiceCumulative||{};
+
+  // Build collected from direct invoices by phase
+  var collectedByPhase={};
+  var directInvs=AppState._directInvoicesData||[];
+  // Also check _salesInvoicesByPhase raw data
+  phs.forEach(function(ph){ collectedByPhase[ph]=0; });
+  directInvs.forEach(function(inv){
+    if(['paid','partial','in_payment'].indexOf(inv.payment_state)<0) return;
+    var ph=inv.phase;
+    if(ph in collectedByPhase) collectedByPhase[ph]+=parseFloat(inv.amount_untaxed||0);
+  });
+
+  var totVI=0,totIssued=0,totColl=0;
   phs.forEach(function(ph,i){
-    var cum=invCum[ph]||{};
-    var months=Object.keys(cum).sort();
-    var issued=months.length?cum[months[months.length-1]]:0;
-    var lp=(AppState._latestProfData&&AppState._latestProfData[ph])||{};
-    var vi=lp.accVI||(lp.recognizedRev?lp.recognizedRev-issued:0);
-    tbody.innerHTML+='<tr><td style="font-weight:600;">'+ph.charAt(0).toUpperCase()+ph.slice(1)+'</td>'
+    var lm=getLastMonth(ph)||{};
+    var vi=lm.accVI||0;               // Accumulative virtual invoice
+    var issued=lm.issuedUpToMonth||0; // Total issued cumulative
+    var coll=collectedByPhase[ph]||0;
+    totVI+=vi; totIssued+=issued; totColl+=coll;
+    tbody.innerHTML+='<tr>'
+      +'<td style="font-weight:600;">'+ph.charAt(0).toUpperCase()+ph.slice(1)+'</td>'
       +'<td style="text-align:right;">'+fSAR(vi)+'</td>'
       +'<td style="text-align:right;">'+fSAR(issued)+'</td>'
-      +'<td style="text-align:right;">'+fSAR(issued)+'</td></tr>';
+      +'<td style="text-align:right;">'+fSAR(coll)+'</td>'
+      +'</tr>';
   });
+  tfoot.innerHTML='<tr><td>Total</td>'
+    +'<td style="text-align:right;">'+fSAR(totVI)+'</td>'
+    +'<td style="text-align:right;">'+fSAR(totIssued)+'</td>'
+    +'<td style="text-align:right;">'+fSAR(totColl)+'</td>'
+    +'</tr>';
 }
 
 function opBuildChart(){
-  if(!window.AppState||!AppState._varianceMonthData) return;
+  if(!window.AppState||!AppState._varianceMonthData){
+    var canvas=document.getElementById('opChart');
+    if(canvas){ var ctx=canvas.getContext('2d'); ctx.clearRect(0,0,canvas.width,canvas.height); ctx.fillStyle='#94A3B8'; ctx.font='12px sans-serif'; ctx.textAlign='center'; ctx.fillText('Open Variance tab to load chart data',canvas.width/2,canvas.height/2||60); }
+    return;
+  }
   var isBog=!AppState._overviewData||AppState._overviewData.is_bog!==false;
   var phs=isBog?['development','consultation']:['services','support'];
+
+  // Collect all months from all phases
   var allMonths=new Set();
   var byPh={};
   phs.forEach(function(ph){
     byPh[ph]={};
-    (AppState._varianceMonthData[ph]||[]).forEach(function(m){ allMonths.add(m.month); byPh[ph][m.month]=m; });
+    (AppState._varianceMonthData[ph]||[]).forEach(function(m){
+      allMonths.add(m.month);
+      byPh[ph][m.month]=m;
+    });
   });
   var months=Array.from(allMonths).sort();
   if(months.length<2) return;
-  var costArr=[],viArr=[],eacArr=[];
+
+  // Aggregate per month across phases
+  var costArr=[],estComplArr=[],profArr=[],viIssuedArr=[];
   months.forEach(function(mk){
-    var cost=0,vi=0,eac=0;
+    var cost=0,estCompl=0,prof=0,viIssued=0;
     phs.forEach(function(ph){
       var m=(byPh[ph]||{})[mk]||{};
-      cost+=m.currentCostSAR||0;
-      vi+=(m.accVI||0)+(m.issuedUpToMonth||0);
-      eac+=m.estAtCompletion||0;
+      cost    += m.currentCostSAR||0;
+      estCompl+= m.estCostToComplete||0;  // estimated cost to complete
+      prof    += m.profitAtComp||0;       // profit at completion SAR
+      viIssued+= (m.accVI||0)+(m.issuedUpToMonth||0); // acc VI + issued
     });
-    costArr.push(Math.round(cost)); viArr.push(Math.round(vi)); eacArr.push(Math.round(eac));
+    costArr.push(Math.round(cost));
+    estComplArr.push(Math.round(estCompl));
+    profArr.push(Math.round(prof));
+    viIssuedArr.push(Math.round(viIssued));
   });
-  var labels=months.map(function(m){ return m.slice(0,7); });
+
   var canvas=document.getElementById('opChart'); if(!canvas) return;
   if(_opChart){ _opChart.destroy(); _opChart=null; }
 
-  // Load Chart.js if needed
   function buildChart(){
     var isDark=window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches;
     var gc=isDark?'rgba(255,255,255,0.08)':'rgba(0,0,0,0.07)';
     var lc=isDark?'rgba(255,255,255,0.45)':'rgba(0,0,0,0.4)';
     _opChart=new Chart(canvas.getContext('2d'),{
-      type:'bar',
-      data:{labels:labels,datasets:[
-        {type:'bar',label:'EAC',data:eacArr,backgroundColor:isDark?'rgba(255,255,255,0.1)':'rgba(27,42,78,0.15)',borderWidth:0,borderRadius:3,order:2},
-        {type:'line',label:'Current Cost',data:costArr,borderColor:'#1B2A4E',backgroundColor:'transparent',borderWidth:2,pointRadius:3,tension:0.3,order:1},
-        {type:'line',label:'VI+Issued',data:viArr,borderColor:'#1D7A4A',backgroundColor:'transparent',borderWidth:2,pointRadius:3,tension:0.3,order:0}
-      ]},
+      type:'line',
+      data:{
+        labels:months.map(function(m){return m.slice(0,7);}),
+        datasets:[
+          {label:'Current Cost (SAR)',    data:costArr,     borderColor:'#1B2A4E',backgroundColor:'rgba(27,42,78,0.08)',borderWidth:2,pointRadius:3,tension:0.3,fill:false},
+          {label:'Est. Cost to Complete', data:estComplArr, borderColor:'#D4560A',backgroundColor:'transparent',borderWidth:2,pointRadius:3,tension:0.3,borderDash:[5,3],fill:false},
+          {label:'Profit at Completion',  data:profArr,     borderColor:'#1D7A4A',backgroundColor:'transparent',borderWidth:2,pointRadius:3,tension:0.3,fill:false},
+          {label:'VI + Issued',           data:viIssuedArr, borderColor:'#7C3AED',backgroundColor:'transparent',borderWidth:2,pointRadius:3,tension:0.3,fill:false}
+        ]
+      },
       options:{
         responsive:true,maintainAspectRatio:true,animation:false,
-        plugins:{legend:{display:false},tooltip:{callbacks:{label:function(c){return c.dataset.label+': '+fSAR(c.raw);}}}},
+        plugins:{
+          legend:{display:false},
+          tooltip:{callbacks:{label:function(c){return c.dataset.label+': '+fSAR(c.raw);}}}
+        },
         scales:{
           x:{grid:{color:gc},ticks:{color:lc,font:{size:10}}},
           y:{grid:{color:gc},ticks:{color:lc,font:{size:10},callback:function(v){return fSAR(v);}}}
@@ -292,60 +395,94 @@ function opBuildChart(){
   }
 }
 
-window._opSetStatus=function(ph,sel){
-  sel.className='op-st '+sel.value;
-  _opPhaseStatuses[ph]=sel.value;
-};
-
 window.opSave=async function(){
   var body={
-    contract: document.getElementById('opContract').value,
-    market:   document.getElementById('opMarket').value,
+    contract:     document.getElementById('opContract').value,
+    market:       document.getElementById('opMarket').value,
     expected_end: document.getElementById('opExpectedEnd').value,
-    notes:    document.getElementById('opNotes').value,
+    notes:        document.getElementById('opNotes').value,
   };
-  // Phase inputs
+  // Phase fields
+  var phData={};
   document.querySelectorAll('#opPhasesBody input[data-ph]').forEach(function(inp){
     var ph=inp.getAttribute('data-ph'), f=inp.getAttribute('data-f');
-    if(!body['_ph_'+ph]) body['_ph_'+ph]={};
-    body['_ph_'+ph][f]=inp.value;
+    if(!phData[ph]) phData[ph]={};
+    phData[ph][f]=inp.value;
   });
-  // Phase statuses
   document.querySelectorAll('#opPhasesBody select').forEach(function(sel){
     var row=sel.closest('tr');
     var inp=row&&row.querySelector('input[data-ph]');
-    if(inp){ var ph=inp.getAttribute('data-ph'); if(!body['_ph_'+ph]) body['_ph_'+ph]={}; body['_ph_'+ph]['status']=sel.value; }
+    if(inp){ var ph=inp.getAttribute('data-ph'); if(!phData[ph]) phData[ph]={}; phData[ph]['status']=sel.value; }
   });
-  // Flatten
-  var flat={};
-  Object.keys(body).forEach(function(k){
-    if(k.startsWith('_ph_')){ flat['phase_'+k.slice(4)]=JSON.stringify(body[k]); }
-    else { flat[k]=body[k]; }
-  });
+  Object.keys(phData).forEach(function(ph){ body['phase_'+ph]=JSON.stringify(phData[ph]); });
   try{
-    var r=await fetch('/api/onepager/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(flat)});
+    var r=await fetch('/api/onepager/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     var d=await r.json();
     if(d.ok){
       var msg=document.getElementById('opSavedMsg');
       msg.textContent='Saved '+new Date().toLocaleTimeString();
       setTimeout(function(){msg.textContent='';},3000);
     }
-  }catch(e){ alert('Save error: '+e.message); }
+  }catch(e){alert('Save error: '+e.message);}
 };
 
 window.opExportPDF=function(){
-  var orig=document.title;
-  var pn=document.getElementById('opProjName');
-  document.title=(pn?pn.textContent:'Project')+' - One Pager';
-  var s=document.createElement('style');
-  s.id='_opPrint';
-  s.textContent='@media print{body>*:not(#onepager){display:none!important}.op-save-bar button{display:none!important}nav,header{display:none!important}#onepager{display:block!important;padding:0!important}}';
-  document.head.appendChild(s);
-  window.print();
-  setTimeout(function(){document.title=orig;var el=document.getElementById('_opPrint');if(el)el.remove();},1500);
+  // Use jsPDF + html2canvas for real PDF
+  function doExport(){
+    var el=document.getElementById('onepager');
+    var pn=document.getElementById('opProjName');
+    var title=(pn?pn.textContent:'Project')+' - One Pager';
+    html2canvas(el,{scale:1.5,useCORS:true,backgroundColor:'#ffffff'}).then(function(canvas){
+      var imgData=canvas.toDataURL('image/png');
+      var pdf=new jsPDF.jsPDF('p','mm','a4');
+      var pw=pdf.internal.pageSize.getWidth();
+      var ph=pdf.internal.pageSize.getHeight();
+      var ratio=canvas.height/canvas.width;
+      var imgH=pw*ratio;
+      if(imgH<=ph){
+        pdf.addImage(imgData,'PNG',0,0,pw,imgH);
+      } else {
+        // Multi-page
+        var pageH=ph, pageImgH=canvas.width*(pageH/pw);
+        var pages=Math.ceil(canvas.height/pageImgH);
+        for(var i=0;i<pages;i++){
+          if(i>0) pdf.addPage();
+          var sy=i*pageImgH;
+          var tmpC=document.createElement('canvas');
+          tmpC.width=canvas.width; tmpC.height=Math.min(pageImgH,canvas.height-sy);
+          tmpC.getContext('2d').drawImage(canvas,0,sy,canvas.width,tmpC.height,0,0,canvas.width,tmpC.height);
+          pdf.addImage(tmpC.toDataURL('image/png'),'PNG',0,0,pw,tmpC.height*(pw/canvas.width));
+        }
+      }
+      pdf.save(title+'.pdf');
+    });
+  }
+  // Load libs if needed
+  if(typeof html2canvas!=='undefined'&&typeof jsPDF!=='undefined'){ doExport(); return; }
+  var scripts=[
+    'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js',
+    'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'
+  ];
+  var loaded=0;
+  scripts.forEach(function(src){
+    var s=document.createElement('script'); s.src=src;
+    s.onload=function(){ loaded++; if(loaded===scripts.length) doExport(); };
+    document.head.appendChild(s);
+  });
 };
 
 window.loadOnepager=opLoad;
+
+// When variance computes a phase, refresh chart + tables
+var _origOP=window._overviewUpdateProfKPIs;
+window._overviewUpdateProfKPIs=function(ph){
+  if(_origOP) _origOP(ph);
+  var panel=document.getElementById('onepager');
+  if(panel&&panel.classList.contains('active')){
+    setTimeout(opBuildChart,200);
+    setTimeout(opBuildInvoices,200);
+  }
+};
 })();
 </script>
 </section>
