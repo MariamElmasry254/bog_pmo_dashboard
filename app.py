@@ -902,6 +902,18 @@ def summary_page():
 @app.route('/api/summary')
 @login_required
 def api_summary():
+
+@app.route('/api/debug/namespaces')
+@login_required
+def api_debug_namespaces():
+    """Debug: show all namespaces in DB with counts."""
+    all_data = db.get_all_overrides()
+    result = {}
+    for ns, phases in all_data.items():
+        result[ns] = {}
+        for ph, keys in phases.items():
+            result[ns][ph] = list(keys.keys())[:5]  # first 5 keys only
+    return jsonify({'namespaces': list(all_data.keys()), 'detail': result})
     """Return all projects with their latest variance KPIs from DB."""
     role = session.get('user_role', 'admin')
     if role not in ('admin', 'management'):
