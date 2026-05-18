@@ -6737,6 +6737,18 @@ def api_plan_overrides_get():
     return jsonify(load_plan_overrides())
 
 
+@app.route('/api/positions-list')
+@login_required
+def api_positions_list():
+    all_pos = get_all_positions(db)
+    names = sorted(set(p.get('position') or p.get('name','') for p in all_pos if p.get('position') or p.get('name')))
+    return jsonify({'positions': names})
+
+
+@app.route('/api/position-overrides/save', methods=['POST'])
+def api_position_overrides_save_alias():
+    return api_position_overrides_save()
+
 @app.route('/api/position-overrides', methods=['POST'])
 def api_position_overrides_save():
     """Manual position override for an employee (when Odoo doesn't have it)"""
