@@ -902,18 +902,6 @@ def summary_page():
 @app.route('/api/summary')
 @login_required
 def api_summary():
-
-@app.route('/api/debug/namespaces')
-@login_required
-def api_debug_namespaces():
-    """Debug: show all namespaces in DB with counts."""
-    all_data = db.get_all_overrides()
-    result = {}
-    for ns, phases in all_data.items():
-        result[ns] = {}
-        for ph, keys in phases.items():
-            result[ns][ph] = list(keys.keys())[:5]  # first 5 keys only
-    return jsonify({'namespaces': list(all_data.keys()), 'detail': result})
     """Return all projects with their latest variance KPIs from DB."""
     role = session.get('user_role', 'admin')
     if role not in ('admin', 'management'):
@@ -922,7 +910,6 @@ def api_debug_namespaces():
     try:
         if not odoo.uid:
             odoo.connect()
-        # Fetch all projects from Odoo
         safe_fields = ['id', 'name', 'user_id', 'date_start', 'end_date', 'coordinator_id']
         projects = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
@@ -939,17 +926,15 @@ def api_debug_namespaces():
 
     result = []
     for p in projects:
-        pid        = p['id']
-        is_bog     = (str(pid) == '228')
-        pfx        = '' if is_bog else f'proj_{pid}'
-        plan_ns    = f'{pfx}_plan' if pfx else 'plan'
+        pid         = p['id']
+        is_bog      = (str(pid) == '228')
+        pfx         = '' if is_bog else f'proj_{pid}'
+        plan_ns     = f'{pfx}_plan' if pfx else 'plan'
         onepager_ns = f'{pfx}_onepager' if pfx else 'onepager'
-        phases     = PHASES_BOG if is_bog else PHASES_NORMAL
+        phases      = PHASES_BOG if is_bog else PHASES_NORMAL
 
-        # Load plan overrides for this project directly from DB
         plan_data = db.get_namespace_overrides(plan_ns) or {}
 
-        # Parse plan overrides into {phase: {month_key: {field: val}}}
         plan_overrides = {}
         for phase, items in plan_data.items():
             if not phase or not isinstance(items, dict):
@@ -962,8 +947,7 @@ def api_debug_namespaces():
                         plan_overrides[phase][mk] = {}
                     plan_overrides[phase][mk][field] = val
 
-        # Aggregate last-month values across phases
-        tot_rev = tot_cost = tot_eac = tot_issued = tot_collected = tot_vi = 0
+        tot_rev = tot_cost = tot_eac = tot_issued = tot_vi = 0
         completion_pcts = []
         latest_month = ''
 
@@ -971,7 +955,6 @@ def api_debug_namespaces():
             ph_data = plan_overrides.get(phase, {})
             if not ph_data:
                 continue
-            # Find latest month with data
             sorted_months = sorted(ph_data.keys())
             if not sorted_months:
                 continue
@@ -979,60 +962,63 @@ def api_debug_namespaces():
             lm     = ph_data[lm_key]
             if lm_key > latest_month:
                 latest_month = lm_key
-
-            tot_rev      += float(lm.get('totalRevSAR', 0) or 0)
-            tot_cost     += float(lm.get('currentCostSAR', 0) or 0)
-            tot_eac      += float(lm.get('eacCostSAR', 0) or tot_cost)
-            tot_issued   += float(lm.get('issuedUpToMonth', 0) or 0)
-            tot_vi       += float(lm.get('accVI', 0) or 0)
-            pct           = float(lm.get('completionPct', 0) or 0)
+            tot_rev    += float(lm.get('totalRevSAR', 0) or 0)
+            tot_cost   += float(lm.get('currentCostSAR', 0) or 0)
+            tot_eac    += float(lm.get('eacCostSAR', 0) or 0)
+            tot_issued += float(lm.get('issuedUpToMonth', 0) or 0)
+            tot_vi     += float(lm.get('accVI', 0) or 0)
+            pct         = float(lm.get('completionPct', 0) or 0)
             if pct > 0:
                 completion_pcts.append(pct)
 
-        # Collected from direct invoices namespace (if stored)
-        inv_ns = f'{pfx}_inv_collected' if pfx else 'inv_collected'
-        collected_raw = db.get_override(inv_ns, '', 'total') or 0
-        tot_collected = float(collected_raw)
+        if not tot_eac:
+            tot_eac = tot_cost
 
         avg_completion = round(sum(completion_pcts) / len(completion_pcts), 1) if completion_pcts else 0
+        overrun = (tot_eac - tot_rev) if (tot_eac and tot_rev and tot_eac > tot_rev) else 0
 
-        # Expected overrun = EAC - Revenue
-        overrun = tot_eac - tot_rev if tot_eac and tot_rev else 0
-
-        # PM name
-        pm_raw = p.get('user_id')
+        pm_raw  = p.get('user_id')
         pm_name = pm_raw[1] if isinstance(pm_raw, list) and len(pm_raw) > 1 else ''
 
-        # Manual onepager fields (expected_end)
-        op_data = db.get_namespace_overrides(onepager_ns, '') or {}
-        expected_end = (op_data.get('expected_end') or {})
+        op_data      = db.get_namespace_overrides(onepager_ns, '') or {}
+        expected_end = op_data.get('expected_end') or ''
         if isinstance(expected_end, dict):
             expected_end = ''
 
         if not tot_rev and not tot_cost:
-            continue  # skip projects with no variance data
+            continue
 
         result.append({
             'id':            pid,
             'name':          p['name'],
             'pm':            pm_name,
             'date_start':    (p.get('date_start') or '')[:10],
-            'end_date':      (p.get('end_date') or '')[:10],
-            'expected_end':  expected_end or '',
+            'end_date':      (p.get('end_date')   or '')[:10],
+            'expected_end':  expected_end,
             'total_revenue': tot_rev,
             'current_cost':  tot_cost,
             'eac':           tot_eac,
             'total_issued':  tot_issued,
             'acc_vi':        tot_vi,
-            'collected':     tot_collected,
+            'collected':     0,
             'completion_pct':avg_completion,
             'overrun':       overrun,
             'latest_month':  latest_month,
         })
 
-    # Sort by total_revenue desc
     result.sort(key=lambda x: x['total_revenue'], reverse=True)
     return jsonify({'ok': True, 'projects': result, 'count': len(result)})
+
+
+@app.route('/api/debug/namespaces')
+@login_required
+def api_debug_namespaces():
+    """Debug: show all namespaces in DB."""
+    all_data = db.get_all_overrides()
+    summary = {}
+    for ns, phases in all_data.items():
+        summary[ns] = {ph: list(keys.keys())[:3] for ph, keys in phases.items()}
+    return jsonify({'namespaces': list(all_data.keys()), 'detail': summary})
 
 
 @app.route('/manage')
