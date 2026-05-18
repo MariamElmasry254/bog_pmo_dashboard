@@ -1893,6 +1893,278 @@ def api_onepager_save():
     return jsonify({'ok': True})
 
 
+@app.route('/api/onepager/export-pptx', methods=['POST'])
+@login_required
+def api_onepager_export_pptx():
+    """Generate a One Pager PPTX from frontend data using pptxgenjs via Node.js."""
+    import subprocess, tempfile, json as _json
+    from flask import send_file
+    body = request.json or {}
+    proj_name = body.get('project_name', session.get('project_name', 'Project'))
+
+    # Build the Node.js script inline
+    script = r"""
+const pptxgen = require('pptxgenjs');
+const fs      = require('fs');
+const data    = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+
+const NAV  = '1B2A4E';
+const GRN  = '1D7A4A';
+const ORG  = 'D4560A';
+const WHT  = 'FFFFFF';
+const GRY  = '64748B';
+const LGT  = 'F1F5F9';
+const BDR  = 'CBD5E1';
+const RED  = 'DC2626';
+const GGRN = '065F46';
+const W    = 13.3;  // LAYOUT_WIDE width inches
+const H    = 7.5;
+
+function fSAR(v) {
+  if (!v || isNaN(v) || v === 0) return '—';
+  const n = Math.abs(v);
+  let s;
+  if      (n >= 1e6) s = (n/1e6).toFixed(2) + 'M';
+  else if (n >= 1e3) s = Math.round(n/1e3)   + 'K';
+  else               s = Math.round(n).toString();
+  return (v < 0 ? '-' : '') + s;
+}
+function fMD(v)  { return (v && v > 0) ? Math.round(v).toLocaleString() : '—'; }
+function fPct(v) { return (v && v > 0) ? v.toFixed(1) + '%' : '—'; }
+const makeShadow = () => ({ type:'outer', blur:6, offset:2, angle:135, color:'000000', opacity:0.10 });
+
+const pres = new pptxgen();
+pres.layout  = 'LAYOUT_WIDE';
+pres.title   = (data.project_name || 'Project') + ' – One Pager';
+pres.subject = 'PMO One Pager';
+
+// ── Slide 1 ────────────────────────────────────────────────────────────
+const sl = pres.addSlide();
+sl.background = { color: 'F8FAFC' };
+
+// ── Top header bar ────────────────────────────────────────────────────
+sl.addShape(pres.shapes.RECTANGLE, { x:0, y:0, w:W, h:0.7, fill:{color:NAV}, line:{color:NAV} });
+sl.addText(data.project_name || 'Project', {
+  x:0.25, y:0, w:7, h:0.7, fontSize:20, bold:true, color:WHT, valign:'middle', margin:0
+});
+// Meta: PM | Start
+const metaParts = [];
+if (data.pm_name)   metaParts.push('PM: ' + data.pm_name);
+if (data.start_date) metaParts.push('Start: ' + data.start_date);
+sl.addText(metaParts.join('   |   '), {
+  x:0.25, y:0.72, w:9, h:0.28, fontSize:9, color:GRY, valign:'middle', margin:0
+});
+
+// ── Chips (top-right) ─────────────────────────────────────────────────
+const chips = [
+  { label:'Contract',    val: data.contract   || '—' },
+  { label:'Market Unit', val: data.market     || '—' },
+  { label:'Team',        val: String(data.team_count || '—') + (data.team_month ? ' ('+data.team_month+')' : '') },
+  { label:'% Complete',  val: data.total_pct  || '—' },
+];
+chips.forEach(function(c, i) {
+  const cx = W - (chips.length - i) * 2.1;
+  sl.addShape(pres.shapes.RECTANGLE, { x:cx, y:0.08, w:2.0, h:0.52, fill:{color:WHT}, line:{color:BDR}, shadow:makeShadow() });
+  sl.addText(c.label, { x:cx, y:0.10, w:2.0, h:0.16, fontSize:7, bold:true, color:GRY, align:'center', margin:0 });
+  sl.addText(c.val,   { x:cx, y:0.27, w:2.0, h:0.28, fontSize:11, bold:true, color:NAV, align:'center', margin:0 });
+});
+
+// ── Dates row ─────────────────────────────────────────────────────────
+const dateY = 1.08;
+// Planned
+sl.addShape(pres.shapes.RECTANGLE, { x:0.2, y:dateY, w:6.3, h:0.55, fill:{color:NAV}, line:{color:NAV} });
+sl.addText('PLANNED COMPLETION', { x:0.25, y:dateY, w:3, h:0.55, fontSize:8, bold:true, color:'CADCFC', valign:'middle', margin:0 });
+sl.addText(data.planned_end || '—', { x:3.2, y:dateY, w:3.1, h:0.55, fontSize:13, bold:true, color:WHT, valign:'middle', margin:0 });
+// Expected
+sl.addShape(pres.shapes.RECTANGLE, { x:6.65, y:dateY, w:6.45, h:0.55, fill:{color:'FFF7ED'}, line:{color:'FED7AA'} });
+sl.addText('EXPECTED COMPLETION', { x:6.7, y:dateY, w:3, h:0.55, fontSize:8, bold:true, color:ORG, valign:'middle', margin:0 });
+sl.addText(data.expected_end || '—', { x:9.6, y:dateY, w:3.3, h:0.55, fontSize:13, bold:true, color:RED, valign:'middle', margin:0 });
+
+// ── Phases table ──────────────────────────────────────────────────────
+const phY = 1.75;
+sl.addShape(pres.shapes.RECTANGLE, { x:0.2, y:phY, w:13.0, h:0.32, fill:{color:NAV}, line:{color:NAV} });
+sl.addText('PHASES', { x:0.25, y:phY, w:13, h:0.32, fontSize:9, bold:true, color:WHT, valign:'middle', margin:0 });
+
+const phHdr = [['Phase','Est. MDs','Actual MDs','% Done','Planned Date','Expected Date','Status']];
+const phCols = [2.0,1.4,1.4,1.1,1.7,1.7,1.7];
+sl.addTable(
+  phHdr.map(r => r.map(c => ({ text:c, options:{ bold:true, fontSize:8, color:GRY, fill:{color:LGT}, align:'center' } }))),
+  { x:0.2, y:phY+0.32, w:13.0, colW:phCols, border:{pt:0.5, color:BDR} }
+);
+
+const statusLabels = { ontrack:'On Track', concern:'Concern', delayed:'Delayed', onhold:'On Hold' };
+const statusColors = { ontrack:{ bg:'D1FAE5', fg:GGRN }, concern:{ bg:'FEF3C7', fg:'92400E' }, delayed:{ bg:'FEE2E2', fg:RED }, onhold:{ bg:LGT, fg:GRY } };
+(data.phases || []).forEach(function(ph, i) {
+  const bg = i % 2 === 0 ? WHT : 'F8FAFC';
+  const sc = statusColors[ph.status] || statusColors.ontrack;
+  const row = [
+    { text: ph.name,         options:{ bold:true, fontSize:9, color:NAV, fill:{color:bg}, align:'left' } },
+    { text: fMD(ph.est_mds),    options:{ fontSize:9, color:'374151', fill:{color:bg}, align:'center' } },
+    { text: fMD(ph.actual_mds), options:{ fontSize:9, color:GRN,    fill:{color:bg}, align:'center' } },
+    { text: fPct(ph.pct_done),  options:{ fontSize:9, color:'374151', fill:{color:bg}, align:'center' } },
+    { text: ph.planned_date || '—', options:{ fontSize:9, color:GRY, fill:{color:bg}, align:'center' } },
+    { text: ph.expected_date|| '—', options:{ fontSize:9, color:RED, fill:{color:bg}, align:'center' } },
+    { text: statusLabels[ph.status]||ph.status||'—', options:{ fontSize:8, bold:true, color:sc.fg, fill:{color:sc.bg}, align:'center' } },
+  ];
+  sl.addTable([row], { x:0.2, y:phY+0.32+(i+1)*0.3, w:13.0, colW:phCols, border:{pt:0.5, color:BDR} });
+});
+
+const afterPhY = phY + 0.32 + ((data.phases||[]).length + 1) * 0.3 + 0.12;
+
+// ── Budget + Invoices (left col) ──────────────────────────────────────
+const leftW = 7.8;
+// Budget header
+sl.addShape(pres.shapes.RECTANGLE, { x:0.2, y:afterPhY, w:leftW, h:0.28, fill:{color:GRN}, line:{color:GRN} });
+sl.addText('BUDGET (SAR) — FROM LAST VARIANCE MONTH', { x:0.25, y:afterPhY, w:leftW, h:0.28, fontSize:8, bold:true, color:WHT, valign:'middle', margin:0 });
+
+const budHdr = [['Phase','Revenue','Plan. Cost','Curr. Cost','Profit at Comp.','Profit %','Rem. MDs']];
+const budCols = [1.4,1.1,1.1,1.1,1.3,0.9,0.9];
+sl.addTable(
+  budHdr.map(r => r.map(c => ({ text:c, options:{ bold:true, fontSize:7.5, color:GRY, fill:{color:LGT}, align:'center' } }))),
+  { x:0.2, y:afterPhY+0.28, w:leftW, colW:budCols, border:{pt:0.5, color:BDR} }
+);
+
+let totRev=0,totPlan=0,totCurr=0,totProfit=0;
+(data.budget_rows || []).forEach(function(r, i) {
+  totRev+=r.revenue||0; totPlan+=r.plan_cost||0; totCurr+=r.curr_cost||0; totProfit+=r.profit||0;
+  const bg = i%2===0 ? WHT : 'F8FAFC';
+  const pc = (r.profit||0) >= 0 ? GGRN : RED;
+  sl.addTable([[
+    { text:r.name,              options:{ bold:true, fontSize:8.5, color:NAV, fill:{color:bg}, align:'left' } },
+    { text:fSAR(r.revenue),     options:{ fontSize:8.5, color:'374151', fill:{color:bg}, align:'right' } },
+    { text:fSAR(r.plan_cost),   options:{ fontSize:8.5, color:'374151', fill:{color:bg}, align:'right' } },
+    { text:fSAR(r.curr_cost),   options:{ fontSize:8.5, color:'374151', fill:{color:bg}, align:'right' } },
+    { text:fSAR(r.profit),      options:{ fontSize:8.5, bold:true, color:pc, fill:{color:bg}, align:'right' } },
+    { text:fPct(r.profit_pct),  options:{ fontSize:8.5, bold:true, color:pc, fill:{color:bg}, align:'center' } },
+    { text:fMD(r.rem_mds),      options:{ fontSize:8.5, color:'374151', fill:{color:bg}, align:'center' } },
+  ]], { x:0.2, y:afterPhY+0.28+(i+1)*0.28, w:leftW, colW:budCols, border:{pt:0.5, color:BDR} });
+});
+// Budget total row
+const budN = (data.budget_rows||[]).length;
+const totPc = totProfit >= 0 ? GGRN : RED;
+sl.addTable([[
+  { text:'Total', options:{ bold:true, fontSize:8.5, color:WHT, fill:{color:NAV}, align:'left' } },
+  { text:fSAR(totRev),    options:{ bold:true, fontSize:8.5, color:WHT, fill:{color:NAV}, align:'right' } },
+  { text:fSAR(totPlan),   options:{ bold:true, fontSize:8.5, color:WHT, fill:{color:NAV}, align:'right' } },
+  { text:fSAR(totCurr),   options:{ bold:true, fontSize:8.5, color:WHT, fill:{color:NAV}, align:'right' } },
+  { text:fSAR(totProfit), options:{ bold:true, fontSize:8.5, color:WHT, fill:{color:NAV}, align:'right' } },
+  { text:'', options:{ fill:{color:NAV} } },
+  { text:'', options:{ fill:{color:NAV} } },
+]], { x:0.2, y:afterPhY+0.28+(budN+1)*0.28, w:leftW, colW:budCols, border:{pt:0.5, color:BDR} });
+
+// Invoices
+const invY = afterPhY + 0.28 + (budN+2)*0.28 + 0.1;
+sl.addShape(pres.shapes.RECTANGLE, { x:0.2, y:invY, w:leftW, h:0.28, fill:{color:NAV}, line:{color:NAV} });
+sl.addText('INVOICES (SAR) — FROM LAST VARIANCE MONTH', { x:0.25, y:invY, w:leftW, h:0.28, fontSize:8, bold:true, color:WHT, valign:'middle', margin:0 });
+
+const invCols = [1.4,2.0,2.0,2.4];
+sl.addTable(
+  [['Phase','Acc. Virtual Invoice','Total Issued','Collected (Paid/Partial)']].map(r =>
+    r.map(c => ({ text:c, options:{ bold:true, fontSize:7.5, color:GRY, fill:{color:LGT}, align:'center' } }))
+  ),
+  { x:0.2, y:invY+0.28, w:leftW, colW:invCols, border:{pt:0.5, color:BDR} }
+);
+let totVI=0,totIssued=0,totColl=0;
+(data.invoice_rows||[]).forEach(function(r,i) {
+  totVI+=r.vi||0; totIssued+=r.issued||0; totColl+=r.collected||0;
+  const bg = i%2===0 ? WHT : 'F8FAFC';
+  sl.addTable([[
+    { text:r.name,           options:{ bold:true, fontSize:8.5, color:NAV, fill:{color:bg}, align:'left' } },
+    { text:fSAR(r.vi),       options:{ fontSize:8.5, color:'374151', fill:{color:bg}, align:'right' } },
+    { text:fSAR(r.issued),   options:{ fontSize:8.5, color:'374151', fill:{color:bg}, align:'right' } },
+    { text:fSAR(r.collected),options:{ fontSize:8.5, color:'374151', fill:{color:bg}, align:'right' } },
+  ]], { x:0.2, y:invY+0.28+(i+1)*0.28, w:leftW, colW:invCols, border:{pt:0.5, color:BDR} });
+});
+const invN = (data.invoice_rows||[]).length;
+sl.addTable([[
+  { text:'Total', options:{ bold:true, fontSize:8.5, color:WHT, fill:{color:NAV}, align:'left' } },
+  { text:fSAR(totVI),     options:{ bold:true, fontSize:8.5, color:WHT, fill:{color:NAV}, align:'right' } },
+  { text:fSAR(totIssued), options:{ bold:true, fontSize:8.5, color:WHT, fill:{color:NAV}, align:'right' } },
+  { text:fSAR(totColl),   options:{ bold:true, fontSize:8.5, color:WHT, fill:{color:NAV}, align:'right' } },
+]], { x:0.2, y:invY+0.28+(invN+1)*0.28, w:leftW, colW:invCols, border:{pt:0.5, color:BDR} });
+
+// ── Chart (right col) ─────────────────────────────────────────────────
+const chartX = leftW + 0.4;
+const chartW = W - chartX - 0.15;
+sl.addShape(pres.shapes.RECTANGLE, { x:chartX, y:afterPhY, w:chartW, h:0.28, fill:{color:NAV}, line:{color:NAV} });
+sl.addText('MONTHLY TREND — FROM VARIANCE', { x:chartX+0.05, y:afterPhY, w:chartW, h:0.28, fontSize:8, bold:true, color:WHT, valign:'middle', margin:0 });
+
+if ((data.chart_months||[]).length > 1) {
+  const mkLabel = () => ({ color:'000000', opacity:0.15 });
+  sl.addChart(pres.charts.LINE, [
+    { name:'Current Cost (SAR)',    labels: data.chart_months, values: data.chart_cost    },
+    { name:'Est. Cost to Complete', labels: data.chart_months, values: data.chart_est     },
+    { name:'Profit at Comp.',       labels: data.chart_months, values: data.chart_profit  },
+    { name:'VI + Issued',           labels: data.chart_months, values: data.chart_vi      },
+  ], {
+    x: chartX, y: afterPhY+0.28, w: chartW, h: H - afterPhY - 0.28 - 0.15,
+    chartColors: [NAV, ORG, GRN, '7C3AED'],
+    lineSize: 2, lineSmooth: true,
+    showLegend: true, legendPos: 'b', legendFontSize: 8,
+    catAxisLabelColor: GRY, valAxisLabelColor: GRY,
+    catAxisLabelFontSize: 7, valAxisLabelFontSize: 7,
+    valGridLine: { color:'E2E8F0', size:0.5 },
+    catGridLine: { style:'none' },
+    chartArea: { fill:{ color:WHT }, roundedCorners:false },
+    showValue: false,
+  });
+} else {
+  sl.addText('Open Variance tab first to load chart data', {
+    x:chartX, y:afterPhY+0.5, w:chartW, h:1, fontSize:9, color:GRY, align:'center'
+  });
+}
+
+// ── Notes ─────────────────────────────────────────────────────────────
+if (data.notes && data.notes.trim()) {
+  const notesY = H - 0.52;
+  sl.addShape(pres.shapes.RECTANGLE, { x:0.2, y:notesY-0.05, w:leftW, h:0.5, fill:{color:'FFFBEB'}, line:{color:'FDE68A'} });
+  sl.addText('Monthly Notes / Highlights', { x:0.25, y:notesY-0.05, w:3, h:0.22, fontSize:7.5, bold:true, color:'92400E', margin:0 });
+  sl.addText(data.notes, { x:0.25, y:notesY+0.18, w:leftW-0.1, h:0.28, fontSize:8, color:'374151', margin:0, wrap:true });
+}
+
+// ── Output ────────────────────────────────────────────────────────────
+pres.writeFile({ fileName: process.argv[3] });
+""";
+
+    try:
+        # Write Node script
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.js', delete=False) as sf:
+            sf.write(script)
+            script_path = sf.name
+
+        # Write data JSON
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as df:
+            _json.dump(body, df)
+            data_path = df.name
+
+        # Output PPTX path
+        out_path = tempfile.mktemp(suffix='.pptx')
+
+        # Run node
+        result = subprocess.run(
+            ['node', script_path, data_path, out_path],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            return jsonify({'error': result.stderr or 'node script failed'}), 500
+
+        filename = (proj_name or 'OnePager').replace(' ', '_') + '_OnePager.pptx'
+        return send_file(
+            out_path,
+            mimetype='application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            as_attachment=True,
+            download_name=filename
+        )
+    except Exception as e:
+        import traceback
+        logger.error(f'export-pptx error: {traceback.format_exc()}')
+        return jsonify({'error': str(e)}), 500
+    finally:
+        for p in [script_path, data_path]:
+            try: os.unlink(p)
+            except: pass
+
+
 @app.route('/api/overview/phase-progress')
 def api_overview_phase_progress():
     """Return latest % completion + remaining MDs per phase from plan_overrides."""
