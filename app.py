@@ -988,6 +988,8 @@ def api_summary():
             phases      = PHASES_BOG if is_bog else PHASES_NORMAL
 
             tot_rev = 0.0
+            tot_cost = 0.0
+            tot_eac  = 0.0
             completion_pcts = []
             latest_month = ''
 
@@ -1000,6 +1002,8 @@ def api_summary():
                 pct = float(lm.get('completion', 0) or 0)
                 if pct > 0:
                     completion_pcts.append(pct)
+                tot_cost += float(lm.get('currentCostSAR', 0) or 0)
+                tot_eac  += float(lm.get('eacCostSAR', 0) or 0)
 
             if not tot_rev:
                 continue
@@ -1025,12 +1029,12 @@ def api_summary():
                 'end_date':      (p.get('end_date')   or '')[:10],
                 'expected_end':  expected_end,
                 'total_revenue': tot_rev,
-                'current_cost':  0,
-                'eac':           0,
+                'current_cost':  tot_cost,
+                'eac':           tot_eac if tot_eac else tot_cost,
                 'total_issued':  0,
                 'collected':     0,
                 'completion_pct':avg_completion,
-                'overrun':       0,
+                'overrun':       max(0, (tot_eac or tot_cost) - tot_rev) if tot_rev else 0,
                 'latest_month':  latest_month,
             })
         except Exception as _ep:
@@ -2364,10 +2368,23 @@ def api_overview_phase_progress():
                 if pct or rem:
                     latest = fields
                     latest_month = month_key
+            # Also get eacCostSAR + currentCostSAR from same or nearby month
+            eac_cost = 0.0
+            cur_cost = 0.0
+            for month_key, fields in sorted(overrides.items(), reverse=True):
+                if fields.get('eacCostSAR'):
+                    try: eac_cost = float(fields['eacCostSAR']); break
+                    except: pass
+            for month_key, fields in sorted(overrides.items(), reverse=True):
+                if fields.get('currentCostSAR'):
+                    try: cur_cost = float(fields['currentCostSAR']); break
+                    except: pass
             result[phase] = {
-                'completion': float(latest.get('completion', 0) or 0),
-                'remaining':  float(latest.get('remaining',  0) or 0),
-                'month_key':  latest_month,
+                'completion':    float(latest.get('completion', 0) or 0),
+                'remaining':     float(latest.get('remaining',  0) or 0),
+                'month_key':     latest_month,
+                'eacCostSAR':    eac_cost,
+                'currentCostSAR':cur_cost,
             }
         except Exception as e:
             result[phase] = {}
