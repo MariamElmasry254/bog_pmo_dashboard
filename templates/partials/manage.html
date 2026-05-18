@@ -1609,78 +1609,95 @@ function usrLoad(){var tbody=document.getElementById("uTbody");tbody.innerHTML="
     </div>
     <div style="display:flex;gap:8px;">
       <button onclick="_empShowAdd()" style="padding:6px 14px;border:none;border-radius:6px;background:#1B2A4E;color:white;cursor:pointer;font-size:12px;font-weight:600;">+ Add Employee</button>
-      <button onclick="_empLoad()" style="padding:6px 14px;border:1px solid var(--border);border-radius:6px;background:white;cursor:pointer;font-size:12px;">↻ Refresh</button>
+      <button onclick="_empLoad()" style="padding:6px 14px;border:1px solid var(--border);border-radius:6px;background:white;cursor:pointer;font-size:12px;">&#8635; Refresh</button>
     </div>
   </div>
   <div id="empAddForm" style="display:none;background:#F8FAFC;border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px;">
     <h4 style="margin:0 0 12px;font-size:14px;font-weight:700;color:var(--navy);">Add Resigned / External Employee</h4>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
       <div><label class="filter-label">FULL NAME (as in Odoo)</label><input id="addEmpName" placeholder="e.g. [R340] Mohamed Sehmawy" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;box-sizing:border-box;"></div>
-      <div><label class="filter-label">POSITION</label><select id="addEmpPos" onchange="_empRatePreview()" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;"><option value="">— select position —</option></select></div>
+      <div><label class="filter-label">POSITION</label>
+        <select id="addEmpPos" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;"><option value="">&#8212; select position &#8212;</option></select>
+      </div>
       <div><label class="filter-label">RESIGNED DATE (optional)</label><input id="addEmpDate" type="date" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;box-sizing:border-box;"></div>
       <div><label class="filter-label">NOTE (optional)</label><input id="addEmpNote" placeholder="e.g. Left project Feb 2026" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;box-sizing:border-box;"></div>
     </div>
-    <div id="empRatePreview" style="display:none;margin-top:10px;padding:8px 12px;background:#D1FAE5;border-radius:6px;font-size:13px;color:#065F46;font-weight:600;"></div>
-    <div style="display:flex;gap:8px;margin-top:12px;">
+    <div id="empRatePreview" style="display:none;margin-top:10px;padding:8px 14px;background:#D1FAE5;border-radius:6px;font-size:13px;color:#065F46;font-weight:600;"></div>
+    <div style="display:flex;gap:8px;margin-top:12px;align-items:center;">
       <button onclick="_empAddSave()" style="padding:7px 18px;background:#1B2A4E;color:white;border:none;border-radius:6px;font-size:13px;cursor:pointer;font-weight:600;">Save Employee</button>
       <button onclick="_empHideAdd()" style="padding:7px 14px;border:1px solid var(--border);border-radius:6px;background:white;cursor:pointer;font-size:13px;">Cancel</button>
-      <span id="empAddMsg" style="font-size:12px;align-self:center;"></span>
+      <span id="empAddMsg" style="font-size:12px;"></span>
     </div>
   </div>
   <div id="empList" style="margin-top:8px;"></div>
 </div>
 <script>
-var _empPositions=[], _empData=[];
+var _empAllPositions=[], _empData=[], _empPosMap={};
 async function _empLoad(){
   var el=document.getElementById('empList');
-  el.innerHTML='<p style="color:var(--muted);padding:16px;">Loading…</p>';
+  el.innerHTML='<p style="color:var(--muted);padding:16px;">Loading&#8230;</p>';
   try{
     var er=await fetch('/api/project-employees');
     var pr=await fetch('/api/positions-list');
     var ed=await er.json(), pd=pr.ok?await pr.json():{positions:[]};
-    _empData=ed.employees||[]; _empPositions=pd.positions||[];
+    _empData=ed.employees||[];
+    _empAllPositions=pd.positions||[];
+    // Build position map: name -> {hour_rate, md_rate}
+    _empPosMap={};
+    _empAllPositions.forEach(function(p){ _empPosMap[p.name]=p; });
+    // Populate add form select
     var sel=document.getElementById('addEmpPos');
-    if(sel) sel.innerHTML='<option value="">— select position —</option>'+_empPositions.map(function(p){return '<option value="'+p+'">'+p+'</option>';}).join('');
+    if(sel){
+      var opts='<option value="">&#8212; select position &#8212;</option>';
+      _empAllPositions.forEach(function(p){
+        opts+='<option value="'+p.name+'">'+p.name+(p.hour_rate?' ($'+p.hour_rate+'/hr)':'')+'</option>';
+      });
+      sel.innerHTML=opts;
+      sel.onchange=function(){_empRatePreview();};
+    }
     _renderEmpTable();
   }catch(e){el.innerHTML='<p style="color:#DC2626;padding:16px;">Error: '+e.message+'</p>';}
 }
 function _renderEmpTable(){
-  var el=document.getElementById('empList'); var emps=_empData;
-  if(!emps.length){el.innerHTML='<p style="color:var(--muted);padding:16px;">No employees found.</p>';return;}
-  var noRate=emps.filter(function(e){return !e.hour_rate;}).length;
-  var badge=noRate>0?'<div style="margin-bottom:10px;"><span style="background:#FEE2E2;color:#DC2626;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600;">&#9888; '+noRate+' missing rate</span></div>':'<div style="margin-bottom:10px;"><span style="background:#D1FAE5;color:#065F46;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600;">&#10003; All have rates</span></div>';
-  var optHtml=_empPositions.map(function(p){return '<option value="'+p+'">'+p+'</option>';}).join('');
+  var el=document.getElementById('empList'), emps=_empData;
+  if(!emps.length){el.innerHTML='<p style="color:var(--muted);padding:16px;">No employees found for this project.</p>';return;}
+  var noRate=emps.filter(function(e){return !(e.hour_rate>0);}).length;
+  var badge=noRate>0
+    ?'<div style="margin-bottom:10px;"><span style="background:#FEE2E2;color:#DC2626;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600;">&#9888; '+noRate+' missing rate</span></div>'
+    :'<div style="margin-bottom:10px;"><span style="background:#D1FAE5;color:#065F46;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600;">&#10003; All employees have rates</span></div>';
+  var optHtml=_empAllPositions.map(function(p){return '<option value="'+p.name+'">'+p.name+(p.hour_rate?' ($'+p.hour_rate+'/hr)':'')+'</option>';}).join('');
   var rows='';
   emps.forEach(function(emp,i){
     var hasRate=emp.hour_rate>0, isManual=emp.source_type==='manual';
     var bg=hasRate?(i%2===0?'white':'#F8FAFC'):'#FFF5F5';
     var bl=hasRate?'':(emp.position?'border-left:4px solid #F59E0B;':'border-left:4px solid #EF4444;');
-    var rateHtml=hasRate?('<span style="font-weight:700;color:#065F46;">$'+emp.hour_rate+'/hr</span>'):'<span style="color:#DC2626;font-weight:700;">&#9888; No rate</span>';
+    var rateHtml=hasRate?('<b style="color:#065F46;">$'+emp.hour_rate+'/hr</b>'):'<b style="color:#DC2626;">&#9888; No rate</b>';
     var posHtml=emp.position?('<span style="font-size:12px;color:var(--muted);">'+emp.position+'</span>'):'<span style="font-size:12px;color:#F59E0B;">No position</span>';
-    var manualBadge=isManual?'<span style="font-size:10px;background:#EFF6FF;color:#1E40AF;padding:1px 6px;border-radius:8px;margin-left:4px;">manual</span>':'';
-    var delBtn=isManual?'<button data-delidx="'+i+'" style="padding:3px 8px;border:1px solid #FCA5A5;border-radius:4px;background:#FEF2F2;color:#DC2626;font-size:11px;cursor:pointer;margin-left:4px;">x</button>':'';
+    var badge2=isManual?'<span style="font-size:10px;background:#EFF6FF;color:#1E40AF;padding:1px 6px;border-radius:8px;margin-left:4px;">manual</span>':'';
+    var delBtn=isManual?'<button data-delidx="'+i+'" style="padding:3px 8px;border:1px solid #FCA5A5;border-radius:4px;background:#FEF2F2;color:#DC2626;font-size:11px;cursor:pointer;margin-left:4px;">Remove</button>':'';
     rows+='<tr style="background:'+bg+';'+bl+'border-bottom:1px solid #E2E8F0;">'
-      +'<td style="padding:10px 14px;"><div style="font-weight:600;font-size:13px;color:'+(hasRate?'var(--navy)':'#DC2626')+';">'+emp.name+manualBadge+'</div>'
+      +'<td style="padding:10px 14px;"><div style="font-weight:600;font-size:13px;color:'+(hasRate?'var(--navy)':'#DC2626')+';">'+emp.name+badge2+'</div>'
       +(emp.resigned_date?'<div style="font-size:10px;color:#F59E0B;">Resigned: '+emp.resigned_date+'</div>':'')
       +'<div style="font-size:10px;color:var(--muted);">'+emp.full_name+'</div></td>'
       +'<td style="padding:10px 14px;">'+posHtml+'</td>'
       +'<td style="padding:10px 14px;">'+rateHtml+'</td>'
-      +'<td style="padding:10px 14px;min-width:170px;"><select id="empSel_'+i+'" style="width:100%;padding:4px 6px;border:1px solid '+(hasRate?'var(--border)':'#FCA5A5')+';border-radius:5px;font-size:12px;"><option value="">— override —</option>'+optHtml+'</select></td>'
+      +'<td style="padding:10px 14px;min-width:170px;"><select id="empSel_'+i+'" style="width:100%;padding:4px 6px;border:1px solid '+(hasRate?'var(--border)':'#FCA5A5')+';border-radius:5px;font-size:12px;">'
+      +'<option value="">&#8212; override &#8212;</option>'+optHtml+'</select></td>'
       +'<td style="padding:10px 14px;text-align:center;white-space:nowrap;"><button id="empBtn_'+i+'" data-saveidx="'+i+'" style="padding:4px 12px;background:'+(hasRate?'#1B2A4E':'#DC2626')+';color:white;border:none;border-radius:5px;font-size:12px;cursor:pointer;font-weight:600;">Save</button>'+delBtn+'</td></tr>';
   });
-  el.innerHTML=badge+'<div style="overflow-x:auto;border-radius:8px;border:1px solid var(--border);"><table style="width:100%;border-collapse:collapse;"><thead><tr style="background:#1B2A4E;color:white;font-size:11px;"><th style="padding:10px 14px;text-align:left;">Employee</th><th style="padding:10px 14px;text-align:left;">Position</th><th style="padding:10px 14px;text-align:left;">Rate</th><th style="padding:10px 14px;text-align:left;">Override</th><th style="padding:10px 14px;text-align:center;">Actions</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+  el.innerHTML=badge+'<div style="overflow-x:auto;border-radius:8px;border:1px solid var(--border);"><table style="width:100%;border-collapse:collapse;"><thead><tr style="background:#1B2A4E;color:white;font-size:11px;"><th style="padding:10px 14px;text-align:left;">Employee</th><th style="padding:10px 14px;text-align:left;">Current Position</th><th style="padding:10px 14px;text-align:left;">Rate (DB)</th><th style="padding:10px 14px;text-align:left;">Set Position</th><th style="padding:10px 14px;text-align:center;">Action</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
   el.querySelectorAll('button[data-saveidx]').forEach(function(btn){btn.addEventListener('click',function(){_empSave(parseInt(this.getAttribute('data-saveidx')));});});
   el.querySelectorAll('button[data-delidx]').forEach(function(btn){btn.addEventListener('click',function(){_empDelete(parseInt(this.getAttribute('data-delidx')));});});
 }
 async function _empSave(idx){
   var emp=_empData[idx]; if(!emp)return;
   var sel=document.getElementById('empSel_'+idx), btn=document.getElementById('empBtn_'+idx), pos=sel?sel.value:'';
-  if(!pos){alert('Select a position');return;}
-  btn.textContent='…'; btn.disabled=true;
+  if(!pos){alert('Select a position first');return;}
+  btn.textContent='&#8230;'; btn.disabled=true;
   try{
     var r=await fetch('/api/position-overrides/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:emp.full_name,position:pos})});
     var d=await r.json();
-    if(d.ok){btn.textContent='✓'; btn.style.background='#10B981'; _empData[idx].position=pos; setTimeout(_renderEmpTable,600);}
+    if(d.ok){btn.textContent='&#10003;'; btn.style.background='#10B981'; _empData[idx].position=pos; var pd=_empPosMap[pos]; if(pd)_empData[idx].hour_rate=pd.hour_rate; setTimeout(_renderEmpTable,600);}
     else{btn.textContent='Err'; btn.style.background='#DC2626'; btn.disabled=false; alert(d.error||'Error');}
   }catch(e){btn.textContent='Err'; btn.style.background='#DC2626'; btn.disabled=false;}
 }
@@ -1691,15 +1708,12 @@ async function _empDelete(idx){
 }
 function _empShowAdd(){document.getElementById('empAddForm').style.display='';}
 function _empHideAdd(){document.getElementById('empAddForm').style.display='none';}
-async function _empRatePreview(){
+function _empRatePreview(){
   var pos=document.getElementById('addEmpPos').value, prev=document.getElementById('empRatePreview');
-  if(!pos){prev.style.display='none';return;}
-  try{
-    var r=await fetch('/api/employee-rate?position='+encodeURIComponent(pos)+'&name=_');
-    var d=await r.json();
-    if(d.rate&&d.rate.hour_rate){prev.style.display=''; prev.textContent='Rate from DB: $'+d.rate.hour_rate+'/hr ('+d.rate.source+')';}
-    else{prev.style.display='none';}
-  }catch(e){prev.style.display='none';}
+  if(!pos||!_empPosMap[pos]){prev.style.display='none';return;}
+  var pd=_empPosMap[pos];
+  if(pd&&pd.hour_rate){prev.style.display=''; prev.textContent='Rate from DB: $'+pd.hour_rate+'/hr'+(pd.md_rate?' | MD rate: '+pd.md_rate+' SAR':'');}
+  else{prev.style.display='none';}
 }
 async function _empAddSave(){
   var name=document.getElementById('addEmpName').value.trim(), pos=document.getElementById('addEmpPos').value;
@@ -1707,21 +1721,21 @@ async function _empAddSave(){
   var msg=document.getElementById('empAddMsg');
   if(!name){msg.textContent='Name required'; msg.style.color='#DC2626'; return;}
   if(!pos){msg.textContent='Position required'; msg.style.color='#DC2626'; return;}
-  msg.textContent='Saving…'; msg.style.color='var(--muted)';
+  msg.textContent='Saving&#8230;'; msg.style.color='var(--muted)';
   try{
     var r=await fetch('/api/project-employees/manual',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({full_name:name,position:pos,resigned_date:date,note:note})});
     var d=await r.json();
-    if(d.ok){msg.textContent='Saved!'; msg.style.color='#065F46'; document.getElementById('addEmpName').value=''; document.getElementById('addEmpDate').value=''; document.getElementById('addEmpNote').value=''; document.getElementById('empRatePreview').style.display='none'; setTimeout(function(){_empHideAdd(); _empLoad();},600);}
+    if(d.ok){msg.textContent='&#10003; Saved!'; msg.style.color='#065F46'; document.getElementById('addEmpName').value=''; document.getElementById('addEmpDate').value=''; document.getElementById('addEmpNote').value=''; document.getElementById('empRatePreview').style.display='none'; setTimeout(function(){_empHideAdd(); _empLoad();},600);}
     else{msg.textContent=d.error||'Error'; msg.style.color='#DC2626';}
   }catch(e){msg.textContent=e.message; msg.style.color='#DC2626';}
 }
 (function(){
   var btn=document.getElementById('tabBtnEmployees'); if(!btn)return;
-  try{var rc=document.cookie.split(';').map(function(c){return c.trim();}).find(function(c){return c.startsWith('pmo_role=');});var role=rc?rc.split('=')[1]:'';if(role==='admin'||role==='pmo')btn.style.display='';}
+  try{var rc=document.cookie.split(';').map(function(c){return c.trim();}).find(function(c){return c.startsWith('pmo_role=');});if(rc&&(rc.split('=')[1]==='admin'||rc.split('=')[1]==='pmo'))btn.style.display='';}
   catch(e){btn.style.display='';}
 })();
-var _origSwitchEmp=window.switchTab;
-window.switchTab=function(tab){if(_origSwitchEmp)_origSwitchEmp(tab);if(tab==='employees')setTimeout(_empLoad,100);};
+var _origSwitchEmpTab=window.switchTab;
+window.switchTab=function(tab){if(_origSwitchEmpTab)_origSwitchEmpTab(tab);if(tab==='employees')setTimeout(_empLoad,100);};
 </script>
 </body>
 </html>
