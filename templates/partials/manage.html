@@ -110,9 +110,14 @@ tr:hover td{background:#FAFAFA;}
     <button class="tab-btn" onclick="switchTab('promotions')">
       🏆 Promotions <span class="cnt-badge" id="promoCount">…</span>
     </button>
-    <button class="tab-btn" onclick="switchTab('employees')" id="empTabBtn">
+
+    <button class="tab-btn" id="tabBtnUsers" onclick="switchTab('users')" style="display:none;">
+      👥 Users
+    </button>
+    <button class="tab-btn" id="tabBtnEmployees" onclick="switchTab('employees')" style="display:none;">
       👤 Employees
     </button>
+
   </div>
 
   <!-- ═══════════════ TRAVEL TAB ═══════════════ -->
@@ -367,12 +372,13 @@ let _linkTimer    = null;
 function switchTab(tab) {
   activeTab = tab;
   document.querySelectorAll('.tab-btn').forEach((b,i) =>
-    b.classList.toggle('active', ['travel','promotions','phaseconfig'][i] === tab));
+    b.classList.toggle('active', ['travel','promotions','users'][i] === tab));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.getElementById('tab-'+tab).classList.add('active');
   if (tab === 'travel') loadTravel();
   else if (tab === 'promotions') loadPromos();
-  else if (tab === 'phaseconfig') loadPhaseConfig();
+  else if (tab === 'users') window.initUsersTab && window.initUsersTab();
+
 }
 
 function toggleForm(id) {
@@ -1464,92 +1470,6 @@ loadTravel();
 </script>
 
 <!-- ═══════════════ PHASE CONFIG TAB ═══════════════ -->
-<div id="tab-employees" class="tab-panel">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-    <h3 style="margin:0;font-size:15px;font-weight:700;color:var(--navy);">Project Employees — Position Overrides</h3>
-    <button onclick="_empLoad()" class="btn-sm">↻ Refresh</button>
-  </div>
-  <p style="font-size:12px;color:var(--muted);margin-bottom:16px;">
-    Employees without a position in Odoo won't have a rate. Set their position here.
-  </p>
-  <div id="empList" style="font-size:13px;">Loading…</div>
-</div>
-
-<script>
-async function _empLoad() {
-  const el = document.getElementById('empList');
-  el.innerHTML = 'Loading…';
-  try {
-    const [empRes, posRes] = await Promise.all([
-      fetch('/api/project-employees'),
-      fetch('/api/positions-list')
-    ]);
-    const empData = await empRes.json();
-    const posData = posRes.ok ? await posRes.json() : {positions:[]};
-    const positions = posData.positions || [];
-    const employees = empData.employees || [];
-    
-    if (!employees.length) { el.innerHTML = '<p>No employees found.</p>'; return; }
-    
-    let html = '<table style="width:100%;border-collapse:collapse;">';
-    html += '<tr style="background:#1B2A4E;color:white;font-size:11px;">';
-    html += '<th style="padding:8px;text-align:left;">Employee</th>';
-    html += '<th style="padding:8px;text-align:left;">Position (Odoo)</th>';
-    html += '<th style="padding:8px;text-align:left;">Override Position</th>';
-    html += '<th style="padding:8px;">Action</th></tr>';
-    
-    employees.forEach((emp, i) => {
-      const bg = i%2===0 ? 'white' : '#F8FAFC';
-      const hasPos = emp.position;
-      const missing = !hasPos;
-      html += `<tr style="background:${bg};${missing?'border-left:3px solid #EF4444;':''}">`;
-      html += `<td style="padding:8px;font-weight:${missing?700:400};color:${missing?'#EF4444':'inherit'}">${emp.name}</td>`;
-      html += `<td style="padding:8px;color:var(--muted);font-size:12px;">${emp.position || '—'}</td>`;
-      html += `<td style="padding:8px;">
-        <select id="empPos_${i}" style="width:100%;padding:4px;border:1px solid var(--border);border-radius:4px;font-size:12px;">
-          <option value="">— select position —</option>
-          ${positions.map(p => `<option value="${p}">${p}</option>`).join('')}
-        </select>
-      </td>`;
-      html += `<td style="padding:8px;text-align:center;">
-        <button onclick="_empSave('${emp.full_name}', ${i})" 
-          style="padding:4px 12px;background:#1B2A4E;color:white;border:none;border-radius:4px;font-size:12px;cursor:pointer;">
-          Save
-        </button>
-      </td></tr>`;
-    });
-    html += '</table>';
-    el.innerHTML = html;
-    el._employees = employees;
-  } catch(e) { el.innerHTML = '<p style="color:red;">Error: ' + e.message + '</p>'; }
-}
-
-async function _empSave(fullName, idx) {
-  const sel = document.getElementById('empPos_' + idx);
-  const pos = sel?.value;
-  if (!pos) { alert('Please select a position'); return; }
-  try {
-    const r = await fetch('/api/position-overrides/save', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({name: fullName, position: pos})
-    });
-    const d = await r.json();
-    if (d.ok) {
-      sel.parentElement.parentElement.style.borderLeft = '3px solid #10B981';
-      alert('Saved! The employee will now use: ' + pos);
-    } else { alert('Error: ' + (d.error || 'unknown')); }
-  } catch(e) { alert('Error: ' + e.message); }
-}
-
-// Auto-load when tab opens
-const _origSwitch = window.switchTab;
-window.switchTab = function(tab) {
-  if (_origSwitch) _origSwitch(tab);
-  if (tab === 'employees') setTimeout(_empLoad, 100);
-};
-</script>
-
 <div id="tab-phaseconfig" class="tab-panel">
 
   <!-- Upload section -->
@@ -1576,5 +1496,180 @@ window.switchTab = function(tab) {
 
 </div>
 
+
+<script>
+(function enforceManagement() {
+  var m = document.cookie.match(/(?:^|;)\s*pmo_role=([^;]+)/);
+  var role = m ? decodeURIComponent(m[1].trim()) : '';
+  window._currentRole = role;
+  window._mgmtReadOnly = (role === 'management');
+
+  function hideForMgmt() {
+    if (!window._mgmtReadOnly) return;
+    // IDs to hide completely
+    var hideIds = ['travelDrop','travelForm','promoDrop','promoForm','ticketPreview'];
+    hideIds.forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.style.setProperty('display','none','important');
+    });
+    // CSS classes to hide
+    document.querySelectorAll('.pdf-zone').forEach(function(el){ el.style.setProperty('display','none','important'); });
+    document.querySelectorAll('.btn-ghost.btn-sm').forEach(function(el){ el.style.setProperty('display','none','important'); });
+    document.querySelectorAll('.btn-danger.btn-sm').forEach(function(el){ el.style.setProperty('display','none','important'); });
+    // Hide "Add Manually" buttons (btn-ghost that toggles form)
+    document.querySelectorAll('.btn-ghost').forEach(function(el){
+      var oc = el.getAttribute('onclick') || '';
+      if (oc.indexOf('toggleForm') > -1 || oc.indexOf('Manually') > -1) {
+        el.style.setProperty('display','none','important');
+      }
+    });
+    // Hide upload excel drop zones
+    document.querySelectorAll('.upload-box').forEach(function(el){ el.style.setProperty('display','none','important'); });
+    // Hide ticket PDF label button
+    document.querySelectorAll('label.btn-ghost').forEach(function(el){ el.style.setProperty('display','none','important'); });
+  }
+
+  // Run immediately
+  hideForMgmt();
+
+  // Run after DOM ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', hideForMgmt);
+  }
+
+  // Run after any dynamic render via MutationObserver
+  if (typeof MutationObserver !== 'undefined' && window._mgmtReadOnly) {
+    var obs = new MutationObserver(hideForMgmt);
+    function startObs() {
+      obs.observe(document.body, {childList: true, subtree: true});
+    }
+    if (document.body) startObs();
+    else document.addEventListener('DOMContentLoaded', startObs);
+  }
+
+  // Block openEdit and delTravel/delPromo functions
+  var _origOpenEdit = window.openEdit;
+  window.openEdit = function(r, type) {
+    if (window._mgmtReadOnly) return;
+    if (_origOpenEdit) return _origOpenEdit.apply(this, arguments);
+  };
+
+  // Also fetch to confirm role and show Users tab for admin
+  fetch('/api/me').then(function(r){return r.json();}).then(function(d){
+    window._currentRole = d.role;
+    window._mgmtReadOnly = (d.role === 'management');
+    if (d.role === 'management') hideForMgmt();
+    if (d.role === 'admin') {
+      var b = document.getElementById('tabBtnUsers');
+      if (b) b.style.display = '';
+    }
+  }).catch(function(){});
+})();
+</script>
+
+<div id="tab-users" class="tab-panel">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+    <h3 style="margin:0;font-size:16px;font-weight:700;color:var(--navy);">Users</h3>
+    <button class="btn btn-primary" onclick="showAddUser()">+ Add User</button>
+  </div>
+  <div id="userFormWrap" style="display:none;background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:16px;">
+    <h4 id="userFormTitle" style="margin:0 0 14px;font-size:14px;font-weight:600;"></h4>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+      <div><label class="filter-label">USERNAME</label><input id="uUsername" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;box-sizing:border-box;"></div>
+      <div><label class="filter-label">PASSWORD</label><input id="uPassword" type="password" placeholder="leave blank to keep" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;box-sizing:border-box;"></div>
+      <div><label class="filter-label">DISPLAY NAME</label><input id="uDisplayName" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;box-sizing:border-box;"></div>
+      <div><label class="filter-label">ROLE</label><select id="uRole" onchange="onRoleChange()" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;"><option value="pmo">PMO Coordinator</option><option value="management">Management</option><option value="admin">Admin</option></select></div>
+      <div id="coordRow" style="grid-column:span 2;"><label class="filter-label">ODOO COORDINATOR</label><button type="button" onclick="loadCoords()" id="coordBtn" style="display:block;font-size:12px;color:var(--blue);background:none;border:none;cursor:pointer;padding:3px 0;margin-bottom:6px;">Load from Odoo</button><div id="coordCards" style="display:flex;flex-wrap:wrap;gap:8px;max-height:180px;overflow-y:auto;"></div><input type="hidden" id="uOdooName"><div id="coordInfo" style="display:none;margin-top:8px;padding:8px 12px;background:#EFF6FF;border-radius:8px;font-size:12px;color:#1E40AF;"><b id="coordInfoName"></b> <span id="coordInfoJob" style="color:#64748B;"></span><div id="coordInfoProjects" style="margin-top:4px;"></div></div></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:14px;align-items:center;"><button class="btn btn-primary" onclick="saveUser()">Save</button><button class="btn btn-ghost" onclick="cancelUser()">Cancel</button><span id="uMsg" style="font-size:12px;"></span></div>
+  </div>
+  <div class="tbl-wrap"><table style="width:100%;border-collapse:collapse;"><thead><tr style="background:var(--navy);color:white;"><th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:600;">USER</th><th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:600;">ROLE</th><th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:600;">COORDINATOR</th><th style="text-align:left;padding:10px 14px;font-size:11px;font-weight:600;">PROJECTS</th><th style="text-align:center;padding:10px 14px;font-size:11px;font-weight:600;">ACTIONS</th></tr></thead><tbody id="uTbody"></tbody></table></div>
+</div>
+<script>
+var _UE=null,_UC=[],_UDATA={};
+var URST={admin:"background:#FEF3C7;color:#92400E;",management:"background:#DBEAFE;color:#1E40AF;",pmo:"background:#D1FAE5;color:#065F46;"};
+var URLB={admin:"Admin",management:"Management",pmo:"PMO Coordinator"};
+window.initUsersTab=function(){var b=document.getElementById("tabBtnUsers");if(b)b.style.display="";usrLoad();};
+window.loadCoords=function(){var btn=document.getElementById("coordBtn");btn.textContent="Loading...";fetch("/api/odoo/coordinators").then(function(r){return r.json();}).then(function(d){_UC=d.employees||[];usrRC();btn.textContent=_UC.length+" loaded";}).catch(function(){btn.textContent="Retry";});};
+function usrRC(){var sel=document.getElementById("uOdooName").value,cont=document.getElementById("coordCards"),h="";for(var i=0;i<_UC.length;i++){var e=_UC[i],s=(sel===e.name);h+="<div data-ci=\""+i+"\" style=\"padding:8px 14px;border:2px solid "+(s?"#3B82F6":"var(--border)")+";border-radius:8px;background:"+(s?"#EFF6FF":"white")+";cursor:pointer;font-size:12px;\"><div style=\"font-weight:"+(s?700:500)+";color:"+(s?"#1E40AF":"var(--navy)")+";\">" + esc(e.name)+"</div>"+(e.job?"<div style=\"font-size:10px;color:var(--muted);\">"+esc(e.job)+"</div>":"")+"<div style=\"font-size:10px;color:#3B82F6;\">"+e.projects.length+" project"+(e.projects.length!==1?"s":"")+"</div></div>";}cont.innerHTML=h;var cards=cont.querySelectorAll("[data-ci]");for(var j=0;j<cards.length;j++){(function(el){el.addEventListener("click",function(){usrSC(parseInt(el.getAttribute("data-ci")));});})(cards[j]);}};
+window.usrSC=function(i){var e=_UC[i];document.getElementById("uOdooName").value=e.name;if(!document.getElementById("uDisplayName").value)document.getElementById("uDisplayName").value=e.name;document.getElementById("coordInfoName").textContent=e.name;document.getElementById("coordInfoJob").textContent=e.job?"("+e.job+")":"";var ph="";for(var j=0;j<e.projects.length;j++)ph+="<span style=\"display:inline-block;margin:2px 3px 0 0;padding:1px 7px;background:#DBEAFE;border-radius:10px;font-size:10px;color:#1E40AF;\">"+esc(e.projects[j].name)+"</span>";document.getElementById("coordInfoProjects").innerHTML=ph||"<span style=\"color:var(--muted);\">No projects</span>";document.getElementById("coordInfo").style.display="";usrRC();};
+window.onRoleChange=function(){document.getElementById("coordRow").style.display=document.getElementById("uRole").value==="pmo"?"":"none";};
+window.showAddUser=function(){_UE=null;document.getElementById("userFormTitle").textContent="Add New User";["uUsername","uPassword","uDisplayName","uOdooName"].forEach(function(id){var el=document.getElementById(id);if(el){el.value="";el.disabled=false;}});document.getElementById("uRole").value="pmo";document.getElementById("coordInfo").style.display="none";document.getElementById("coordCards").innerHTML="";document.getElementById("uMsg").textContent="";document.getElementById("coordBtn").textContent="Load from Odoo";onRoleChange();document.getElementById("userFormWrap").style.display="";};
+window.editUser=function(idx){var uname=Object.keys(_UDATA)[idx];if(!uname)return;var u=_UDATA[uname];_UE=uname;document.getElementById("userFormTitle").textContent="Edit "+uname;document.getElementById("uUsername").value=uname;document.getElementById("uUsername").disabled=true;document.getElementById("uPassword").value="";document.getElementById("uDisplayName").value=u.display_name||"";document.getElementById("uRole").value=u.role||"pmo";document.getElementById("uOdooName").value=u.odoo_name||"";document.getElementById("coordInfo").style.display="none";document.getElementById("uMsg").textContent="";document.getElementById("coordBtn").textContent="Load from Odoo";onRoleChange();document.getElementById("userFormWrap").style.display="";};
+window.deleteUser=function(idx){var uname=Object.keys(_UDATA)[idx];if(!uname)return;if(!confirm("Delete "+uname+"?"))return;fetch("/api/users/"+uname,{method:"DELETE"}).then(function(r){return r.json();}).then(function(d){if(d.ok)usrLoad();else alert(d.error);});};
+window.cancelUser=function(){document.getElementById("userFormWrap").style.display="none";_UE=null;};
+window.saveUser=function(){var msg=document.getElementById("uMsg"),un=document.getElementById("uUsername").value.trim().toLowerCase(),pw=document.getElementById("uPassword").value.trim(),dn=document.getElementById("uDisplayName").value.trim(),role=document.getElementById("uRole").value,on2=document.getElementById("uOdooName").value.trim();if(!un){msg.textContent="Username required";msg.style.color="red";return;}if(!_UE&&!pw){msg.textContent="Password required";msg.style.color="red";return;}var body={username:un,role:role,display_name:dn||un,odoo_name:on2};if(pw)body.password=pw;fetch(_UE?"/api/users/"+_UE:"/api/users",{method:_UE?"PUT":"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json();}).then(function(d){if(d.error){msg.textContent=d.error;msg.style.color="red";return;}msg.textContent="Saved!";msg.style.color="green";setTimeout(function(){window.cancelUser();usrLoad();},700);}).catch(function(e){msg.textContent=e.message;msg.style.color="red";});};
+function usrLoad(){var tbody=document.getElementById("uTbody");tbody.innerHTML="<tr><td colspan=\"5\" style=\"padding:20px;text-align:center;color:var(--muted);\">Loading...</td></tr>";fetch("/api/users").then(function(r){return r.json();}).then(function(d){_UDATA=d.users||{};var keys=Object.keys(_UDATA);if(!keys.length){tbody.innerHTML="<tr><td colspan=\"5\" style=\"padding:20px;text-align:center;color:var(--muted);\">No users</td></tr>";return;}fetch("/api/odoo/coordinators").then(function(r){return r.json();}).then(function(cr){var cd={};if(cr.ok)for(var i=0;i<cr.employees.length;i++)cd[cr.employees[i].name]=cr.employees[i].projects;var rows="";for(var k=0;k<keys.length;k++){var u=_UDATA[keys[k]],projs=u.odoo_name&&cd[u.odoo_name]?cd[u.odoo_name]:[],ph="";for(var j=0;j<projs.length;j++)ph+="<span style=\"display:inline-block;margin:1px 3px 1px 0;padding:1px 7px;background:#DBEAFE;border-radius:10px;font-size:10px;color:#1E40AF;\">"+esc(projs[j].name)+"</span>";if(!ph)ph="<span style=\"color:var(--muted);font-size:11px;\">-</span>";rows+="<tr style=\"border-bottom:1px solid var(--border);\"><td style=\"padding:10px 14px;\"><div style=\"font-weight:600;font-size:13px;\">"+esc(u.display_name||keys[k])+"</div><div style=\"font-size:11px;color:var(--muted);\">"+esc(keys[k])+"</div></td><td style=\"padding:10px 14px;\"><span style=\"font-size:11px;font-weight:600;padding:2px 10px;border-radius:10px;"+(URST[u.role]||"")+"\">"+( URLB[u.role]||u.role)+"</span></td><td style=\"padding:10px 14px;font-size:12px;color:var(--muted);\">"+esc(u.odoo_name||"-")+"</td><td style=\"padding:10px 14px;\">"+ph+"</td><td style=\"padding:10px 14px;text-align:center;white-space:nowrap;\"><button data-act=\"edit\" data-idx=\""+k+"\" style=\"padding:4px 12px;border:1px solid var(--border);border-radius:5px;background:white;cursor:pointer;font-size:12px;margin-right:6px;\">Edit</button><button data-act=\"del\" data-idx=\""+k+"\" style=\"padding:4px 12px;border:1px solid #FCA5A5;border-radius:5px;background:#FEF2F2;cursor:pointer;font-size:12px;color:#DC2626;\">Delete</button></td></tr>";}tbody.innerHTML=rows;tbody.querySelectorAll("[data-act]").forEach(function(btn){btn.addEventListener("click",function(){var idx=parseInt(this.getAttribute("data-idx"));if(this.getAttribute("data-act")==="edit")editUser(idx);else deleteUser(idx);});});}).catch(function(){});}).catch(function(e){tbody.innerHTML="<tr><td colspan=\"5\" style=\"padding:20px;text-align:center;color:red;\">"+e.message+"</td></tr>";});}
+</script>
+<div id="tab-employees" class="tab-panel">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+    <h3 style="margin:0;font-size:16px;font-weight:700;color:var(--navy);">Project Employees — Position Overrides</h3>
+    <button onclick="_empLoad()" style="padding:6px 14px;border:1px solid var(--border);border-radius:6px;background:white;cursor:pointer;font-size:12px;">↻ Refresh</button>
+  </div>
+  <p style="font-size:12px;color:var(--muted);margin-bottom:16px;">Employees without a position in Odoo won't have a rate. Set their position here to fix it.</p>
+  <div id="empList">Loading…</div>
+</div>
+<script>
+async function _empLoad(){
+  const el=document.getElementById('empList');
+  el.innerHTML='<p style="color:var(--muted);">Loading…</p>';
+  try{
+    const [er,pr]=await Promise.all([fetch('/api/project-employees'),fetch('/api/positions-list')]);
+    const ed=await er.json(), pd=pr.ok?await pr.json():{positions:[]};
+    const emps=ed.employees||[], positions=pd.positions||[];
+    if(!emps.length){el.innerHTML='<p>No employees found for this project.</p>';return;}
+    let html='<table style="width:100%;border-collapse:collapse;">';
+    html+='<thead><tr style="background:var(--navy);color:white;font-size:11px;">';
+    html+='<th style="padding:10px 14px;text-align:left;">Employee</th>';
+    html+='<th style="padding:10px 14px;text-align:left;">Position (Odoo)</th>';
+    html+='<th style="padding:10px 14px;text-align:left;min-width:220px;">Override Position</th>';
+    html+='<th style="padding:10px 14px;text-align:center;">Action</th></tr></thead><tbody>';
+    emps.forEach((emp,i)=>{
+      const missing=!emp.position;
+      const bg=i%2===0?'white':'#F8FAFC';
+      const borderL=missing?'border-left:3px solid #EF4444;':'';
+      html+=`<tr style="background:${bg};${borderL}border-bottom:1px solid var(--border);">`;
+      html+=`<td style="padding:10px 14px;"><div style="font-weight:${missing?700:500};color:${missing?'#DC2626':'var(--navy)'};">${esc(emp.name)}</div>${emp.full_name!==emp.name?`<div style="font-size:10px;color:var(--muted);">${esc(emp.full_name)}</div>`:''}</td>`;
+      html+=`<td style="padding:10px 14px;font-size:12px;color:${missing?'#EF4444':'var(--muted)'};">${emp.position||'⚠ No position'}</td>`;
+      html+=`<td style="padding:10px 14px;"><select id="empSel_${i}" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:5px;font-size:12px;"><option value="">— select —</option>${positions.map(p=>`<option value="${p}">${p}</option>`).join('')}</select></td>`;
+      html+=`<td style="padding:10px 14px;text-align:center;"><button onclick="_empSave('${emp.full_name.replace(/'/g,"\\'")}',${i})" style="padding:5px 14px;background:var(--navy);color:white;border:none;border-radius:5px;font-size:12px;cursor:pointer;">Save</button></td></tr>`;
+    });
+    html+='</tbody></table>';
+    el.innerHTML=html;
+  }catch(e){el.innerHTML=`<p style="color:red;">Error: ${e.message}</p>`;}
+}
+async function _empSave(fullName,idx){
+  const sel=document.getElementById('empSel_'+idx);
+  const pos=sel?.value;
+  if(!pos){alert('Please select a position');return;}
+  try{
+    const r=await fetch('/api/position-overrides/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:fullName,position:pos})});
+    const d=await r.json();
+    if(d.ok){
+      sel.closest('tr').style.borderLeft='3px solid #10B981';
+      sel.closest('tr').style.background='#F0FDF4';
+      const btn=sel.closest('tr').querySelector('button');
+      if(btn){btn.textContent='✓ Saved';btn.style.background='#10B981';}
+    }else{alert('Error: '+(d.error||'unknown'));}
+  }catch(e){alert('Error: '+e.message);}
+}
+// Show employees tab when admin/pmo
+(function(){
+  const btn=document.getElementById('tabBtnEmployees');
+  if(btn){
+    // Show for all roles that can access manage
+    try{
+      const role=document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith('pmo_role='));
+      const rv=role?role.split('=')[1]:'';
+      if(rv==='admin'||rv==='pmo')btn.style.display='';
+    }catch(e){btn.style.display='';}
+  }
+})();
+const _origSwitchManage=window.switchTab;
+window.switchTab=function(tab){
+  if(_origSwitchManage)_origSwitchManage(tab);
+  if(tab==='employees')setTimeout(_empLoad,100);
+};
+</script>
 </body>
 </html>
