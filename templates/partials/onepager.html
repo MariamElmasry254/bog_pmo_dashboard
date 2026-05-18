@@ -455,9 +455,12 @@ window.opExportPDF=function(){
     var el=document.getElementById('onepager');
     var pn=document.getElementById('opProjName');
     var title=(pn?pn.textContent:'Project')+' - One Pager';
-    html2canvas(el,{scale:1.5,useCORS:true,backgroundColor:'#ffffff'}).then(function(canvas){
+    // jsPDF is exposed as window.jspdf.jsPDF
+    var JsPDF=window.jspdf&&window.jspdf.jsPDF||window.jsPDF||window.jsPDF&&window.jsPDF.jsPDF;
+    if(!JsPDF){alert('PDF library not loaded yet, try again');return;}
+    html2canvas(el,{scale:1.5,useCORS:true,backgroundColor:'#ffffff',logging:false}).then(function(canvas){
       var imgData=canvas.toDataURL('image/png');
-      var pdf=new jsPDF.jsPDF('p','mm','a4');
+      var pdf=new JsPDF('p','mm','a4');
       var pw=pdf.internal.pageSize.getWidth();
       var ph=pdf.internal.pageSize.getHeight();
       var ratio=canvas.height/canvas.width;
