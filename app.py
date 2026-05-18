@@ -7221,6 +7221,38 @@ def api_db_audit():
 
 
 
+@app.route('/api/project-employees/manual', methods=['POST'])
+@login_required
+def api_project_employees_manual_add():
+    """Add a manual/resigned employee to the project."""
+    body = request.json or {}
+    name = (body.get('full_name') or '').strip()
+    if not name:
+        return jsonify({'error': 'full_name required'}), 400
+    pfx = active_db_prefix()
+    ns = f'{pfx}_manual_employees' if pfx else 'manual_employees'
+    key = name.lower().replace(' ', '_')
+    db.set_override(ns, '', key, {
+        'full_name':    name,
+        'position':     body.get('position', ''),
+        'resigned_date':body.get('resigned_date', ''),
+        'note':         body.get('note', ''),
+        'source_type':  'manual',
+    })
+    return jsonify({'ok': True})
+
+
+@app.route('/api/project-employees/manual/<path:full_name>', methods=['DELETE'])
+@login_required
+def api_project_employees_manual_delete(full_name):
+    """Delete a manual employee by full_name."""
+    pfx = active_db_prefix()
+    ns = f'{pfx}_manual_employees' if pfx else 'manual_employees'
+    key = full_name.lower().replace(' ', '_')
+    db.set_override(ns, '', key, None)
+    return jsonify({'ok': True})
+
+
 @app.route('/api/project-employees')
 def api_project_employees():
     """Get list of employees who have logged time on the project, with their positions"""
@@ -7254,6 +7286,26 @@ def api_project_employees():
                 info['source'] = None
 
     employees = sorted(seen.values(), key=lambda x: x['name'].lower())
+
+    # Merge manual employees from DB
+    pfx = active_db_prefix()
+    ns = f'{pfx}_manual_employees' if pfx else 'manual_employees'
+    manual_map = db.get_namespace_overrides(ns, '') or {}
+    for key, val in manual_map.items():
+        if not isinstance(val, dict): continue
+        fn = val.get('full_name', '')
+        if not fn: continue
+        employees.append({
+            'name':         fn,
+            'full_name':    fn,
+            'position':     val.get('position'),
+            'source':       'override',
+            'source_type':  'manual',
+            'resigned_date':val.get('resigned_date', ''),
+            'note':         val.get('note', ''),
+            'hour_rate':    0,
+        })
+
     return jsonify({'employees': employees, 'connected': True, 'count': len(employees)})
 
 
