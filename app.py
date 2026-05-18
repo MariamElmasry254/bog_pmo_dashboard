@@ -1085,7 +1085,13 @@ def api_standup():
 
         task_ids = [t['id'] for t in tasks]
         if not task_ids:
-            return jsonify({'ok': True, 'date': query_date, 'phases': {ph: [] for ph in phases}})
+            return jsonify({'ok': True, 'date': query_date,
+                           'phases': {ph: [] for ph in phases},
+                           'debug': {
+                               'proj_id': proj_id, 'proj_name': proj_name,
+                               'is_bog': is_bog, 'domain': str(proj_domain),
+                               'tasks_found': 0
+                           }})
 
         # ── 2. Classify tasks by phase (from parent bracket) ─────────────
         def classify_phase(task):
