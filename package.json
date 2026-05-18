@@ -1,8 +1,0 @@
-{
-  "name": "bog-pmo-dashboard",
-  "version": "1.0.0",
-  "description": "BOG PMO Dashboard - Node dependencies for PPTX export",
-  "dependencies": {
-    "pptxgenjs": "^3.12.0"
-  }
-}
