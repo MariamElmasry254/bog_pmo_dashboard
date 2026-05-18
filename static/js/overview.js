@@ -338,17 +338,15 @@ async function loadOverviewKPIs() {
       if (btn) btn.style.display = _isBog ? '' : 'none';
     });
 
-    // ── Inject One Pager tab into nav.exec-tabs ─────────────────────
-    (function() {
-      if (document.querySelector('[data-tab="onepager"]')) return;
-      var tabBar = document.querySelector('nav.exec-tabs');
-      if (!tabBar) return;
-      var opBtn = document.createElement('button');
-      opBtn.className = 'exec-tab';
-      opBtn.setAttribute('data-tab', 'onepager');
-      opBtn.innerHTML = 'One Pager';
-      opBtn.addEventListener('click', _loadOnepagerTab);
-      tabBar.appendChild(opBtn);
+    // ── One Pager tab button ─────────────────────────────────────────
+    (function(){
+      if(document.querySelector('[data-tab="onepager"]')) return;
+      var nav=document.querySelector('nav.exec-tabs'); if(!nav) return;
+      var b=document.createElement('button');
+      b.className='exec-tab'; b.setAttribute('data-tab','onepager');
+      b.textContent='One Pager';
+      b.addEventListener('click',_loadOnepagerTab);
+      nav.appendChild(b);
     })();
 
     // Register callback for variance profitability to update overview KPIs
@@ -1478,65 +1476,54 @@ function stageColorMap(stage) {
 }
 
 
-// One Pager Tab
+// ═══ One Pager Tab ════════════════════════════════════════════════════
+var _opLoaded = false;
+
 async function _loadOnepagerTab() {
-  // Deactivate all
-  document.querySelectorAll('.exec-tab').forEach(function(b){
-    b.classList.remove('active');
-  });
-  document.querySelectorAll('.tab-panel').forEach(function(p){
-    p.classList.remove('active');
-  });
-  // Activate button
+  // 1. Deactivate everything
+  document.querySelectorAll('.exec-tab').forEach(function(b){ b.classList.remove('active'); });
+  document.querySelectorAll('.tab-panel').forEach(function(p){ p.classList.remove('active'); p.style.display=''; });
+
+  // 2. Activate our button
   var btn = document.querySelector('.exec-tab[data-tab="onepager"]');
   if(btn) btn.classList.add('active');
 
-  // Create panel if missing
+  // 3. Find or create panel — insert AFTER overview panel so it uses same CSS
   var panel = document.getElementById('onepager');
   if(!panel){
     panel = document.createElement('section');
     panel.className = 'tab-panel';
     panel.id = 'onepager';
-    // Find where other tab-panels live
-    var sibling = document.querySelector('.tab-panel');
-    if(sibling && sibling.parentNode){
-      sibling.parentNode.appendChild(panel);
-    } else {
-      document.body.appendChild(panel);
-    }
+    var refPanel = document.querySelector('section.tab-panel') || document.querySelector('.tab-panel');
+    if(refPanel && refPanel.parentNode){ refPanel.parentNode.insertBefore(panel, refPanel.nextSibling); }
+    else { document.body.appendChild(panel); }
   }
   panel.classList.add('active');
+  panel.style.display = 'block';
 
-  // Load content
-  if(!panel.dataset.loaded){
-    panel.innerHTML = '<div style="padding:48px;text-align:center;color:#64748B;font-size:14px;">Loading One Pager...</div>';
+  // 4. Load HTML content once
+  if(!_opLoaded){
+    panel.innerHTML = '<div style="padding:48px;text-align:center;color:#64748B;">Loading...</div>';
     try{
       var r = await fetch('/partials/onepager');
-      if(r.ok){
-        var html = await r.text();
-        var tmp = document.createElement('div');
-        tmp.innerHTML = html;
-        var sec = tmp.querySelector('section#onepager') || tmp.firstElementChild;
-        if(sec){
-          sec.classList.add('active');
-          panel.parentNode.replaceChild(sec, panel);
-          panel = sec;
-        } else {
-          panel.innerHTML = html;
-        }
-        panel.dataset.loaded = '1';
-        // Run inline scripts
-        panel.querySelectorAll('script').forEach(function(os){
-          var s = document.createElement('script');
-          s.textContent = os.textContent;
-          document.head.appendChild(s);
-        });
-      } else {
-        panel.innerHTML = '<div style="padding:20px;color:#DC2626;font-size:13px;">HTTP '+r.status+' — Make sure onepager.html is in templates/partials/</div>';
-      }
-    } catch(e){
-      panel.innerHTML = '<div style="padding:20px;color:#DC2626;font-size:13px;">'+e.message+'</div>';
-    }
+      if(!r.ok){ panel.innerHTML='<div style="padding:20px;color:#DC2626;">HTTP '+r.status+' — Add onepager.html to templates/partials/</div>'; return; }
+      var html = await r.text();
+      // Parse and insert
+      var tmp=document.createElement('div'); tmp.innerHTML=html;
+      var sec=tmp.querySelector('section#onepager');
+      if(sec){
+        sec.classList.add('active'); sec.style.display='block';
+        panel.parentNode.replaceChild(sec, panel);
+        panel=sec;
+      } else { panel.innerHTML=html; }
+      _opLoaded=true;
+      // Run scripts
+      panel.querySelectorAll('script').forEach(function(os){
+        var s=document.createElement('script'); s.textContent=os.textContent; document.head.appendChild(s);
+      });
+    } catch(e){ panel.innerHTML='<div style="padding:20px;color:#DC2626;">'+e.message+'</div>'; return; }
   }
+
+  // 5. Load data
   setTimeout(function(){ if(window.loadOnepager) loadOnepager(); }, 300);
 }
