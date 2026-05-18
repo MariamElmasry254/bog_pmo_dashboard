@@ -1077,10 +1077,10 @@ def api_standup():
         tasks = odoo.models.execute_kw(
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'project.task', 'search_read',
-            [proj_domain + [('child_ids', '=', False)]],
+            [proj_domain + [('child_ids', '=', False), ('active', '=', True)]],
             {'fields': ['id', 'name', 'planned_hours', 'effective_hours',
                         'user_id', 'stage_id', 'parent_id', 'write_date'],
-             'limit': 3000}
+             'limit': 1000}
         )
 
         task_ids = [t['id'] for t in tasks]
@@ -1113,18 +1113,23 @@ def api_standup():
         ts_prev  = fetch_ts(prev_date)
         ts_today = fetch_ts(query_date)
 
-        # ── 4. First entry per task ───────────────────────────────────────
+        # ── 4. First entry per task — only for tasks with recent activity ──
         first_entry_map = {}
-        all_ts = odoo.models.execute_kw(
-            ODOO_DB, odoo.uid, ODOO_PASSWORD,
-            'account.analytic.line', 'search_read',
-            [[('task_id', 'in', task_ids)]],
-            {'fields': ['task_id', 'date'], 'limit': 10000, 'order': 'date asc'}
-        )
-        for ts in all_ts:
-            tid = ts['task_id'][0] if ts.get('task_id') else None
-            if tid and tid not in first_entry_map:
-                first_entry_map[tid] = ts['date']
+        # Only fetch for tasks that appear in prev timesheets (lighter query)
+        active_task_ids = list(set(
+            [ts['task_id'][0] for ts in ts_prev + ts_today if ts.get('task_id')]
+        ))
+        if active_task_ids:
+            first_ts = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'account.analytic.line', 'search_read',
+                [[('task_id', 'in', active_task_ids)]],
+                {'fields': ['task_id', 'date'], 'limit': 5000, 'order': 'date asc'}
+            )
+            for ts in first_ts:
+                tid = ts['task_id'][0] if ts.get('task_id') else None
+                if tid and tid not in first_entry_map:
+                    first_entry_map[tid] = ts['date']
 
         # ── 5. Build hours maps ───────────────────────────────────────────
         def build_hrs_map(ts_list):
