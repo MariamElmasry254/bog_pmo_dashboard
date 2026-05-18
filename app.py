@@ -5717,6 +5717,50 @@ def api_employee_rate():
     })
 
 
+@app.route('/api/positions-list')
+@login_required
+def api_positions_list():
+    all_pos = get_all_positions(db)
+    result = []
+    for p in all_pos:
+        name = p.get('position') or p.get('name','')
+        if name:
+            result.append({'name': name, 'hour_rate': p.get('hour_rate'), 'md_rate': p.get('md_rate'), 'country': p.get('country','')})
+    result.sort(key=lambda x: x['name'])
+    return jsonify({'positions': result})
+
+@app.route('/api/position-overrides/save', methods=['POST'])
+def api_position_overrides_save_v2():
+    body = request.json or {}
+    name = body.get('name'); position = body.get('position')
+    if not name: return jsonify({'error': 'name required'}), 400
+    db.set_override('position', '', name, position if position else None)
+    return jsonify({'ok': True})
+
+@app.route('/api/project-employees/manual', methods=['POST'])
+@login_required
+def api_project_employees_manual_add():
+    body = request.json or {}
+    full_name = (body.get('full_name') or '').strip()
+    position  = (body.get('position') or '').strip()
+    resigned_date = (body.get('resigned_date') or '').strip()
+    note = (body.get('note') or '').strip()
+    if not full_name: return jsonify({'error': 'full_name required'}), 400
+    pfx = active_db_prefix()
+    manual_ns = f'{pfx}_manual_employees' if pfx else 'manual_employees'
+    db.set_override(manual_ns, '', full_name, {'position': position, 'resigned_date': resigned_date, 'note': note})
+    if position:
+        db.set_override('position', '', full_name, position)
+    return jsonify({'ok': True})
+
+@app.route('/api/project-employees/manual/<path:full_name>', methods=['DELETE'])
+@login_required
+def api_project_employees_manual_delete(full_name):
+    pfx = active_db_prefix()
+    manual_ns = f'{pfx}_manual_employees' if pfx else 'manual_employees'
+    db.set_override(manual_ns, '', full_name, None)
+    return jsonify({'ok': True})
+
 def batch_fetch_employees_from_odoo(employee_names):
     """Fetch position + timesheet_cost for a batch of employees in ONE Odoo query.
     Strips [E123] prefix from names since Odoo stores names without it.
@@ -6390,6 +6434,13 @@ def api_effort_all_months(phase_key):
         odoo_info = odoo_data.get(emp_name, {})
         odoo_pos = odoo_info.get('position')
         sar_rate = odoo_info.get('sar_rate', 0)
+        # Use position override if Odoo has no position
+        import re as _re_po
+        _pos_ovr = load_plan_overrides().get('position_overrides', {})
+        _clean_en = _re_po.sub(r'^\[[A-Z]\d+\s*\]\s*', '', emp_name).strip()
+        _pos_ovr_val = _pos_ovr.get(emp_name) or _pos_ovr.get(_clean_en)
+        if _pos_ovr_val and not odoo_pos:
+            odoo_pos = _pos_ovr_val
 
         # ── Travel periods (match by Odoo ID, code, or name) ──
         emp_travel_periods = []
@@ -6808,7 +6859,7 @@ def api_db_audit():
 
 @app.route('/api/project-employees')
 def api_project_employees():
-    """Get list of employees who have logged time on the project, with their positions and rates"""
+    """Get list of employees who have logged time on the project, with positions and rates"""
     raw = odoo.get_timesheets()
     connected = raw is not None
     seen = {}
@@ -6821,88 +6872,33 @@ def api_project_employees():
                 display_name = _re_emp.sub(r'^\s*\[[A-Z]\d+\s*\]\s*', '', full_name).strip()
                 if full_name not in seen:
                     seen[full_name] = {'name': display_name, 'full_name': full_name, 'source_type': 'odoo'}
-
-    # Also include manually added employees (resigned/external)
+    # Include manually added employees
     pfx = active_db_prefix()
     manual_ns = f'{pfx}_manual_employees' if pfx else 'manual_employees'
     manual_emps = db.get_namespace_overrides(manual_ns, '') or {}
     for full_name, info in manual_emps.items():
         if full_name not in seen:
             display_name = _re_emp.sub(r'^\s*\[[A-Z]\d+\s*\]\s*', '', full_name).strip()
-            seen[full_name] = {
-                'name': display_name, 'full_name': full_name,
-                'source_type': 'manual',
-                'position': info.get('position') if isinstance(info, dict) else info,
-                'resigned_date': info.get('resigned_date','') if isinstance(info, dict) else '',
-                'note': info.get('note','') if isinstance(info, dict) else '',
-            }
-
+            d = info if isinstance(info, dict) else {}
+            seen[full_name] = {'name': display_name, 'full_name': full_name, 'source_type': 'manual',
+                               'position': d.get('position',''), 'resigned_date': d.get('resigned_date',''), 'note': d.get('note','')}
     # Fetch positions and rates
     pos_overrides = load_plan_overrides().get('position_overrides', {})
+    all_positions_db = {(p.get('position') or p.get('name','')): p for p in get_all_positions(db)}
     for name, info in seen.items():
-        if info.get('source_type') == 'manual':
-            pass  # position already set above
-        elif name in pos_overrides:
-            info['position'] = pos_overrides[name]; info['source'] = 'override'
+        if info.get('source_type') != 'manual':
+            pos = pos_overrides.get(name) or get_odoo_position_for_employee(name)
+            info['position'] = pos or None
+        # Get rate directly from DB positions catalog (not Odoo)
+        pos_name = info.get('position') or ''
+        pos_data = all_positions_db.get(pos_name)
+        if pos_data:
+            info['hour_rate'] = pos_data.get('hour_rate')
+            info['rate_source'] = 'positions_db'
         else:
-            pos = get_odoo_position_for_employee(name)
-            if pos: info['position'] = pos; info['source'] = 'odoo'
-            else:   info['position'] = None; info['source'] = None
-
-        # Get rate
-        try:
-            rate_info = get_employee_rate(name, info.get('position'), False)
-            info['hour_rate'] = rate_info.get('hour_rate') if rate_info else None
-            info['rate_source'] = rate_info.get('source','') if rate_info else ''
-        except Exception:
             info['hour_rate'] = None; info['rate_source'] = ''
-
     employees = sorted(seen.values(), key=lambda x: x['name'].lower())
     return jsonify({'employees': employees, 'connected': connected, 'count': len(employees)})
-
-@app.route('/api/project-employees/manual', methods=['POST'])
-@login_required
-def api_project_employees_manual_add():
-    """Add a manually-tracked employee (resigned/external) with position"""
-    body = request.json or {}
-    full_name = (body.get('full_name') or '').strip()
-    position  = (body.get('position') or '').strip()
-    resigned_date = (body.get('resigned_date') or '').strip()
-    note = (body.get('note') or '').strip()
-    if not full_name: return jsonify({'error': 'full_name required'}), 400
-    pfx = active_db_prefix()
-    manual_ns = f'{pfx}_manual_employees' if pfx else 'manual_employees'
-    db.set_override(manual_ns, '', full_name, {
-        'position': position, 'resigned_date': resigned_date, 'note': note
-    })
-    # Also set position override so rate lookup works
-    if position:
-        db.set_override('position', '', full_name, position)
-    return jsonify({'ok': True})
-
-@app.route('/api/project-employees/manual/<path:full_name>', methods=['DELETE'])
-@login_required
-def api_project_employees_manual_delete(full_name):
-    """Remove a manually-added employee"""
-    pfx = active_db_prefix()
-    manual_ns = f'{pfx}_manual_employees' if pfx else 'manual_employees'
-    db.set_override(manual_ns, '', full_name, None)
-    return jsonify({'ok': True})
-
-@app.route('/api/positions-list')
-@login_required
-def api_positions_list():
-    all_pos = get_all_positions(db)
-    names = sorted(set(p.get('position') or p.get('name','') for p in all_pos if p.get('position') or p.get('name')))
-    return jsonify({'positions': names})
-
-@app.route('/api/position-overrides/save', methods=['POST'])
-def api_position_overrides_save_v2():
-    body = request.json or {}
-    name = body.get('name'); position = body.get('position')
-    if not name: return jsonify({'error': 'name required'}), 400
-    db.set_override('position', '', name, position if position else None)
-    return jsonify({'ok': True})
 
 
 # Main API endpoint for variance data
