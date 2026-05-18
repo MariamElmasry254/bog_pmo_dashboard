@@ -1605,119 +1605,123 @@ function usrLoad(){var tbody=document.getElementById("uTbody");tbody.innerHTML="
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
     <div>
       <h3 style="margin:0 0 4px;font-size:16px;font-weight:700;color:var(--navy);">Project Employees — Position & Rate</h3>
-      <p style="margin:0;font-size:12px;color:var(--muted);">Employees in red have no rate — select their position to fix.</p>
+      <p style="margin:0;font-size:12px;color:var(--muted);">Employees in red have no rate. Add resigned/external employees manually.</p>
     </div>
-    <button onclick="_empLoad()" style="padding:6px 14px;border:1px solid var(--border);border-radius:6px;background:white;cursor:pointer;font-size:12px;font-weight:600;">↻ Refresh</button>
+    <div style="display:flex;gap:8px;">
+      <button onclick="_empShowAdd()" style="padding:6px 14px;border:none;border-radius:6px;background:#1B2A4E;color:white;cursor:pointer;font-size:12px;font-weight:600;">+ Add Employee</button>
+      <button onclick="_empLoad()" style="padding:6px 14px;border:1px solid var(--border);border-radius:6px;background:white;cursor:pointer;font-size:12px;">↻ Refresh</button>
+    </div>
   </div>
-  <div id="empList" style="margin-top:16px;"></div>
+  <div id="empAddForm" style="display:none;background:#F8FAFC;border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px;">
+    <h4 style="margin:0 0 12px;font-size:14px;font-weight:700;color:var(--navy);">Add Resigned / External Employee</h4>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+      <div><label class="filter-label">FULL NAME (as in Odoo)</label><input id="addEmpName" placeholder="e.g. [R340] Mohamed Sehmawy" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;box-sizing:border-box;"></div>
+      <div><label class="filter-label">POSITION</label><select id="addEmpPos" onchange="_empRatePreview()" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;"><option value="">— select position —</option></select></div>
+      <div><label class="filter-label">RESIGNED DATE (optional)</label><input id="addEmpDate" type="date" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;box-sizing:border-box;"></div>
+      <div><label class="filter-label">NOTE (optional)</label><input id="addEmpNote" placeholder="e.g. Left project Feb 2026" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;box-sizing:border-box;"></div>
+    </div>
+    <div id="empRatePreview" style="display:none;margin-top:10px;padding:8px 12px;background:#D1FAE5;border-radius:6px;font-size:13px;color:#065F46;font-weight:600;"></div>
+    <div style="display:flex;gap:8px;margin-top:12px;">
+      <button onclick="_empAddSave()" style="padding:7px 18px;background:#1B2A4E;color:white;border:none;border-radius:6px;font-size:13px;cursor:pointer;font-weight:600;">Save Employee</button>
+      <button onclick="_empHideAdd()" style="padding:7px 14px;border:1px solid var(--border);border-radius:6px;background:white;cursor:pointer;font-size:13px;">Cancel</button>
+      <span id="empAddMsg" style="font-size:12px;align-self:center;"></span>
+    </div>
+  </div>
+  <div id="empList" style="margin-top:8px;"></div>
 </div>
 <script>
 var _empPositions=[], _empData=[];
-
 async function _empLoad(){
   var el=document.getElementById('empList');
-  el.innerHTML='<p style="color:var(--muted);font-size:13px;">Loading…</p>';
+  el.innerHTML='<p style="color:var(--muted);padding:16px;">Loading…</p>';
   try{
     var er=await fetch('/api/project-employees');
     var pr=await fetch('/api/positions-list');
-    var ed=await er.json();
-    var pd=pr.ok?await pr.json():{positions:[]};
-    _empData=ed.employees||[];
-    _empPositions=pd.positions||[];
+    var ed=await er.json(), pd=pr.ok?await pr.json():{positions:[]};
+    _empData=ed.employees||[]; _empPositions=pd.positions||[];
+    var sel=document.getElementById('addEmpPos');
+    if(sel) sel.innerHTML='<option value="">— select position —</option>'+_empPositions.map(function(p){return '<option value="'+p+'">'+p+'</option>';}).join('');
     _renderEmpTable();
-  }catch(e){el.innerHTML='<p style="color:#DC2626;">Error: '+e.message+'</p>';}
+  }catch(e){el.innerHTML='<p style="color:#DC2626;padding:16px;">Error: '+e.message+'</p>';}
 }
-
 function _renderEmpTable(){
-  var el=document.getElementById('empList');
-  var emps=_empData;
-  if(!emps.length){el.innerHTML='<p style="color:var(--muted);">No employees found.</p>';return;}
+  var el=document.getElementById('empList'); var emps=_empData;
+  if(!emps.length){el.innerHTML='<p style="color:var(--muted);padding:16px;">No employees found.</p>';return;}
   var noRate=emps.filter(function(e){return !e.hour_rate;}).length;
-  var badge=noRate>0
-    ?'<span style="background:#FEE2E2;color:#DC2626;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600;">⚠ '+noRate+' missing rate</span>'
-    :'<span style="background:#D1FAE5;color:#065F46;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600;">✓ All have rates</span>';
-  var optHtml=_empPositions.map(function(p){return '<option value="'+esc(p)+'">'+esc(p)+'</option>';}).join('');
+  var badge=noRate>0?'<div style="margin-bottom:10px;"><span style="background:#FEE2E2;color:#DC2626;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600;">&#9888; '+noRate+' missing rate</span></div>':'<div style="margin-bottom:10px;"><span style="background:#D1FAE5;color:#065F46;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600;">&#10003; All have rates</span></div>';
+  var optHtml=_empPositions.map(function(p){return '<option value="'+p+'">'+p+'</option>';}).join('');
   var rows='';
   emps.forEach(function(emp,i){
-    var hasRate=emp.hour_rate>0;
-    var hasPos=!!emp.position;
+    var hasRate=emp.hour_rate>0, isManual=emp.source_type==='manual';
     var bg=hasRate?(i%2===0?'white':'#F8FAFC'):'#FFF5F5';
-    var bl=hasRate?'':(hasPos?'border-left:4px solid #F59E0B;':'border-left:4px solid #EF4444;');
-    var rateHtml=hasRate?'<span style="font-weight:700;color:#065F46;">$'+emp.hour_rate+'/hr</span>':'<span style="color:#DC2626;font-weight:700;">⚠ No rate</span>';
-    var posHtml=hasPos?('<span style="font-size:12px;color:var(--muted);">'+esc(emp.position)+'</span>'):'<span style="font-size:12px;color:#F59E0B;">No position</span>';
-    rows+='<tr style="background:'+bg+';'+bl+'border-bottom:1px solid #E2E8F0;" data-empidx="'+i+'">'
-      +'<td style="padding:10px 14px;"><div style="font-weight:600;font-size:13px;color:'+(hasRate?'var(--navy)':'#DC2626')+';">'+esc(emp.name)+'</div>'
-      +'<div style="font-size:10px;color:var(--muted);">'+esc(emp.full_name)+'</div></td>'
+    var bl=hasRate?'':(emp.position?'border-left:4px solid #F59E0B;':'border-left:4px solid #EF4444;');
+    var rateHtml=hasRate?('<span style="font-weight:700;color:#065F46;">$'+emp.hour_rate+'/hr</span>'):'<span style="color:#DC2626;font-weight:700;">&#9888; No rate</span>';
+    var posHtml=emp.position?('<span style="font-size:12px;color:var(--muted);">'+emp.position+'</span>'):'<span style="font-size:12px;color:#F59E0B;">No position</span>';
+    var manualBadge=isManual?'<span style="font-size:10px;background:#EFF6FF;color:#1E40AF;padding:1px 6px;border-radius:8px;margin-left:4px;">manual</span>':'';
+    var delBtn=isManual?'<button data-delidx="'+i+'" style="padding:3px 8px;border:1px solid #FCA5A5;border-radius:4px;background:#FEF2F2;color:#DC2626;font-size:11px;cursor:pointer;margin-left:4px;">x</button>':'';
+    rows+='<tr style="background:'+bg+';'+bl+'border-bottom:1px solid #E2E8F0;">'
+      +'<td style="padding:10px 14px;"><div style="font-weight:600;font-size:13px;color:'+(hasRate?'var(--navy)':'#DC2626')+';">'+emp.name+manualBadge+'</div>'
+      +(emp.resigned_date?'<div style="font-size:10px;color:#F59E0B;">Resigned: '+emp.resigned_date+'</div>':'')
+      +'<div style="font-size:10px;color:var(--muted);">'+emp.full_name+'</div></td>'
       +'<td style="padding:10px 14px;">'+posHtml+'</td>'
       +'<td style="padding:10px 14px;">'+rateHtml+'</td>'
-      +'<td style="padding:10px 14px;min-width:200px;">'
-      +'<select id="empSel_'+i+'" style="width:100%;padding:5px 8px;border:1px solid '+(hasRate?'var(--border)':'#FCA5A5')+';border-radius:5px;font-size:12px;">'
-      +'<option value="">— select position —</option>'+optHtml+'</select></td>'
-      +'<td style="padding:10px 14px;text-align:center;">'
-      +'<button id="empBtn_'+i+'" data-empidx="'+i+'" style="padding:5px 14px;background:'+(hasRate?'#1B2A4E':'#DC2626')+';color:white;border:none;border-radius:5px;font-size:12px;cursor:pointer;font-weight:600;">Save</button>'
-      +'</td></tr>';
+      +'<td style="padding:10px 14px;min-width:170px;"><select id="empSel_'+i+'" style="width:100%;padding:4px 6px;border:1px solid '+(hasRate?'var(--border)':'#FCA5A5')+';border-radius:5px;font-size:12px;"><option value="">— override —</option>'+optHtml+'</select></td>'
+      +'<td style="padding:10px 14px;text-align:center;white-space:nowrap;"><button id="empBtn_'+i+'" data-saveidx="'+i+'" style="padding:4px 12px;background:'+(hasRate?'#1B2A4E':'#DC2626')+';color:white;border:none;border-radius:5px;font-size:12px;cursor:pointer;font-weight:600;">Save</button>'+delBtn+'</td></tr>';
   });
-  el.innerHTML=badge+'<div style="margin-top:12px;overflow-x:auto;border-radius:8px;border:1px solid var(--border);">'
-    +'<table style="width:100%;border-collapse:collapse;">'
-    +'<thead><tr style="background:#1B2A4E;color:white;font-size:11px;">'
-    +'<th style="padding:10px 14px;text-align:left;">Employee</th>'
-    +'<th style="padding:10px 14px;text-align:left;">Position (Odoo)</th>'
-    +'<th style="padding:10px 14px;text-align:left;">Rate</th>'
-    +'<th style="padding:10px 14px;text-align:left;">Override Position</th>'
-    +'<th style="padding:10px 14px;text-align:center;">Action</th>'
-    +'</tr></thead><tbody>'+rows+'</tbody></table></div>';
-  // Attach click handlers using data attributes (no inline JS strings)
-  document.querySelectorAll('#empList button[data-empidx]').forEach(function(btn){
-    btn.addEventListener('click',function(){_empSave(parseInt(this.getAttribute('data-empidx')));});
-  });
+  el.innerHTML=badge+'<div style="overflow-x:auto;border-radius:8px;border:1px solid var(--border);"><table style="width:100%;border-collapse:collapse;"><thead><tr style="background:#1B2A4E;color:white;font-size:11px;"><th style="padding:10px 14px;text-align:left;">Employee</th><th style="padding:10px 14px;text-align:left;">Position</th><th style="padding:10px 14px;text-align:left;">Rate</th><th style="padding:10px 14px;text-align:left;">Override</th><th style="padding:10px 14px;text-align:center;">Actions</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+  el.querySelectorAll('button[data-saveidx]').forEach(function(btn){btn.addEventListener('click',function(){_empSave(parseInt(this.getAttribute('data-saveidx')));});});
+  el.querySelectorAll('button[data-delidx]').forEach(function(btn){btn.addEventListener('click',function(){_empDelete(parseInt(this.getAttribute('data-delidx')));});});
 }
-
 async function _empSave(idx){
-  var emp=_empData[idx];
-  if(!emp){return;}
-  var sel=document.getElementById('empSel_'+idx);
-  var btn=document.getElementById('empBtn_'+idx);
-  var pos=sel?sel.value:'';
-  if(!pos){alert('Please select a position');return;}
-  btn.textContent='…';btn.disabled=true;
+  var emp=_empData[idx]; if(!emp)return;
+  var sel=document.getElementById('empSel_'+idx), btn=document.getElementById('empBtn_'+idx), pos=sel?sel.value:'';
+  if(!pos){alert('Select a position');return;}
+  btn.textContent='…'; btn.disabled=true;
   try{
-    var r=await fetch('/api/position-overrides/save',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({name:emp.full_name,position:pos})
-    });
+    var r=await fetch('/api/position-overrides/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:emp.full_name,position:pos})});
     var d=await r.json();
-    if(d.ok){
-      btn.textContent='✓ Saved';btn.style.background='#10B981';
-      _empData[idx].position=pos;
-      setTimeout(_renderEmpTable,800);
-    }else{
-      btn.textContent='Error';btn.style.background='#DC2626';btn.disabled=false;
-      alert('Error: '+(d.error||'unknown'));
-    }
-  }catch(e){
-    btn.textContent='Error';btn.style.background='#DC2626';btn.disabled=false;
-    alert('Error: '+e.message);
-  }
+    if(d.ok){btn.textContent='✓'; btn.style.background='#10B981'; _empData[idx].position=pos; setTimeout(_renderEmpTable,600);}
+    else{btn.textContent='Err'; btn.style.background='#DC2626'; btn.disabled=false; alert(d.error||'Error');}
+  }catch(e){btn.textContent='Err'; btn.style.background='#DC2626'; btn.disabled=false;}
 }
-
-// Show tab
-(function(){
-  var btn=document.getElementById('tabBtnEmployees');
-  if(!btn)return;
+async function _empDelete(idx){
+  var emp=_empData[idx]; if(!emp||!confirm('Remove '+emp.name+'?'))return;
+  try{await fetch('/api/project-employees/manual/'+encodeURIComponent(emp.full_name),{method:'DELETE'}); _empData.splice(idx,1); _renderEmpTable();}
+  catch(e){alert('Error: '+e.message);}
+}
+function _empShowAdd(){document.getElementById('empAddForm').style.display='';}
+function _empHideAdd(){document.getElementById('empAddForm').style.display='none';}
+async function _empRatePreview(){
+  var pos=document.getElementById('addEmpPos').value, prev=document.getElementById('empRatePreview');
+  if(!pos){prev.style.display='none';return;}
   try{
-    var cookies=document.cookie.split(';').map(function(c){return c.trim();});
-    var rc=cookies.find(function(c){return c.startsWith('pmo_role=');});
-    var role=rc?rc.split('=')[1]:'';
-    if(role==='admin'||role==='pmo')btn.style.display='';
-  }catch(e){btn.style.display='';}
+    var r=await fetch('/api/employee-rate?position='+encodeURIComponent(pos)+'&name=_');
+    var d=await r.json();
+    if(d.rate&&d.rate.hour_rate){prev.style.display=''; prev.textContent='Rate from DB: $'+d.rate.hour_rate+'/hr ('+d.rate.source+')';}
+    else{prev.style.display='none';}
+  }catch(e){prev.style.display='none';}
+}
+async function _empAddSave(){
+  var name=document.getElementById('addEmpName').value.trim(), pos=document.getElementById('addEmpPos').value;
+  var date=document.getElementById('addEmpDate').value, note=document.getElementById('addEmpNote').value.trim();
+  var msg=document.getElementById('empAddMsg');
+  if(!name){msg.textContent='Name required'; msg.style.color='#DC2626'; return;}
+  if(!pos){msg.textContent='Position required'; msg.style.color='#DC2626'; return;}
+  msg.textContent='Saving…'; msg.style.color='var(--muted)';
+  try{
+    var r=await fetch('/api/project-employees/manual',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({full_name:name,position:pos,resigned_date:date,note:note})});
+    var d=await r.json();
+    if(d.ok){msg.textContent='Saved!'; msg.style.color='#065F46'; document.getElementById('addEmpName').value=''; document.getElementById('addEmpDate').value=''; document.getElementById('addEmpNote').value=''; document.getElementById('empRatePreview').style.display='none'; setTimeout(function(){_empHideAdd(); _empLoad();},600);}
+    else{msg.textContent=d.error||'Error'; msg.style.color='#DC2626';}
+  }catch(e){msg.textContent=e.message; msg.style.color='#DC2626';}
+}
+(function(){
+  var btn=document.getElementById('tabBtnEmployees'); if(!btn)return;
+  try{var rc=document.cookie.split(';').map(function(c){return c.trim();}).find(function(c){return c.startsWith('pmo_role=');});var role=rc?rc.split('=')[1]:'';if(role==='admin'||role==='pmo')btn.style.display='';}
+  catch(e){btn.style.display='';}
 })();
-
 var _origSwitchEmp=window.switchTab;
-window.switchTab=function(tab){
-  if(_origSwitchEmp)_origSwitchEmp(tab);
-  if(tab==='employees')setTimeout(_empLoad,100);
-};
+window.switchTab=function(tab){if(_origSwitchEmp)_origSwitchEmp(tab);if(tab==='employees')setTimeout(_empLoad,100);};
 </script>
 </body>
 </html>
