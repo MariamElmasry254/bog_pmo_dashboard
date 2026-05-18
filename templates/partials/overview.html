@@ -221,4 +221,65 @@
       </div>
     </div>
   </div>
+
+<script>
+// ─── One Pager Tab Injection ──────────────────────────────────────────
+(function(){
+  function _injectOnePager(){
+    // Find the exec-tab navigation or main tab bar
+    var tabBar = document.querySelector('.exec-tabs-bar') || document.querySelector('.tabs-bar') || document.querySelector('[role="tablist"]');
+    if(!tabBar){ setTimeout(_injectOnePager, 500); return; }
+    if(document.getElementById('execTabOnepager')){ return; } // already injected
+
+    // Add tab button
+    var btn = document.createElement('button');
+    btn.className = 'exec-tab';
+    btn.id = 'execTabOnepager';
+    btn.setAttribute('data-tab','onepager');
+    btn.textContent = '📋 One Pager';
+    btn.style.cssText = 'padding:8px 16px;border:none;background:none;cursor:pointer;font-size:13px;font-weight:600;color:var(--text-muted);border-bottom:2px solid transparent;white-space:nowrap;';
+    btn.onclick = function(){ _switchToOnepager(); };
+    tabBar.appendChild(btn);
+
+    // Create panel placeholder
+    var section = document.createElement('section');
+    section.className = 'tab-panel';
+    section.id = 'onepager';
+    section.innerHTML = '<div class="loading" style="padding:40px;text-align:center;">Loading One Pager…</div>';
+    var main = document.querySelector('main') || document.querySelector('.main-content') || document.body;
+    main.appendChild(section);
+  }
+
+  async function _switchToOnepager(){
+    // Deactivate all panels
+    document.querySelectorAll('.tab-panel').forEach(function(p){ p.classList.remove('active'); });
+    document.querySelectorAll('.exec-tab,[data-tab]').forEach(function(b){ b.classList.remove('active'); });
+
+    var panel = document.getElementById('onepager');
+    var btn   = document.getElementById('execTabOnepager');
+    if(btn) btn.classList.add('active');
+    if(btn) btn.style.borderBottomColor = 'var(--navy)';
+    if(btn) btn.style.color = 'var(--navy)';
+    if(panel){ panel.classList.add('active'); }
+
+    // Load content if not yet loaded
+    if(panel && !panel.dataset.loaded){
+      try{
+        var r = await fetch('/partials/onepager');
+        var html = await r.text();
+        panel.outerHTML = html;
+        // Re-get panel after replacement
+        var newPanel = document.getElementById('onepager');
+        if(newPanel) newPanel.classList.add('active');
+        panel.dataset.loaded = '1';
+      }catch(e){ if(panel) panel.innerHTML = '<p style="padding:20px;color:red;">Error loading: '+e.message+'</p>'; }
+    }
+    // Call loadOnepager after content is loaded
+    setTimeout(function(){ if(window.loadOnepager) loadOnepager(); }, 200);
+  }
+
+  if(document.readyState === 'loading'){ document.addEventListener('DOMContentLoaded', _injectOnePager); }
+  else { _injectOnePager(); }
+})();
+</script>
 </section>
