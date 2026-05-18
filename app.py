@@ -6297,6 +6297,7 @@ def save_plan_overrides(data):
 
 
 @app.route('/api/positions')
+@app.route('/api/positions-list')
 def api_positions():
     """Get full positions catalog from DB (replaces Excel-based)."""
     positions = get_all_positions(db)
