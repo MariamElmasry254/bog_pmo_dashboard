@@ -787,13 +787,24 @@ async function _loadPhaseCostKPIs() {
     const _isBog = AppState._overviewData?.is_bog !== false;
     const _phs   = _isBog ? ['consultation','development'] : ['services','support'];
     let _lmk='', _tc=0, _cc=0;
+    let _totalCostFromDB = 0, _totalEACFromDB = 0;
     for (const _ph of _phs) {
       const _mk = _pd.phases?.[_ph]?.month_key || '';
       if (_mk && _mk > _lmk) _lmk = _mk;
       const _pct = _pd.phases?.[_ph]?.completion || 0;
       if (_pct > 0) { _tc += _pct; _cc++; }
+      _totalCostFromDB += _pd.phases?.[_ph]?.currentCostSAR || 0;
+      _totalEACFromDB  += _pd.phases?.[_ph]?.eacCostSAR     || 0;
     }
-    const _avg = _cc > 0 ? Math.round(_tc / _cc) : 0;
+    // Override totals with DB values if available
+    if (_totalCostFromDB > 0) {
+      const tcEl = document.getElementById('kpiTotalCost');
+      if (tcEl) tcEl.textContent = fSAR(_totalCostFromDB);
+    }
+    if (_totalEACFromDB > 0) {
+      const teEl = document.getElementById('kpiTotalEAC');
+      if (teEl) teEl.textContent = fSAR(_totalEACFromDB);
+    }
     ['kpiCostAsOf','kpiEACAsOf'].forEach(id => { const el=document.getElementById(id); if(el) el.textContent = _lmk ? 'as of '+_lmk : ''; });
     // % complete intentionally not shown under Current Cost / EAC cards
     if (AppState._latestProfData) {
