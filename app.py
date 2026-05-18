@@ -1045,9 +1045,231 @@ def api_summary():
     return jsonify({'ok': True, 'projects': result, 'count': len(result)})
 
 
-@app.route('/api/debug/namespaces')
+@app.route('/api/standup')
 @login_required
-def api_debug_namespaces():
+def api_standup():
+    """Return open tasks per team member with hours today, remaining, and first entry date."""
+    from datetime import date, timedelta
+    import json as _json
+
+    today_str     = date.today().isoformat()
+    yesterday_str = (date.today() - timedelta(days=1)).isoformat()
+    query_date    = request.args.get('date', today_str)   # ?date=YYYY-MM-DD
+    prev_date     = request.args.get('prev', yesterday_str)
+
+    try:
+        if not odoo.uid:
+            odoo.connect()
+
+        proj_id   = session.get('project_id')
+        proj_name = session.get('project_name', PROJECT_NAME)
+        is_bog    = not proj_id or str(proj_id) == '228'
+
+        # ── 1. Open tasks (not done) ──────────────────────────────────────
+        proj_domain = [('project_id.name', 'ilike', proj_name)] if not is_bog else [('project_id', '=', 228)]
+        done_stages = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task.type', 'search_read',
+            [[('name', 'ilike', 'done')]],
+            {'fields': ['id'], 'limit': 20}
+        )
+        done_ids = [s['id'] for s in done_stages]
+
+        task_domain = proj_domain + [('child_ids', '=', False)]
+        if done_ids:
+            task_domain += [('stage_id', 'not in', done_ids)]
+
+        tasks = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [task_domain],
+            {'fields': ['id', 'name', 'planned_hours', 'effective_hours',
+                        'user_id', 'stage_id', 'parent_id', 'write_date'],
+             'limit': 2000}
+        )
+
+        task_map = {t['id']: t for t in tasks}
+        task_ids = list(task_map.keys())
+
+        # ── 2. Timesheets for query_date ─────────────────────────────────
+        def fetch_ts(date_str):
+            if not task_ids:
+                return []
+            return odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'account.analytic.line', 'search_read',
+                [[('task_id', 'in', task_ids), ('date', '=', date_str)]],
+                {'fields': ['employee_id', 'task_id', 'unit_amount', 'date'], 'limit': 5000}
+            )
+
+        ts_today = fetch_ts(query_date)
+        ts_prev  = fetch_ts(prev_date)
+
+        # ── 3. First entry date per task ─────────────────────────────────
+        first_entry_map = {}  # task_id -> date string
+        if task_ids:
+            all_ts = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'account.analytic.line', 'search_read',
+                [[('task_id', 'in', task_ids)]],
+                {'fields': ['task_id', 'date'], 'limit': 10000, 'order': 'date asc'}
+            )
+            for ts in all_ts:
+                tid = ts['task_id'][0] if ts.get('task_id') else None
+                if tid and tid not in first_entry_map:
+                    first_entry_map[tid] = ts['date']
+
+        # ── 4. Aggregate per employee ─────────────────────────────────────
+        def get_emp_name(emp_field):
+            if isinstance(emp_field, list) and len(emp_field) > 1:
+                return emp_field[1]
+            return str(emp_field) if emp_field else 'Unknown'
+
+        # hours today per (employee, task)
+        today_hours = {}   # emp_name -> {task_id -> hours}
+        for ts in ts_today:
+            emp = get_emp_name(ts.get('employee_id'))
+            tid = ts['task_id'][0] if ts.get('task_id') else None
+            if not tid: continue
+            today_hours.setdefault(emp, {})
+            today_hours[emp][tid] = today_hours[emp].get(tid, 0) + float(ts.get('unit_amount') or 0)
+
+        # hours yesterday per (employee, task)
+        prev_hours = {}
+        for ts in ts_prev:
+            emp = get_emp_name(ts.get('employee_id'))
+            tid = ts['task_id'][0] if ts.get('task_id') else None
+            if not tid: continue
+            prev_hours.setdefault(emp, {})
+            prev_hours[emp][tid] = prev_hours[emp].get(tid, 0) + float(ts.get('unit_amount') or 0)
+
+        # ── 5. Build per-member result ────────────────────────────────────
+        # Collect all unique assignees across all tasks + timesheets
+        all_assignees = {}
+        for task in tasks:
+            uid_raw = task.get('user_id')
+            if isinstance(uid_raw, list) and len(uid_raw) > 1:
+                all_assignees[uid_raw[1]] = True
+        for emp in list(today_hours.keys()) + list(prev_hours.keys()):
+            all_assignees[emp] = True
+
+        # done stages for closed check
+        done_stage_names = ['done', 'cancelled', 'closed']
+
+        members = {}
+        for task in tasks:
+            tid = task['id']
+            # assignees — use user_id only (single assignee)
+            assignee_names = []
+            uid_raw = task.get('user_id')
+            if isinstance(uid_raw, list) and len(uid_raw) > 1:
+                assignee_names.append(uid_raw[1])  # name string
+            elif uid_raw and uid_raw is not False:
+                assignee_names.append(str(uid_raw))
+
+            planned   = float(task.get('planned_hours') or 0)
+            actual    = float(task.get('effective_hours') or 0)
+            remaining = max(0.0, planned - actual)
+            stage_raw = task.get('stage_id')
+            stage     = (stage_raw[1] if isinstance(stage_raw, list) else str(stage_raw or '')).lower()
+            parent_raw= task.get('parent_id')
+            parent    = parent_raw[1] if isinstance(parent_raw, list) else ''
+            first_date= first_entry_map.get(tid, '')
+            write_date= (task.get('write_date') or '')[:10]
+            is_closed = any(s in stage for s in done_stage_names)
+
+            for emp in assignee_names:
+                if emp not in members:
+                    members[emp] = {
+                        'name': emp,
+                        'logged_yesterday': False,
+                        'yesterday': [],
+                        'inprogress': [],
+                        'closed_with_remaining': [],
+                    }
+
+                hrs_prev = prev_hours.get(emp, {}).get(tid, 0)
+                hrs_today= today_hours.get(emp, {}).get(tid, 0)
+                if hrs_prev > 0 or hrs_today > 0:
+                    members[emp]['logged_yesterday'] = hrs_prev > 0
+
+                # Section 1: logged yesterday
+                if hrs_prev > 0:
+                    members[emp]['yesterday'].append({
+                        'id':         tid,
+                        'name':       task['name'],
+                        'parent':     parent,
+                        'hrs':        round(hrs_prev, 2),
+                        'firstEntry': first_date == query_date,
+                    })
+
+                # Section 2: in progress (open tasks with actuals or remaining)
+                if not is_closed and (actual > 0 or remaining > 0):
+                    # calculate stale days
+                    stale_days = 0
+                    if write_date:
+                        try:
+                            from datetime import date as _date
+                            wd = _date.fromisoformat(write_date)
+                            td = _date.fromisoformat(query_date)
+                            stale_days = max(0, (td - wd).days)
+                        except: pass
+                    members[emp]['inprogress'].append({
+                        'id':           tid,
+                        'name':         task['name'],
+                        'parent':       parent,
+                        'planned_hrs':  round(planned, 1),
+                        'actual_hrs':   round(actual, 1),
+                        'remaining_hrs':round(remaining, 1),
+                        'first_entry':  first_date,
+                        'stale':        stale_days,
+                    })
+
+                # Section 3: closed but has remaining hours
+                if is_closed and remaining > 0:
+                    members[emp]['closed_with_remaining'].append({
+                        'id':           tid,
+                        'name':         task['name'],
+                        'parent':       parent,
+                        'planned_hrs':  round(planned, 1),
+                        'actual_hrs':   round(actual, 1),
+                        'remaining_hrs':round(remaining, 1),
+                    })
+
+        result = sorted(
+            members.values(),
+            key=lambda m: (0 if m['logged_yesterday'] else 1, m['name'])
+        )
+        return jsonify({'ok': True, 'date': query_date, 'prev_date': prev_date, 'members': result})
+
+    except Exception as e:
+        import traceback
+        logger.error(f'standup error: {traceback.format_exc()}')
+        return jsonify({'error': str(e), 'ok': False}), 500
+
+
+@app.route('/api/standup/note', methods=['POST'])
+@login_required
+def api_standup_note():
+    """Save PM standup note for a member."""
+    body = request.json or {}
+    member = body.get('member','').strip()
+    date   = body.get('date','').strip()
+    note   = body.get('note','').strip()
+    if not member or not date or not note:
+        return jsonify({'error':'missing fields'}), 400
+    pfx = active_db_prefix()
+    ns  = f'{pfx}_standup_notes' if pfx else 'standup_notes'
+    key = f'{date}.{member.lower().replace(" ","_")}'
+    db.set_override(ns, '', key, {'member':member,'date':date,'note':note})
+    return jsonify({'ok': True})
+
+
+@app.route('/standup')
+@login_required
+def standup_page():
+    """Daily standup tracking page."""
+    return render_template('partials/standup.html')
     """Debug: show all namespaces in DB."""
     all_data = db.get_all_overrides()
     summary = {}
