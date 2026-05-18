@@ -349,6 +349,25 @@ async function loadOverviewKPIs() {
       nav.appendChild(b);
     })();
 
+    // ── Standup tab button ───────────────────────────────────────────
+    (function(){
+      if(document.querySelector('[data-tab="standup"]')) return;
+      var nav=document.querySelector('nav.exec-tabs'); if(!nav) return;
+      var b=document.createElement('button');
+      b.className='exec-tab'; b.setAttribute('data-tab','standup');
+      b.textContent='Standup';
+      b.addEventListener('click', function(){
+        // Mark tab active
+        document.querySelectorAll('.exec-tab').forEach(function(t){ t.classList.remove('active'); });
+        b.classList.add('active');
+        // Open standup in new tab
+        window.open('/standup', '_blank');
+        // Deactivate immediately so it doesn't look stuck
+        setTimeout(function(){ b.classList.remove('active'); }, 300);
+      });
+      nav.appendChild(b);
+    })();
+
     // Register callback for variance profitability to update overview KPIs
     window._overviewUpdateProfKPIs = function(phaseKey) {
       const d = AppState._latestProfData?.[phaseKey];
