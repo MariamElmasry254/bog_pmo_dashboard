@@ -924,58 +924,79 @@ def api_summary():
     PHASES_BOG    = ['development', 'consultation']
     PHASES_NORMAL = ['services', 'support']
 
+    def get_rev_for_project(pfx, phase):
+        bns  = f'{pfx}_budget'         if pfx else 'budget'
+        bcns = f'{pfx}_budget_changes' if pfx else 'budget_changes'
+        rev = 0.0
+        overrides = db.get_namespace_overrides(bns, phase) or {}
+        raw = overrides.get('approved.revenue_sar')
+        if raw is not None:
+            try: rev = float(raw)
+            except: pass
+        if not rev:
+            approved_block = overrides.get('approved') or {}
+            if isinstance(approved_block, dict):
+                r2 = approved_block.get('revenue_sar')
+                if r2 is not None:
+                    try: rev = float(r2)
+                    except: pass
+        if not rev:
+            direct = db.get_override(bns, phase, 'approved.revenue_sar')
+            if direct is not None:
+                try: rev = float(direct)
+                except: pass
+        changes = db.get_override(bcns, '', phase)
+        if isinstance(changes, list):
+            for ch in changes:
+                try: rev += float(ch.get('delta_rev') or 0)
+                except: pass
+        return rev
+
+    def get_plan_latest(pfx, phase):
+        pns = f'{pfx}_plan' if pfx else 'plan'
+        plan_data = db.get_namespace_overrides(pns, phase) or {}
+        months = {}
+        for combined_key, val in plan_data.items():
+            if '.' in str(combined_key):
+                mk, field = str(combined_key).rsplit('.', 1)
+                if mk not in months:
+                    months[mk] = {}
+                months[mk][field] = val
+        if not months:
+            return {}, ''
+        # filter out non-date keys like 'so_line_map'
+        date_months = {k: v for k, v in months.items() if len(k) == 7 and k[4] == '-'}
+        if not date_months:
+            return {}, ''
+        lm_key = sorted(date_months.keys())[-1]
+        return date_months[lm_key], lm_key
+
     result = []
     for p in projects:
         pid         = p['id']
         is_bog      = (str(pid) == '228')
         pfx         = '' if is_bog else f'proj_{pid}'
-        plan_ns     = f'{pfx}_plan' if pfx else 'plan'
         onepager_ns = f'{pfx}_onepager' if pfx else 'onepager'
         phases      = PHASES_BOG if is_bog else PHASES_NORMAL
 
-        plan_data = db.get_namespace_overrides(plan_ns) or {}
-
-        plan_overrides = {}
-        for phase, items in plan_data.items():
-            if not phase or not isinstance(items, dict):
-                continue
-            plan_overrides[phase] = {}
-            for combined_key, val in items.items():
-                if '.' in combined_key:
-                    mk, field = combined_key.rsplit('.', 1)
-                    if mk not in plan_overrides[phase]:
-                        plan_overrides[phase][mk] = {}
-                    plan_overrides[phase][mk][field] = val
-
-        tot_rev = tot_cost = tot_eac = tot_issued = tot_vi = 0
+        tot_rev = 0.0
         completion_pcts = []
         latest_month = ''
 
         for phase in phases:
-            ph_data = plan_overrides.get(phase, {})
-            if not ph_data:
-                continue
-            sorted_months = sorted(ph_data.keys())
-            if not sorted_months:
-                continue
-            lm_key = sorted_months[-1]
-            lm     = ph_data[lm_key]
-            if lm_key > latest_month:
+            rev = get_rev_for_project(pfx, phase)
+            tot_rev += rev
+            lm, lm_key = get_plan_latest(pfx, phase)
+            if lm_key and lm_key > latest_month:
                 latest_month = lm_key
-            tot_rev    += float(lm.get('totalRevSAR', 0) or 0)
-            tot_cost   += float(lm.get('currentCostSAR', 0) or 0)
-            tot_eac    += float(lm.get('eacCostSAR', 0) or 0)
-            tot_issued += float(lm.get('issuedUpToMonth', 0) or 0)
-            tot_vi     += float(lm.get('accVI', 0) or 0)
-            pct         = float(lm.get('completionPct', 0) or 0)
+            pct = float(lm.get('completion', 0) or 0)
             if pct > 0:
                 completion_pcts.append(pct)
 
-        if not tot_eac:
-            tot_eac = tot_cost
+        if not tot_rev:
+            continue
 
         avg_completion = round(sum(completion_pcts) / len(completion_pcts), 1) if completion_pcts else 0
-        overrun = (tot_eac - tot_rev) if (tot_eac and tot_rev and tot_eac > tot_rev) else 0
 
         pm_raw  = p.get('user_id')
         pm_name = pm_raw[1] if isinstance(pm_raw, list) and len(pm_raw) > 1 else ''
@@ -985,9 +1006,6 @@ def api_summary():
         if isinstance(expected_end, dict):
             expected_end = ''
 
-        if not tot_rev and not tot_cost:
-            continue
-
         result.append({
             'id':            pid,
             'name':          p['name'],
@@ -996,13 +1014,12 @@ def api_summary():
             'end_date':      (p.get('end_date')   or '')[:10],
             'expected_end':  expected_end,
             'total_revenue': tot_rev,
-            'current_cost':  tot_cost,
-            'eac':           tot_eac,
-            'total_issued':  tot_issued,
-            'acc_vi':        tot_vi,
+            'current_cost':  0,
+            'eac':           0,
+            'total_issued':  0,
             'collected':     0,
             'completion_pct':avg_completion,
-            'overrun':       overrun,
+            'overrun':       0,
             'latest_month':  latest_month,
         })
 
