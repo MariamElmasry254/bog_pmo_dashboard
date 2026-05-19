@@ -1065,7 +1065,9 @@ def api_standup():
 
         proj_id   = url_proj_id or session.get('project_id')
         proj_name = url_proj_name or session.get('project_name', PROJECT_NAME)
-        is_bog    = not proj_id or str(proj_id) == '228'
+        # BOG = project id 228 OR name contains "BOG Digital Transformation"
+        is_bog = (not proj_id or str(proj_id) == '228') or \
+                 ('bog digital transformation' in (proj_name or '').lower())
 
         # ── 1. Fetch real project phases from Odoo (BOG only) ────────────
         real_phases = []
