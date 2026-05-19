@@ -1070,35 +1070,19 @@ def api_standup():
                  'bog digital transformation' in (proj_name or '').lower()
 
         # ── 1. Phases setup ───────────────────────────────────────────────
-        real_phases = []
+        phase_group_map = {}
         if is_bog:
+            real_phases = []
             try:
-                odoo_phases = odoo.models.execute_kw(
+                real_phases = odoo.models.execute_kw(
                     ODOO_DB, odoo.uid, ODOO_PASSWORD,
                     'project.phase', 'search_read',
                     [[('project_id', '=', 228)]],
                     {'fields': ['id', 'name'], 'limit': 20, 'order': 'id asc'}
                 )
-                real_phases = odoo_phases
             except Exception as e:
                 logger.warning(f'standup phases fetch: {e}')
 
-        if is_bog:
-            # Always show phases for BOG — group into Consultation / Development
-            try:
-                odoo_phases = odoo.models.execute_kw(
-                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                    'project.phase', 'search_read',
-                    [[('project_id', '=', 228)]],
-                    {'fields': ['id', 'name'], 'limit': 20, 'order': 'id asc'}
-                )
-                real_phases = odoo_phases
-            except Exception as e:
-                logger.warning(f'standup phases fetch: {e}')
-                real_phases = []
-
-            # Build phase_id -> group map (Consultation / Development)
-            phase_group_map = {}  # phase_id -> 'Consultation' | 'Development'
             for p in real_phases:
                 n = p['name'].lower()
                 if 'consult' in n:
@@ -1106,14 +1090,13 @@ def api_standup():
                 elif 'develop' in n:
                     phase_group_map[p['id']] = 'Development'
                 else:
-                    phase_group_map[p['id']] = p['name']  # keep as-is
+                    phase_group_map[p['id']] = p['name']
 
-            phases     = list(dict.fromkeys(phase_group_map.values()))  # unique ordered
+            phases     = list(dict.fromkeys(phase_group_map.values())) or ['Consultation', 'Development']
             has_phases = True
         else:
-            phases          = ['all']
-            has_phases      = False
-            phase_group_map = {}
+            phases     = ['all']
+            has_phases = False
 
         # ── 2. Fetch all tasks with phase_id ─────────────────────────────
         if proj_id and str(proj_id) != '228':
@@ -1121,15 +1104,27 @@ def api_standup():
         else:
             proj_domain = [('project_id', '=', 228)] if is_bog else [('project_id.name', 'ilike', proj_name)]
 
-        tasks = odoo.models.execute_kw(
-            ODOO_DB, odoo.uid, ODOO_PASSWORD,
-            'project.task', 'search_read',
-            [proj_domain + [('child_ids', '=', False), ('active', '=', True)]],
-            {'fields': ['id', 'name', 'planned_hours', 'effective_hours',
-                        'remaining_hours', 'user_id', 'stage_id', 'parent_id',
-                        'write_date', 'phase_id'],
-             'limit': 1000}
-        )
+        try:
+            tasks = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.task', 'search_read',
+                [proj_domain + [('child_ids', '=', False), ('active', '=', True)]],
+                {'fields': ['id', 'name', 'planned_hours', 'effective_hours',
+                            'remaining_hours', 'user_id', 'stage_id', 'parent_id',
+                            'write_date', 'phase_id'],
+                 'limit': 1000}
+            )
+        except Exception:
+            # Fallback without remaining_hours if field not available
+            tasks = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.task', 'search_read',
+                [proj_domain + [('child_ids', '=', False), ('active', '=', True)]],
+                {'fields': ['id', 'name', 'planned_hours', 'effective_hours',
+                            'user_id', 'stage_id', 'parent_id',
+                            'write_date', 'phase_id'],
+                 'limit': 1000}
+            )
 
         task_ids = [t['id'] for t in tasks]
         if not task_ids:
