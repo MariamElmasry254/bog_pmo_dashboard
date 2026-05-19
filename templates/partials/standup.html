@@ -63,7 +63,13 @@ body{font-family:'Inter',sans-serif;background:#F0F4F8;min-height:100vh;}
 .tag.stale{background:#FEF3C7;color:#92400E;}
 .tag.closed{background:#FEE2E2;color:#991B1B;}
 .empty-col{font-size:11px;color:#CBD5E1;text-align:center;padding:20px 0;}
-/* motivational banner */
+/* phase tabs */
+.phase-tabs{display:flex;gap:8px;margin-bottom:16px;}
+.ph-tab{padding:7px 18px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid #E2E8F0;background:#fff;color:#64748B;transition:all .15s;display:flex;align-items:center;gap:6px;}
+.ph-tab:hover:not(.active){background:#F1F5F9;}
+.ph-tab.active{background:#1B2A4E;color:#fff;border-color:#1B2A4E;}
+.ph-cnt{font-size:10px;padding:1px 6px;border-radius:10px;background:rgba(255,255,255,.2);color:inherit;}
+.ph-tab:not(.active) .ph-cnt{background:#F1F5F9;color:#94A3B8;}
 .motiv{background:#1B2A4E;border-radius:10px;padding:12px 18px;display:flex;align-items:center;gap:12px;margin-bottom:4px;}
 .motiv-emoji{font-size:22px;}
 .motiv-text{font-size:13px;font-weight:600;color:#fff;}
@@ -93,6 +99,7 @@ body{font-family:'Inter',sans-serif;background:#F0F4F8;min-height:100vh;}
       <button onclick="changeDay(1)">&#8594;</button>
     </div>
   </div>
+  <div class="phase-tabs" id="phaseTabs"></div>
   <div class="layout">
     <div class="sidebar">
       <div class="sidebar-head">Team Members</div>
@@ -115,7 +122,9 @@ var urlParams   = new URLSearchParams(window.location.search);
 var projId      = urlParams.get('project_id') || '';
 var projName    = urlParams.get('project_name') || '';
 var currentDate = new Date();
-var allMembers  = [];
+var allPhases   = {};   // {phase: [members]}
+var allMembers  = [];   // flat merged list (current phase)
+var currentPhase= '';
 var selName     = null;
 var colorMap    = {};
 
@@ -138,16 +147,32 @@ function changeDay(delta) {
   currentDate.setDate(currentDate.getDate()+delta);
   loadStandup();
 }
-function phaseOf(task) {
-  var p = (task.parent||'').toLowerCase();
-  var n = (task.name||'').toLowerCase();
-  if (p.indexOf('consult')>=0||n.indexOf('consult')>=0) return 'Consultation';
-  if (p.indexOf('support')>=0||n.indexOf('support')>=0) return 'Support';
-  if (p.indexOf('develop')>=0||n.indexOf('develop')>=0) return 'Development';
-  if (p.indexOf('analys')>=0||n.indexOf('analys')>=0)  return 'Analysis';
-  if (p.indexOf('service')>=0||n.indexOf('service')>=0) return 'Services';
-  return '';
+
+function selectPhase(ph) {
+  currentPhase = ph;
+  // update tab styles
+  document.querySelectorAll('.ph-tab').forEach(function(t){
+    t.classList.toggle('active', t.getAttribute('data-ph')===ph);
+  });
+  // build members list for this phase
+  allMembers = (allPhases[ph]||[]).slice();
+  selName = null;
+  renderMembers();
+  document.getElementById('contentArea').innerHTML='<div class="empty-select">Select a team member</div>';
 }
+
+function renderPhaseTabs(phases) {
+  var labels = {development:'Development',consultation:'Consultation',services:'Services',support:'Support'};
+  var tabsEl = document.getElementById('phaseTabs');
+  if (!tabsEl) return;
+  tabsEl.innerHTML = phases.map(function(ph){
+    var cnt = (allPhases[ph]||[]).length;
+    var active = ph===currentPhase?' active':'';
+    return '<button class="ph-tab'+active+'" data-ph="'+ph+'" onclick="selectPhase(\''+ph+'\')">'
+      +( labels[ph]||ph)+' <span class="ph-cnt">'+cnt+'</span></button>';
+  }).join('');
+}
+
 function selectMember(idx) {
   selName = allMembers[idx].name;
   document.querySelectorAll('.mem-item').forEach(function(el){
@@ -155,9 +180,10 @@ function selectMember(idx) {
   });
   renderContent();
 }
+
 function renderMembers() {
   if (!allMembers.length) {
-    document.getElementById('membersList').innerHTML='<div class="loading" style="color:#CBD5E1;font-size:12px;">No data for this date</div>';
+    document.getElementById('membersList').innerHTML='<div class="loading" style="color:#CBD5E1;font-size:12px;padding:16px;">No members in this phase</div>';
     return;
   }
   var html = '';
@@ -166,8 +192,8 @@ function renderMembers() {
     var c    = colorMap[m.name];
     var act  = m.name===selName?' active':'';
     var dot  = m.logged_yesterday?'logged':'absent';
-    var yCnt  = (m.yesterday||[]).length;
-    var iCnt  = (m.inprogress||[]).length;
+    var yCnt = (m.yesterday||[]).length;
+    var iCnt = (m.inprogress||[]).length;
     var totHrs = (m.yesterday||[]).reduce(function(s,t){return s+(t.hrs||0);},0);
     var hrsStr = totHrs>0 ? ' &nbsp;<span style="color:#1B2A4E;font-weight:600;">'+totHrs.toFixed(1)+'h</span>' : '';
     html += '<div class="mem-item'+act+'" data-idx="'+i+'" onclick="selectMember('+i+')">'
@@ -177,6 +203,17 @@ function renderMembers() {
       +'<div class="mem-dot '+dot+'"></div></div>';
   });
   document.getElementById('membersList').innerHTML=html;
+}
+
+function phaseOf(task) {
+  var p = (task.parent||'').toLowerCase();
+  var n = (task.name||'').toLowerCase();
+  if (p.indexOf('consult')>=0||n.indexOf('consult')>=0) return 'Consultation';
+  if (p.indexOf('support')>=0||n.indexOf('support')>=0) return 'Support';
+  if (p.indexOf('develop')>=0||n.indexOf('develop')>=0) return 'Development';
+  if (p.indexOf('analys')>=0||n.indexOf('analys')>=0)   return 'Analysis';
+  if (p.indexOf('service')>=0||n.indexOf('service')>=0) return 'Services';
+  return '';
 }
 function taskCard(t, mode, idx) {
   var ph  = phaseOf(t);
@@ -294,34 +331,54 @@ async function loadStandup() {
   if (projId)   url+='&project_id='+encodeURIComponent(projId);
   if (projName) url+='&project_name='+encodeURIComponent(projName);
   document.getElementById('membersList').innerHTML='<div class="loading">Loading...</div>';
+
   try {
     var resp=await fetch(url);
     var data=await resp.json();
     if (!data.ok) throw new Error(data.error||'Failed');
-    var merged={};
-    Object.keys(data.phases||{}).forEach(function(ph){
-      (data.phases[ph]||[]).forEach(function(m){
+
+    var phases = Object.keys(data.phases||{});
+
+    // Build per-phase member lists (merge duplicate members within each phase)
+    allPhases = {};
+    phases.forEach(function(ph) {
+      var merged = {};
+      (data.phases[ph]||[]).forEach(function(m) {
         if (!merged[m.name]) {
-          merged[m.name]=JSON.parse(JSON.stringify(m));
+          merged[m.name] = JSON.parse(JSON.stringify(m));
         } else {
-          var ex=merged[m.name];
+          var ex = merged[m.name];
           (m.yesterday||[]).forEach(function(t){if(!ex.yesterday.find(function(x){return x.id===t.id;}))ex.yesterday.push(t);});
           (m.inprogress||[]).forEach(function(t){if(!ex.inprogress.find(function(x){return x.id===t.id;}))ex.inprogress.push(t);});
           (m.closed_with_remaining||[]).forEach(function(t){if(!ex.closed_with_remaining.find(function(x){return x.id===t.id;}))ex.closed_with_remaining.push(t);});
           if (m.logged_yesterday) ex.logged_yesterday=true;
         }
       });
+      allPhases[ph] = Object.values(merged).sort(function(a,b){
+        if (a.logged_yesterday&&!b.logged_yesterday) return -1;
+        if (!a.logged_yesterday&&b.logged_yesterday) return 1;
+        return strip(a.name).localeCompare(strip(b.name));
+      });
     });
-    allMembers=Object.values(merged).sort(function(a,b){
-      if (a.logged_yesterday&&!b.logged_yesterday) return -1;
-      if (!a.logged_yesterday&&b.logged_yesterday) return 1;
-      return strip(a.name).localeCompare(strip(b.name));
-    });
+
     document.getElementById('navTitle').textContent=data.project_name||'Daily Standup';
-    document.getElementById('pageSubtitle').textContent=allMembers.length+' team members';
+
+    // Set default phase — pick first with members
+    if (!currentPhase || !phases.includes(currentPhase)) {
+      currentPhase = phases.find(function(ph){ return (allPhases[ph]||[]).length>0; }) || phases[0] || '';
+    }
+
+    // Render phase tabs
+    renderPhaseTabs(phases);
+
+    // Set members for current phase
+    allMembers = (allPhases[currentPhase]||[]).slice();
+    document.getElementById('pageSubtitle').textContent = allMembers.length+' team members';
+
     renderMembers();
-    if (selName&&allMembers.find(function(m){return m.name===selName;})) renderContent();
+    if (selName && allMembers.find(function(m){return m.name===selName;})) renderContent();
     else { selName=null; document.getElementById('contentArea').innerHTML='<div class="empty-select">Select a team member</div>'; }
+
   } catch(e) {
     document.getElementById('membersList').innerHTML='<div class="loading" style="color:#DC2626;font-size:12px;">'+e.message+'</div>';
   }
