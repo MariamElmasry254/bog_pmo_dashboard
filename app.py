@@ -1283,6 +1283,7 @@ def api_standup():
             odoo_rem  = task.get('remaining_hours')
             remaining = float(odoo_rem) if (odoo_rem is not None and odoo_rem is not False) else max(0.0, planned - actual)
             closed    = is_closed(task)
+            first_d   = first_entry_map.get(tid, '')
 
             # stale days
             stale = 0
