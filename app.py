@@ -1077,7 +1077,7 @@ def api_standup():
                     ODOO_DB, odoo.uid, ODOO_PASSWORD,
                     'project.phase', 'search_read',
                     [[('project_id', '=', 228)]],
-                    {'fields': ['id', 'name'], 'limit': 20, 'order': 'sequence asc'}
+                    {'fields': ['id', 'name'], 'limit': 20}
                 )
                 real_phases = odoo_phases
             except Exception as e:
@@ -1539,7 +1539,7 @@ def api_debug_bog_phases():
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'project.phase', 'search_read',
             [[('project_id', '=', 228)]],
-            {'fields': ['id', 'name', 'sequence'], 'limit': 50, 'order': 'sequence asc'}
+            {'fields': ['id', 'name'], 'limit': 50}
         )
         return jsonify({'ok': True, 'phases': phases, 'count': len(phases)})
     except Exception as e:
