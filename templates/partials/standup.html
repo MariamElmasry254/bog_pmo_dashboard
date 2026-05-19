@@ -249,10 +249,9 @@ function taskCard(t, mode, idx) {
       +(t.stale>=2?'<div class="ti-stat"><span class="tag stale">'+t.stale+'d stale</span></div>':'')
       +'</div>';
   } else {
-    html+='<div class="ti-stats" style="margin-top:6px;">'
-      +(t.planned_hrs>0?'<div class="ti-stat"><span class="ti-stat-lbl">Planned</span><span class="ti-stat-val">'+t.planned_hrs+'h</span></div>':'')
-      +(t.actual_hrs>0?'<div class="ti-stat"><span class="ti-stat-lbl">Actual</span><span class="ti-stat-val">'+t.actual_hrs+'h</span></div>':'')
-      +'<div class="ti-stat"><span class="tag closed">'+t.remaining_hrs.toFixed(1)+'h remaining</span></div>'
+    html+='<div style="margin-top:8px;">'
+      +'<span style="background:#FEE2E2;color:#991B1B;font-size:12px;font-weight:700;padding:4px 12px;border-radius:6px;">'
+      +t.remaining_hrs.toFixed(1)+'h remaining</span>'
       +'</div>';
   }
 
