@@ -1529,6 +1529,23 @@ def api_standup():
         return jsonify({'error': str(e), 'ok': False}), 500
 
 
+@app.route('/api/debug/bog-phases')
+@login_required
+def api_debug_bog_phases():
+    """Show all phases for BOG project from Odoo."""
+    try:
+        if not odoo.uid: odoo.connect()
+        phases = odoo.models.execute_kw(
+            ODOO_DB, odoo.uid, ODOO_PASSWORD,
+            'project.phase', 'search_read',
+            [[('project_id', '=', 228)]],
+            {'fields': ['id', 'name', 'sequence'], 'limit': 50, 'order': 'sequence asc'}
+        )
+        return jsonify({'ok': True, 'phases': phases, 'count': len(phases)})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
 @app.route('/api/standup/note', methods=['POST'])
 @login_required
 def api_standup_note():
