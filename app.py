@@ -1066,28 +1066,30 @@ def api_standup():
         proj_id   = url_proj_id or session.get('project_id')
         proj_name = url_proj_name or session.get('project_name', PROJECT_NAME)
         is_bog    = not proj_id or str(proj_id) == '228'
-        phases    = ['development', 'consultation'] if is_bog else ['services', 'support']
 
-        # ── 1. Fetch real project phases from Odoo ───────────────────────
+        # ── 1. Fetch real project phases from Odoo (BOG only) ────────────
         real_phases = []
-        try:
-            odoo_phases = odoo.models.execute_kw(
-                ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                'project.phase', 'search_read',
-                [[('project_id', '=', int(proj_id) if proj_id else 228)]],
-                {'fields': ['id', 'name'], 'limit': 20, 'order': 'sequence asc'}
-            )
-            real_phases = odoo_phases  # [{id, name}]
-        except Exception as e:
-            logger.warning(f'standup phases fetch: {e}')
+        has_phases  = False
+        if is_bog:
+            try:
+                odoo_phases = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'project.phase', 'search_read',
+                    [[('project_id', '=', 228)]],
+                    {'fields': ['id', 'name'], 'limit': 20, 'order': 'sequence asc'}
+                )
+                real_phases = odoo_phases
+                has_phases  = len(real_phases) > 0
+            except Exception as e:
+                logger.warning(f'standup phases fetch: {e}')
 
-        # Use real phase names if available, else fallback
-        if real_phases:
+        if has_phases:
             phases = [p['name'] for p in real_phases]
-            phase_id_map = {p['id']: p['name'] for p in real_phases}
+        elif is_bog:
+            phases = ['Development Phase', 'Consultation Phase']
         else:
-            phases = ['development', 'consultation'] if is_bog else ['services', 'support']
-            phase_id_map = {}
+            # Non-BOG: single bucket = project name, no phase tabs
+            phases = ['all']
 
         # ── 2. Fetch all tasks with phase_id ─────────────────────────────
         if proj_id and str(proj_id) != '228':
@@ -1110,40 +1112,89 @@ def api_standup():
                            'phases': {ph: [] for ph in phases},
                            'debug': {'proj_id': proj_id, 'tasks_found': 0}})
 
-        # ── Classify tasks by phase_id first, then name fallback ─────────
+        # ── Classify tasks by phase ───────────────────────────────────────
         def classify_phase(task):
-            # 1. Use Odoo phase_id directly
+            # Non-BOG: no phase tabs, everything goes to 'all'
+            if not is_bog:
+                return 'all'
+
+            # BOG: use Odoo phase_id first
             ph_raw = task.get('phase_id')
             if ph_raw and isinstance(ph_raw, list) and len(ph_raw) > 1:
                 ph_name = ph_raw[1]
                 if ph_name in phases:
                     return ph_name
-                # fuzzy match against real phase names
+                # fuzzy match
                 ph_lower = ph_name.lower()
                 for p in phases:
                     if p.lower() in ph_lower or ph_lower in p.lower():
                         return p
-            # 2. Fallback: parent + name keywords
+
+            # Fallback: parent + name keywords
             parent_raw = task.get('parent_id')
-            parent  = (parent_raw[1] if isinstance(parent_raw, list) else str(parent_raw or ''))
-            name    = (task.get('name') or '')
+            parent   = (parent_raw[1] if isinstance(parent_raw, list) else str(parent_raw or ''))
+            name     = (task.get('name') or '')
             combined = (parent + ' ' + name).lower()
             for p in phases:
                 if p.lower() in combined:
                     return p
-            return None  # unassigned
+            return None  # unassigned (BOG only)
 
         # ── 3. Timesheets for both dates ──────────────────────────────────
-        def fetch_ts(date_str):
+        def fetch_ts(date_str, task_ids_filter):
             return odoo.models.execute_kw(
                 ODOO_DB, odoo.uid, ODOO_PASSWORD,
                 'account.analytic.line', 'search_read',
-                [[('task_id', 'in', task_ids), ('date', '=', date_str)]],
+                [[('task_id', 'in', task_ids_filter), ('date', '=', date_str)]],
                 {'fields': ['employee_id', 'task_id', 'unit_amount'], 'limit': 5000}
             )
 
-        ts_prev  = fetch_ts(prev_date)
-        ts_today = fetch_ts(query_date)
+        ts_prev  = fetch_ts(prev_date, task_ids)
+        ts_today = fetch_ts(query_date, task_ids)
+
+        # ── 3b. Cross-project hours for prev_date ─────────────────────────
+        # Find all employees in this project who logged time yesterday
+        proj_emp_names = set()
+        for ts in ts_prev:
+            emp_raw = ts.get('employee_id')
+            if isinstance(emp_raw, list) and len(emp_raw) > 1:
+                proj_emp_names.add(emp_raw[1])
+
+        # Fetch their timesheets on prev_date across ALL projects
+        cross_ts_prev = []
+        if proj_emp_names:
+            try:
+                # Get employee IDs for these names
+                emp_records = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'hr.employee', 'search_read',
+                    [[('name', 'in', list(proj_emp_names))]],
+                    {'fields': ['id', 'name'], 'limit': 200}
+                )
+                emp_ids = [e['id'] for e in emp_records]
+                if emp_ids:
+                    cross_ts_prev = odoo.models.execute_kw(
+                        ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                        'account.analytic.line', 'search_read',
+                        [[('employee_id', 'in', emp_ids),
+                          ('date', '=', prev_date),
+                          ('task_id', 'not in', task_ids)]],
+                        {'fields': ['employee_id', 'task_id', 'unit_amount', 'project_id'], 'limit': 2000}
+                    )
+            except Exception as e:
+                logger.warning(f'cross-project ts fetch: {e}')
+
+        # Build cross-project hours map: emp_name -> {project_name -> hours}
+        cross_proj_hrs = {}  # emp_name -> {proj_name -> hours}
+        for ts in cross_ts_prev:
+            emp_raw  = ts.get('employee_id')
+            proj_raw = ts.get('project_id')
+            emp  = emp_raw[1]  if isinstance(emp_raw,  list) and len(emp_raw)  > 1 else ''
+            proj = proj_raw[1] if isinstance(proj_raw, list) and len(proj_raw) > 1 else 'Other project'
+            hrs  = float(ts.get('unit_amount') or 0)
+            if emp and hrs > 0:
+                cross_proj_hrs.setdefault(emp, {})
+                cross_proj_hrs[emp][proj] = cross_proj_hrs[emp].get(proj, 0) + hrs
 
         # ── 4. First entry + all employees per task (last 30 days) ──────
         first_entry_map = {}
@@ -1194,13 +1245,15 @@ def api_standup():
             stage = (s[1] if isinstance(s, list) else str(s or '')).lower()
             return any(k in stage for k in done_kws)
 
-        all_phases_list = phases + ['unassigned']
+        all_phases_list = phases + (['unassigned'] if is_bog else [])
         phase_members = {ph: {} for ph in all_phases_list}
 
         for task in tasks:
             tid    = task['id']
             phase  = classify_phase(task)
-            bucket = phase if phase else 'unassigned'
+            bucket = phase if phase else ('unassigned' if is_bog else 'all')
+            if bucket not in phase_members:
+                bucket = 'all' if not is_bog else 'unassigned'
             if bucket not in phase_members:
                 continue
 
@@ -1242,9 +1295,13 @@ def api_standup():
                 if e not in phase_members[bucket]:
                     phase_members[bucket][e] = {
                         'name': e, 'logged_yesterday': False,
-                        'yesterday': [], 'inprogress': [], 'closed_with_remaining': []
+                        'yesterday': [], 'inprogress': [], 'closed_with_remaining': [],
+                        'cross_project_hrs': cross_proj_hrs.get(e, {})
                     }
                 m = phase_members[bucket][e]
+                # Update cross_project_hrs in case it wasn't set
+                if not m.get('cross_project_hrs'):
+                    m['cross_project_hrs'] = cross_proj_hrs.get(e, {})
                 h_prev = hrs_prev.get(e, {}).get(tid, 0)
                 if h_prev > 0:
                     m['logged_yesterday'] = True
@@ -1266,12 +1323,14 @@ def api_standup():
                 phase_members[ph].values(),
                 key=lambda m: (0 if m['logged_yesterday'] else 1, m['name'])
             )
-            # Always include main phases, only include unassigned if has data
-            if ph != 'unassigned' or members_list:
-                result_phases[ph] = members_list
+            # Always include main phases; include unassigned only if has data
+            if ph == 'unassigned' and not members_list:
+                continue
+            result_phases[ph] = members_list
 
         return jsonify({'ok': True, 'date': query_date, 'prev_date': prev_date,
                         'phases': result_phases, 'is_bog': is_bog,
+                        'has_phases': has_phases or not is_bog,
                         'project_name': proj_name})
 
     except Exception as e:
