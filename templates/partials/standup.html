@@ -279,13 +279,40 @@ var MOTIVATIONS = [
   {e:'&#x2728;', t:'Great work so far!', s:'Keep delivering value.'},
 ];
 
-function motivBanner(name) {
-  var m = MOTIVATIONS[Math.floor(Math.random()*MOTIVATIONS.length)];
-  var dName = strip(name);
+function motivBanner(m) {
+  var mv = MOTIVATIONS[Math.floor(Math.random()*MOTIVATIONS.length)];
+  var dName = strip(m.name);
+
+  // Total hours yesterday in this project
+  var projHrs = (m.yesterday||[]).reduce(function(s,t){return s+(t.hrs||0);},0);
+
+  // Cross-project hours
+  var crossHrs = m.cross_project_hrs || {};
+  var crossKeys = Object.keys(crossHrs);
+
+  var hoursHtml = '';
+  if (projHrs > 0 || crossKeys.length > 0) {
+    hoursHtml = '<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;">';
+    if (projHrs > 0) {
+      hoursHtml += '<div style="background:rgba(255,255,255,.12);border-radius:6px;padding:4px 10px;font-size:11px;color:#fff;">'
+        +'<span style="color:rgba(255,255,255,.6);">Here</span> '
+        +'<strong>'+projHrs.toFixed(1)+'h</strong></div>';
+    }
+    crossKeys.forEach(function(proj) {
+      hoursHtml += '<div style="background:rgba(255,200,0,.15);border-radius:6px;padding:4px 10px;font-size:11px;color:#FDE68A;">'
+        +'<span style="opacity:.8;">'+esc(proj)+'</span> '
+        +'<strong>'+crossHrs[proj].toFixed(1)+'h</strong></div>';
+    });
+    hoursHtml += '</div>';
+  }
+
   return '<div class="motiv">'
-    +'<span class="motiv-emoji">'+m.e+'</span>'
-    +'<div><div class="motiv-text">'+dName+' — '+m.t+'</div>'
-    +'<div class="motiv-sub">'+m.s+'</div></div>'
+    +'<span class="motiv-emoji">'+mv.e+'</span>'
+    +'<div style="flex:1;">'
+      +'<div class="motiv-text">'+dName+' — '+mv.t+'</div>'
+      +'<div class="motiv-sub">'+mv.s+'</div>'
+      +hoursHtml
+    +'</div>'
     +'</div>';
 }
 
@@ -294,7 +321,7 @@ function renderContent() {
   var m=null;
   for (var i=0;i<allMembers.length;i++){if(allMembers[i].name===selName){m=allMembers[i];break;}}
   if (!m) return;
-  var html = motivBanner(m.name)
+  var html = motivBanner(m)
     +'<div class="three-col">'
     +col('Logged Yesterday', m.yesterday||[], 'y')
     +col('In Progress', m.inprogress||[], 'i')
@@ -368,16 +395,37 @@ async function loadStandup() {
 
     document.getElementById('navTitle').textContent=data.project_name||'Daily Standup';
 
-    // Set default phase — pick first with members
+    var phases = Object.keys(data.phases||{});
+    var hasPhaseTabs = data.has_phases && phases.length > 1 && phases[0] !== 'all';
+
+    // Show/hide phase tabs
+    var tabsEl = document.getElementById('phaseTabs');
+    if (tabsEl) tabsEl.style.display = hasPhaseTabs ? '' : 'none';
+
     if (!currentPhase || !phases.includes(currentPhase)) {
       currentPhase = phases.find(function(ph){ return (allPhases[ph]||[]).length>0; }) || phases[0] || '';
     }
 
-    // Render phase tabs
-    renderPhaseTabs(phases);
+    if (hasPhaseTabs) renderPhaseTabs(phases);
 
     // Set members for current phase
     allMembers = (allPhases[currentPhase]||[]).slice();
+
+    // For non-BOG (single 'all' phase), show total across all phases
+    if (!hasPhaseTabs) {
+      var allM = {};
+      phases.forEach(function(ph){
+        (allPhases[ph]||[]).forEach(function(m){
+          if (!allM[m.name]) allM[m.name] = JSON.parse(JSON.stringify(m));
+        });
+      });
+      allMembers = Object.values(allM).sort(function(a,b){
+        if(a.logged_yesterday&&!b.logged_yesterday) return -1;
+        if(!a.logged_yesterday&&b.logged_yesterday) return 1;
+        return a.name.localeCompare(b.name);
+      });
+    }
+
     document.getElementById('pageSubtitle').textContent = allMembers.length+' team members';
 
     renderMembers();
