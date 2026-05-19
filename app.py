@@ -1145,27 +1145,27 @@ def api_standup():
         ts_prev  = fetch_ts(prev_date)
         ts_today = fetch_ts(query_date)
 
-        # ── 4. First entry per task — only for tasks with recent activity ──
+        # ── 4. First entry + all employees per task (last 30 days) ──────
         first_entry_map = {}
-        # Only fetch for tasks that appear in prev timesheets (lighter query)
-        active_task_ids = list(set(
-            [ts['task_id'][0] for ts in ts_prev + ts_today if ts.get('task_id')]
-        ))
-        if active_task_ids:
-            first_ts = odoo.models.execute_kw(
+        first_ts_raw = []
+        from datetime import date as _date, timedelta as _td
+        date_30_ago = (_date.fromisoformat(query_date) - _td(days=30)).isoformat()
+
+        if task_ids:
+            first_ts_raw = odoo.models.execute_kw(
                 ODOO_DB, odoo.uid, ODOO_PASSWORD,
                 'account.analytic.line', 'search_read',
-                [[('task_id', 'in', active_task_ids)]],
-                {'fields': ['task_id', 'date'], 'limit': 5000, 'order': 'date asc'}
+                [[('task_id', 'in', task_ids), ('date', '>=', date_30_ago)]],
+                {'fields': ['task_id', 'date', 'employee_id'], 'limit': 10000, 'order': 'date asc'}
             )
-            for ts in first_ts:
+            for ts in first_ts_raw:
                 tid = ts['task_id'][0] if ts.get('task_id') else None
                 if tid and tid not in first_entry_map:
                     first_entry_map[tid] = ts['date']
 
-        # ── 5. Build hours maps ───────────────────────────────────────────
+        # ── 5. Build hours maps + all-time employee map per task ─────────
         def build_hrs_map(ts_list):
-            m = {}  # emp_name -> {task_id -> hours}
+            m = {}
             for ts in ts_list:
                 emp_raw = ts.get('employee_id')
                 emp = emp_raw[1] if isinstance(emp_raw, list) and len(emp_raw)>1 else str(emp_raw or '')
@@ -1177,6 +1177,15 @@ def api_standup():
 
         hrs_prev  = build_hrs_map(ts_prev)
         hrs_today = build_hrs_map(ts_today)
+
+        # Build task → set of all employees who ever logged time on it
+        task_all_emps = {}  # task_id -> set of emp names
+        for ts in ts_prev + ts_today + first_ts_raw:
+            emp_raw = ts.get('employee_id')
+            emp = emp_raw[1] if isinstance(emp_raw, list) and len(emp_raw)>1 else str(emp_raw or '')
+            tid = ts['task_id'][0] if ts.get('task_id') else None
+            if tid and emp:
+                task_all_emps.setdefault(tid, set()).add(emp)
 
         # ── 6. Build per-phase → per-employee structure ───────────────────
         done_kws = ['done', 'cancel', 'closed']
@@ -1198,15 +1207,10 @@ def api_standup():
             uid_raw = task.get('user_id')
             emp     = uid_raw[1] if isinstance(uid_raw, list) and len(uid_raw)>1 else None
 
-            # also collect from timesheets
-            emps_from_ts = set()
-            for emp_n in list(hrs_prev.keys()) + list(hrs_today.keys()):
-                if tid in hrs_prev.get(emp_n, {}) or tid in hrs_today.get(emp_n, {}):
-                    emps_from_ts.add(emp_n)
-
+            # Get all employees: assigned user + anyone who logged time on this task
             all_emps = set()
             if emp: all_emps.add(emp)
-            all_emps.update(emps_from_ts)
+            all_emps.update(task_all_emps.get(tid, set()))
 
             planned   = float(task.get('planned_hours') or 0)
             actual    = float(task.get('effective_hours') or 0)
@@ -1230,6 +1234,10 @@ def api_standup():
                 'remaining_hrs': round(remaining, 1), 'first_entry': first_d, 'stale': stale,
             }
 
+            # If no assignee found anywhere, skip task
+            if not all_emps:
+                continue
+
             for e in all_emps:
                 if e not in phase_members[bucket]:
                     phase_members[bucket][e] = {
@@ -1237,14 +1245,17 @@ def api_standup():
                         'yesterday': [], 'inprogress': [], 'closed_with_remaining': []
                     }
                 m = phase_members[bucket][e]
-                h_prev  = hrs_prev.get(e, {}).get(tid, 0)
-                if h_prev > 0: m['logged_yesterday'] = True
-
+                h_prev = hrs_prev.get(e, {}).get(tid, 0)
                 if h_prev > 0:
+                    m['logged_yesterday'] = True
                     m['yesterday'].append({**task_obj_base, 'hrs': round(h_prev, 2),
                                            'firstEntry': first_d == prev_date})
-                if not closed and (actual > 0 or remaining > 0):
+
+                # In progress: show ALL open tasks (even 0 hours — they still need to be done)
+                if not closed:
                     m['inprogress'].append(task_obj_base)
+
+                # Closed with remaining hours
                 if closed and remaining > 0:
                     m['closed_with_remaining'].append(task_obj_base)
 
