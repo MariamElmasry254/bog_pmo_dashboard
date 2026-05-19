@@ -1126,7 +1126,8 @@ def api_standup():
             'project.task', 'search_read',
             [proj_domain + [('child_ids', '=', False), ('active', '=', True)]],
             {'fields': ['id', 'name', 'planned_hours', 'effective_hours',
-                        'user_id', 'stage_id', 'parent_id', 'write_date', 'phase_id'],
+                        'remaining_hours', 'user_id', 'stage_id', 'parent_id',
+                        'write_date', 'phase_id'],
              'limit': 1000}
         )
 
@@ -1284,9 +1285,9 @@ def api_standup():
 
             planned   = float(task.get('planned_hours') or 0)
             actual    = float(task.get('effective_hours') or 0)
-            remaining = max(0.0, planned - actual)
+            odoo_rem  = task.get('remaining_hours')
+            remaining = float(odoo_rem) if (odoo_rem is not None and odoo_rem is not False) else max(0.0, planned - actual)
             closed    = is_closed(task)
-            first_d   = first_entry_map.get(tid, '')
 
             # stale days
             stale = 0
