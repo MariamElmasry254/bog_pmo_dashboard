@@ -369,8 +369,9 @@ async function loadStandup() {
     if (!data.ok) throw new Error(data.error||'Failed');
 
     var phases = Object.keys(data.phases||{});
+    var hasPhaseTabs = data.has_phases === true && phases.length > 1 && phases[0] !== 'all';
 
-    // Build per-phase member lists (merge duplicate members within each phase)
+    // Build per-phase member lists
     allPhases = {};
     phases.forEach(function(ph) {
       var merged = {};
@@ -393,9 +394,6 @@ async function loadStandup() {
     });
 
     document.getElementById('navTitle').textContent=data.project_name||'Daily Standup';
-
-    var phases = Object.keys(data.phases||{});
-    var hasPhaseTabs = data.has_phases && phases.length > 1 && phases[0] !== 'all';
 
     // Show/hide phase tabs
     var tabsEl = document.getElementById('phaseTabs');
