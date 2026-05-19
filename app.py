@@ -1077,19 +1077,43 @@ def api_standup():
                     ODOO_DB, odoo.uid, ODOO_PASSWORD,
                     'project.phase', 'search_read',
                     [[('project_id', '=', 228)]],
-                    {'fields': ['id', 'name'], 'limit': 20}
+                    {'fields': ['id', 'name'], 'limit': 20, 'order': 'id asc'}
                 )
                 real_phases = odoo_phases
             except Exception as e:
                 logger.warning(f'standup phases fetch: {e}')
 
         if is_bog:
-            # Always show phases for BOG
-            phases     = [p['name'] for p in real_phases] if real_phases else ['Development Phase', 'Consultation Phase']
+            # Always show phases for BOG — group into Consultation / Development
+            try:
+                odoo_phases = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'project.phase', 'search_read',
+                    [[('project_id', '=', 228)]],
+                    {'fields': ['id', 'name'], 'limit': 20, 'order': 'id asc'}
+                )
+                real_phases = odoo_phases
+            except Exception as e:
+                logger.warning(f'standup phases fetch: {e}')
+                real_phases = []
+
+            # Build phase_id -> group map (Consultation / Development)
+            phase_group_map = {}  # phase_id -> 'Consultation' | 'Development'
+            for p in real_phases:
+                n = p['name'].lower()
+                if 'consult' in n:
+                    phase_group_map[p['id']] = 'Consultation'
+                elif 'develop' in n:
+                    phase_group_map[p['id']] = 'Development'
+                else:
+                    phase_group_map[p['id']] = p['name']  # keep as-is
+
+            phases     = list(dict.fromkeys(phase_group_map.values()))  # unique ordered
             has_phases = True
         else:
-            phases     = ['all']
-            has_phases = False
+            phases          = ['all']
+            has_phases      = False
+            phase_group_map = {}
 
         # ── 2. Fetch all tasks with phase_id ─────────────────────────────
         if proj_id and str(proj_id) != '228':
@@ -1114,31 +1138,24 @@ def api_standup():
 
         # ── Classify tasks by phase ───────────────────────────────────────
         def classify_phase(task):
-            # Non-BOG: no phase tabs, everything goes to 'all'
             if not is_bog:
                 return 'all'
-
-            # BOG: use Odoo phase_id first
+            # Use Odoo phase_id → group map
             ph_raw = task.get('phase_id')
             if ph_raw and isinstance(ph_raw, list) and len(ph_raw) > 1:
-                ph_name = ph_raw[1]
-                if ph_name in phases:
-                    return ph_name
-                # fuzzy match
-                ph_lower = ph_name.lower()
-                for p in phases:
-                    if p.lower() in ph_lower or ph_lower in p.lower():
-                        return p
-
-            # Fallback: parent + name keywords
+                ph_id   = ph_raw[0]
+                ph_name = ph_raw[1].lower()
+                if ph_id in phase_group_map:
+                    return phase_group_map[ph_id]
+                if 'consult' in ph_name: return 'Consultation'
+                if 'develop' in ph_name: return 'Development'
+            # Fallback: parent + task name
             parent_raw = task.get('parent_id')
             parent   = (parent_raw[1] if isinstance(parent_raw, list) else str(parent_raw or ''))
-            name     = (task.get('name') or '')
-            combined = (parent + ' ' + name).lower()
-            for p in phases:
-                if p.lower() in combined:
-                    return p
-            return None  # unassigned (BOG only)
+            combined = (parent + ' ' + (task.get('name') or '')).lower()
+            if 'consult' in combined: return 'Consultation'
+            if 'develop' in combined or 'analysis' in combined: return 'Development'
+            return None  # unassigned
 
         # ── 3. Timesheets for both dates ──────────────────────────────────
         def fetch_ts(date_str, task_ids_filter):
@@ -1539,7 +1556,7 @@ def api_debug_bog_phases():
             ODOO_DB, odoo.uid, ODOO_PASSWORD,
             'project.phase', 'search_read',
             [[('project_id', '=', 228)]],
-            {'fields': ['id', 'name'], 'limit': 50}
+            {'fields': ['id', 'name'], 'limit': 50, 'order': 'id asc'}
         )
         return jsonify({'ok': True, 'phases': phases, 'count': len(phases)})
     except Exception as e:
