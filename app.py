@@ -1069,9 +1069,8 @@ def api_standup():
         is_bog = str(proj_id) == '228' or \
                  'bog digital transformation' in (proj_name or '').lower()
 
-        # ── 1. Fetch real project phases from Odoo (BOG only) ────────────
+        # ── 1. Phases setup ───────────────────────────────────────────────
         real_phases = []
-        has_phases  = False
         if is_bog:
             try:
                 odoo_phases = odoo.models.execute_kw(
@@ -1081,17 +1080,16 @@ def api_standup():
                     {'fields': ['id', 'name'], 'limit': 20, 'order': 'sequence asc'}
                 )
                 real_phases = odoo_phases
-                has_phases  = len(real_phases) > 0
             except Exception as e:
                 logger.warning(f'standup phases fetch: {e}')
 
-        if has_phases:
-            phases = [p['name'] for p in real_phases]
-        elif is_bog:
-            phases = ['Development Phase', 'Consultation Phase']
+        if is_bog:
+            # Always show phases for BOG
+            phases     = [p['name'] for p in real_phases] if real_phases else ['Development Phase', 'Consultation Phase']
+            has_phases = True
         else:
-            # Non-BOG: single bucket = project name, no phase tabs
-            phases = ['all']
+            phases     = ['all']
+            has_phases = False
 
         # ── 2. Fetch all tasks with phase_id ─────────────────────────────
         if proj_id and str(proj_id) != '228':
@@ -1332,7 +1330,7 @@ def api_standup():
 
         return jsonify({'ok': True, 'date': query_date, 'prev_date': prev_date,
                         'phases': result_phases, 'is_bog': is_bog,
-                        'has_phases': has_phases or not is_bog,
+                        'has_phases': has_phases,
                         'project_name': proj_name})
 
     except Exception as e:
