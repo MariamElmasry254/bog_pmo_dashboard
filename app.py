@@ -1068,7 +1068,28 @@ def api_standup():
         is_bog    = not proj_id or str(proj_id) == '228'
         phases    = ['development', 'consultation'] if is_bog else ['services', 'support']
 
-        # ── 1. Fetch all tasks (open + closed) ───────────────────────────
+        # ── 1. Fetch real project phases from Odoo ───────────────────────
+        real_phases = []
+        try:
+            odoo_phases = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'project.phase', 'search_read',
+                [[('project_id', '=', int(proj_id) if proj_id else 228)]],
+                {'fields': ['id', 'name'], 'limit': 20, 'order': 'sequence asc'}
+            )
+            real_phases = odoo_phases  # [{id, name}]
+        except Exception as e:
+            logger.warning(f'standup phases fetch: {e}')
+
+        # Use real phase names if available, else fallback
+        if real_phases:
+            phases = [p['name'] for p in real_phases]
+            phase_id_map = {p['id']: p['name'] for p in real_phases}
+        else:
+            phases = ['development', 'consultation'] if is_bog else ['services', 'support']
+            phase_id_map = {}
+
+        # ── 2. Fetch all tasks with phase_id ─────────────────────────────
         if proj_id and str(proj_id) != '228':
             proj_domain = [('project_id', '=', int(proj_id))]
         else:
@@ -1079,7 +1100,7 @@ def api_standup():
             'project.task', 'search_read',
             [proj_domain + [('child_ids', '=', False), ('active', '=', True)]],
             {'fields': ['id', 'name', 'planned_hours', 'effective_hours',
-                        'user_id', 'stage_id', 'parent_id', 'write_date'],
+                        'user_id', 'stage_id', 'parent_id', 'write_date', 'phase_id'],
              'limit': 1000}
         )
 
@@ -1087,31 +1108,30 @@ def api_standup():
         if not task_ids:
             return jsonify({'ok': True, 'date': query_date,
                            'phases': {ph: [] for ph in phases},
-                           'debug': {
-                               'proj_id': proj_id, 'proj_name': proj_name,
-                               'is_bog': is_bog, 'domain': str(proj_domain),
-                               'tasks_found': 0
-                           }})
+                           'debug': {'proj_id': proj_id, 'tasks_found': 0}})
 
-        # ── 2. Classify tasks by phase (from parent bracket) ─────────────
+        # ── Classify tasks by phase_id first, then name fallback ─────────
         def classify_phase(task):
+            # 1. Use Odoo phase_id directly
+            ph_raw = task.get('phase_id')
+            if ph_raw and isinstance(ph_raw, list) and len(ph_raw) > 1:
+                ph_name = ph_raw[1]
+                if ph_name in phases:
+                    return ph_name
+                # fuzzy match against real phase names
+                ph_lower = ph_name.lower()
+                for p in phases:
+                    if p.lower() in ph_lower or ph_lower in p.lower():
+                        return p
+            # 2. Fallback: parent + name keywords
             parent_raw = task.get('parent_id')
-            parent = (parent_raw[1] if isinstance(parent_raw, list) else str(parent_raw or ''))
-            name   = (task.get('name') or '')
-            # Check parent first, then task name
+            parent  = (parent_raw[1] if isinstance(parent_raw, list) else str(parent_raw or ''))
+            name    = (task.get('name') or '')
             combined = (parent + ' ' + name).lower()
-            if is_bog:
-                # Strict: must start with or contain phase prefix
-                if 'consultation phase' in combined or 'consultation:' in combined: return 'consultation'
-                if 'development phase' in combined or 'development:' in combined: return 'development'
-                # Looser fallback
-                if 'consult' in combined: return 'consultation'
-                if 'develop' in combined: return 'development'
-                return None  # unassigned
-            else:
-                if 'support' in combined: return 'support'
-                if 'service' in combined: return 'services'
-                return None  # unassigned
+            for p in phases:
+                if p.lower() in combined:
+                    return p
+            return None  # unassigned
 
         # ── 3. Timesheets for both dates ──────────────────────────────────
         def fetch_ts(date_str):
