@@ -1096,16 +1096,22 @@ def api_standup():
         # ── 2. Classify tasks by phase (from parent bracket) ─────────────
         def classify_phase(task):
             parent_raw = task.get('parent_id')
-            parent = (parent_raw[1] if isinstance(parent_raw, list) else str(parent_raw or '')).lower()
-            name   = (task.get('name') or '').lower()
+            parent = (parent_raw[1] if isinstance(parent_raw, list) else str(parent_raw or ''))
+            name   = (task.get('name') or '')
+            # Check parent first, then task name
+            combined = (parent + ' ' + name).lower()
             if is_bog:
-                if 'consult' in parent or 'consult' in name: return 'consultation'
-                if 'develop' in parent or 'develop' in name: return 'development'
-                if 'support' in parent or 'support' in name: return 'support'
-                return 'development'
+                # Strict: must start with or contain phase prefix
+                if 'consultation phase' in combined or 'consultation:' in combined: return 'consultation'
+                if 'development phase' in combined or 'development:' in combined: return 'development'
+                # Looser fallback
+                if 'consult' in combined: return 'consultation'
+                if 'develop' in combined: return 'development'
+                return None  # unassigned
             else:
-                if 'support' in parent or 'support' in name: return 'support'
-                return 'services'
+                if 'support' in combined: return 'support'
+                if 'service' in combined: return 'services'
+                return None  # unassigned
 
         # ── 3. Timesheets for both dates ──────────────────────────────────
         def fetch_ts(date_str):
@@ -1159,13 +1165,14 @@ def api_standup():
             stage = (s[1] if isinstance(s, list) else str(s or '')).lower()
             return any(k in stage for k in done_kws)
 
-        # collect all employees per phase from tasks + timesheets
-        phase_members = {ph: {} for ph in phases}  # phase -> {emp -> {yesterday,inprogress,closed}}
+        all_phases_list = phases + ['unassigned']
+        phase_members = {ph: {} for ph in all_phases_list}
 
         for task in tasks:
             tid    = task['id']
             phase  = classify_phase(task)
-            if phase not in phase_members:
+            bucket = phase if phase else 'unassigned'
+            if bucket not in phase_members:
                 continue
 
             uid_raw = task.get('user_id')
@@ -1204,12 +1211,12 @@ def api_standup():
             }
 
             for e in all_emps:
-                if e not in phase_members[phase]:
-                    phase_members[phase][e] = {
+                if e not in phase_members[bucket]:
+                    phase_members[bucket][e] = {
                         'name': e, 'logged_yesterday': False,
                         'yesterday': [], 'inprogress': [], 'closed_with_remaining': []
                     }
-                m = phase_members[phase][e]
+                m = phase_members[bucket][e]
                 h_prev  = hrs_prev.get(e, {}).get(tid, 0)
                 if h_prev > 0: m['logged_yesterday'] = True
 
@@ -1221,14 +1228,16 @@ def api_standup():
                 if closed and remaining > 0:
                     m['closed_with_remaining'].append(task_obj_base)
 
-        # Sort members: logged first
+        # Sort members per phase
         result_phases = {}
-        for ph in phases:
+        for ph in all_phases_list:
             members_list = sorted(
                 phase_members[ph].values(),
                 key=lambda m: (0 if m['logged_yesterday'] else 1, m['name'])
             )
-            result_phases[ph] = members_list
+            # Always include main phases, only include unassigned if has data
+            if ph != 'unassigned' or members_list:
+                result_phases[ph] = members_list
 
         return jsonify({'ok': True, 'date': query_date, 'prev_date': prev_date,
                         'phases': result_phases, 'is_bog': is_bog,
