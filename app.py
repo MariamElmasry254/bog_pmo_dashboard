@@ -1136,7 +1136,7 @@ def api_standup():
         def classify_phase(task):
             if not is_bog:
                 return 'all'
-            # Use Odoo phase_id → group map
+            # Use Odoo phase_id → group map (most reliable)
             ph_raw = task.get('phase_id')
             if ph_raw and isinstance(ph_raw, list) and len(ph_raw) > 1:
                 ph_id   = ph_raw[0]
@@ -1145,13 +1145,8 @@ def api_standup():
                     return phase_group_map[ph_id]
                 if 'consult' in ph_name: return 'Consultation'
                 if 'develop' in ph_name: return 'Development'
-            # Fallback: parent + task name
-            parent_raw = task.get('parent_id')
-            parent   = (parent_raw[1] if isinstance(parent_raw, list) else str(parent_raw or ''))
-            combined = (parent + ' ' + (task.get('name') or '')).lower()
-            if 'consult' in combined: return 'Consultation'
-            if 'develop' in combined or 'analysis' in combined: return 'Development'
-            return None  # unassigned
+            # No phase_id set → unassigned (even if name looks like a phase)
+            return None
 
         # ── 3. Timesheets for both dates ──────────────────────────────────
         def fetch_ts(date_str, task_ids_filter):
@@ -1301,9 +1296,12 @@ def api_standup():
                 'remaining_hrs': round(remaining, 1), 'first_entry': first_d, 'stale': stale,
             }
 
-            # If no assignee found anywhere, skip task
+            # If no assignee found anywhere, still show in unassigned bucket
             if not all_emps:
-                continue
+                if bucket == 'unassigned':
+                    all_emps = {'⚠ No Assignee'}
+                else:
+                    continue
 
             for e in all_emps:
                 if e not in phase_members[bucket]:
