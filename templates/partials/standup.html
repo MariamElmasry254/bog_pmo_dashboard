@@ -162,14 +162,17 @@ function selectPhase(ph) {
 }
 
 function renderPhaseTabs(phases) {
-  var labels = {development:'Development',consultation:'Consultation',services:'Services',support:'Support'};
+  var labels = {development:'Development',consultation:'Consultation',services:'Services',support:'Support',unassigned:'⚠ No Phase'};
   var tabsEl = document.getElementById('phaseTabs');
   if (!tabsEl) return;
   tabsEl.innerHTML = phases.map(function(ph){
-    var cnt = (allPhases[ph]||[]).length;
+    var cnt    = (allPhases[ph]||[]).length;
     var active = ph===currentPhase?' active':'';
-    return '<button class="ph-tab'+active+'" data-ph="'+ph+'" onclick="selectPhase(\''+ph+'\')">'
-      +( labels[ph]||ph)+' <span class="ph-cnt">'+cnt+'</span></button>';
+    var isUn   = ph==='unassigned';
+    var style  = isUn ? ' style="border-color:#F59E0B;color:#92400E;background:#FFFBEB;"' : '';
+    var cntStyle = isUn ? 'background:#FEF3C7;color:#92400E;' : '';
+    return '<button class="ph-tab'+active+'" data-ph="'+ph+'" onclick="selectPhase(\''+ph+'\')"'+style+'>'
+      +(labels[ph]||ph)+' <span class="ph-cnt" style="'+cntStyle+'">'+cnt+'</span></button>';
   }).join('');
 }
 
@@ -186,7 +189,9 @@ function renderMembers() {
     document.getElementById('membersList').innerHTML='<div class="loading" style="color:#CBD5E1;font-size:12px;padding:16px;">No members in this phase</div>';
     return;
   }
-  var html = '';
+  var isUn = currentPhase==='unassigned';
+  var banner = isUn ? '<div style="background:#FEF3C7;padding:8px 14px;font-size:11px;color:#92400E;border-bottom:1px solid #FDE68A;">These tasks have no phase assigned</div>' : '';
+  var html = banner;
   allMembers.forEach(function(m, i) {
     if (!colorMap[m.name]) colorMap[m.name]=AV_COLORS[Object.keys(colorMap).length%AV_COLORS.length];
     var c    = colorMap[m.name];
