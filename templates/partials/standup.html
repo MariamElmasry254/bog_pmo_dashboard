@@ -84,7 +84,7 @@ body{font-family:'Inter',sans-serif;background:#F0F4F8;min-height:100vh;}
     <span class="nav-sep"></span>
     <span class="nav-title" id="navTitle">Daily Standup</span>
   </div>
-  <a href="javascript:history.back()" class="nav-btn">Back</a>
+  <a href="/projects" class="nav-btn">&#8592; Overview</a>
 </nav>
 
 <div class="wrap">
@@ -292,16 +292,15 @@ function motivBanner(m) {
 
   var hoursHtml = '';
   if (projHrs > 0 || crossKeys.length > 0) {
-    hoursHtml = '<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;">';
+    hoursHtml = '<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;">';
     if (projHrs > 0) {
       hoursHtml += '<div style="background:rgba(255,255,255,.12);border-radius:6px;padding:4px 10px;font-size:11px;color:#fff;">'
-        +'<span style="color:rgba(255,255,255,.6);">Here</span> '
-        +'<strong>'+projHrs.toFixed(1)+'h</strong></div>';
+        +'Logged <strong>'+projHrs.toFixed(1)+'h</strong> here</div>';
     }
     crossKeys.forEach(function(proj) {
       hoursHtml += '<div style="background:rgba(255,200,0,.15);border-radius:6px;padding:4px 10px;font-size:11px;color:#FDE68A;">'
-        +'<span style="opacity:.8;">'+esc(proj)+'</span> '
-        +'<strong>'+crossHrs[proj].toFixed(1)+'h</strong></div>';
+        +'Also logged <strong>'+crossHrs[proj].toFixed(1)+'h</strong>'
+        +' in <span style="opacity:.85;">'+esc(proj)+'</span></div>';
     });
     hoursHtml += '</div>';
   }
