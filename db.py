@@ -175,10 +175,28 @@ class DB:
                 "CREATE INDEX IF NOT EXISTS idx_audit_ns ON audit_log(namespace, timestamp DESC)",
             ]
 
-        with self.conn() as c:
-            for sql in ddl:
-                cur = self._execute(c, sql)
-                self._close_cur(cur)
+        if self.backend == 'postgres':
+            import time
+            max_retries = 10
+            for attempt in range(max_retries):
+                try:
+                    with self.conn() as c:
+                        for sql in ddl:
+                            cur = self._execute(c, sql)
+                            self._close_cur(cur)
+                    return
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"DB connect attempt {attempt+1}/{max_retries} failed: {e}. Retrying in 3s...")
+                        time.sleep(3)
+                    else:
+                        logger.error(f"DB connect failed after {max_retries} attempts: {e}")
+                        raise
+        else:
+            with self.conn() as c:
+                for sql in ddl:
+                    cur = self._execute(c, sql)
+                    self._close_cur(cur)
 
     # ========================================================
     # Helpers to read rows cross-backend
