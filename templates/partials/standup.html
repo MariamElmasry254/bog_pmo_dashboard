@@ -335,10 +335,24 @@ function renderContent() {
   var m=null;
   for (var i=0;i<allMembers.length;i++){if(allMembers[i].name===selName){m=allMembers[i];break;}}
   if (!m) return;
+  var DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  var isSunday = currentDate.getDay() === 0;
+  // On Sunday, show actual day name of prev_date from data; else "Yesterday"
+  var ystLabel = 'Logged Yesterday';
+  if (isSunday && m.yesterday && m.yesterday.length > 0) {
+    // Get the date from first yesterday task's first_entry won't work,
+    // but we know prev_date is Thursday if no weekend work, or Fri/Sat if they worked
+    // The prev_date comes from the API response stored in allData
+    var pd = allData.prev_date || '';
+    if (pd) {
+      var pdObj = new Date(pd + 'T00:00:00');
+      ystLabel = 'Logged ' + DAYS[pdObj.getDay()];
+    }
+  }
   var isNoPhase = (currentPhase === 'unassigned');
   var html = motivBanner(m)
     +'<div class="three-col">'
-    +col(isNoPhase ? 'Logged Yesterday' : 'Logged Yesterday', m.yesterday||[], 'y')
+    +col(ystLabel, m.yesterday||[], 'y')
     +col(isNoPhase ? 'All Tasks (No Phase)' : 'In Progress', m.inprogress||[], 'i')
     +col(isNoPhase ? 'Closed Tasks' : 'Closed — Has Remaining', m.closed_with_remaining||[], 'c')
     +'</div>';
