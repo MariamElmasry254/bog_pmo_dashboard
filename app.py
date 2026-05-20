@@ -1299,7 +1299,7 @@ def api_standup():
             # If no assignee found anywhere, still show in unassigned bucket
             if not all_emps:
                 if bucket == 'unassigned':
-                    all_emps = {'⚠ No Assignee'}
+                    all_emps = {'— Unassigned —'}
                 else:
                     continue
 
