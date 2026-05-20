@@ -1324,7 +1324,7 @@ def api_standup():
             planned   = float(task.get('planned_hours') or 0)
             actual    = float(task.get('effective_hours') or 0)
             odoo_rem  = task.get('remaining_hours')
-            remaining = float(odoo_rem) if (odoo_rem is not None and odoo_rem is not False) else max(0.0, planned - actual)
+            remaining = max(0.0, float(odoo_rem)) if (odoo_rem is not None and odoo_rem is not False) else max(0.0, planned - actual)
             closed    = is_closed(task)
             first_d   = first_entry_map.get(tid, '')
 
@@ -7103,6 +7103,8 @@ def api_positions_reseed():
     return jsonify({'ok': True, 'updated': count})
 
 
+@app.route('/api/positions/save', methods=['POST'])
+@login_required
 def api_positions_save():
     """Add or update a position. Body: { position, hour_rate, md_rate, country, is_onsite }"""
     body = request.json or {}
@@ -7918,6 +7920,7 @@ def api_plan_overrides_get():
 
 
 @app.route('/api/position-overrides', methods=['POST'])
+@app.route('/api/position-overrides/save', methods=['POST'])
 def api_position_overrides_save():
     """Manual position override for an employee (when Odoo doesn't have it)"""
     body = request.json or {}
