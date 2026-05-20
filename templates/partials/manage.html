@@ -1648,13 +1648,14 @@ async function _empLoad(){
     _empAllPositions=pd.positions||[];
     // Build position map: name -> {hour_rate, md_rate}
     _empPosMap={};
-    _empAllPositions.forEach(function(p){ _empPosMap[p.name]=p; });
+    _empAllPositions.forEach(function(p){ _empPosMap[p.position||p.name]=p; });
     // Populate add form select
     var sel=document.getElementById('addEmpPos');
     if(sel){
       var opts='<option value="">&#8212; select position &#8212;</option>';
       _empAllPositions.forEach(function(p){
-        opts+='<option value="'+p.name+'">'+p.name+(p.hour_rate?' ($'+p.hour_rate+'/hr)':'')+'</option>';
+        var nm = p.position||p.name||'';
+        if(nm) opts+='<option value="'+nm+'">'+nm+(p.hour_rate?' ($'+p.hour_rate+'/hr)':'')+'</option>';
       });
       sel.innerHTML=opts;
       sel.onchange=function(){_empRatePreview();};
@@ -1669,7 +1670,7 @@ function _renderEmpTable(){
   var badge=noRate>0
     ?'<div style="margin-bottom:10px;"><span style="background:#FEE2E2;color:#DC2626;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600;">&#9888; '+noRate+' missing rate</span></div>'
     :'<div style="margin-bottom:10px;"><span style="background:#D1FAE5;color:#065F46;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600;">&#10003; All employees have rates</span></div>';
-  var optHtml=_empAllPositions.map(function(p){return '<option value="'+p.name+'">'+p.name+(p.hour_rate?' ($'+p.hour_rate+'/hr)':'')+'</option>';}).join('');
+  var optHtml=_empAllPositions.map(function(p){var nm=p.position||p.name||'';return nm?'<option value="'+nm+'">'+nm+(p.hour_rate?' ($'+p.hour_rate+'/hr)':'')+'</option>':''}).join('');
   var rows='';
   emps.forEach(function(emp,i){
     var hasRate=emp.hour_rate>0, isManual=emp.source_type==='manual';
