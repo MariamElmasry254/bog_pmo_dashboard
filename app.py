@@ -1320,13 +1320,18 @@ def api_standup():
                     m['yesterday'].append({**task_obj_base, 'hrs': round(h_prev, 2),
                                            'firstEntry': first_d == prev_date})
 
-                # In progress: show ALL open tasks (even 0 hours — they still need to be done)
+                # In progress: show ALL open tasks
                 if not closed:
                     m['inprogress'].append(task_obj_base)
 
                 # Closed with remaining hours
                 if closed and remaining > 0:
                     m['closed_with_remaining'].append(task_obj_base)
+
+                # For unassigned bucket: show ALL tasks regardless of stage
+                if bucket == 'unassigned' and closed:
+                    if task_obj_base not in m['closed_with_remaining']:
+                        m['closed_with_remaining'].append(task_obj_base)
 
         # Sort members per phase
         result_phases = {}
