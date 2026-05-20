@@ -8000,21 +8000,26 @@ def api_db_audit():
 @login_required
 def api_project_employees_manual_add():
     """Add a manual/resigned employee to the project."""
-    body = request.json or {}
-    name = (body.get('full_name') or '').strip()
-    if not name:
-        return jsonify({'error': 'full_name required'}), 400
-    pfx = active_db_prefix()
-    ns = f'{pfx}_manual_employees' if pfx else 'manual_employees'
-    key = name.lower().replace(' ', '_')
-    db.set_override(ns, '', key, {
-        'full_name':    name,
-        'position':     body.get('position', ''),
-        'resigned_date':body.get('resigned_date', ''),
-        'note':         body.get('note', ''),
-        'source_type':  'manual',
-    })
-    return jsonify({'ok': True})
+    try:
+        body = request.json or {}
+        name = (body.get('full_name') or '').strip()
+        if not name:
+            return jsonify({'error': 'full_name required'}), 400
+        pfx = active_db_prefix()
+        ns = f'{pfx}_manual_employees' if pfx else 'manual_employees'
+        key = name.lower().replace(' ', '_').replace('[','').replace(']','')
+        db.set_override(ns, '', key, {
+            'full_name':    name,
+            'position':     body.get('position', ''),
+            'resigned_date':body.get('resigned_date', ''),
+            'note':         body.get('note', ''),
+            'source_type':  'manual',
+        })
+        return jsonify({'ok': True})
+    except Exception as e:
+        import traceback
+        logger.error(f'manual employee add: {traceback.format_exc()}')
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/project-employees/manual/<path:full_name>', methods=['DELETE'])
