@@ -1185,7 +1185,25 @@ def api_standup():
         ts_prev  = fetch_ts(prev_date, task_ids)
         ts_today = fetch_ts(query_date, task_ids)
 
-        # ── 3b. Cross-project hours for prev_date ─────────────────────────
+        # ── 3c. Leave requests for prev_date ─────────────────────────────
+        # States: draft, confirm (waiting manager), validate1 (waiting HR), validate (approved)
+        # Show leave badge for: confirm, validate1, validate (NOT draft/refuse)
+        on_leave_emp_ids = set()
+        try:
+            leaves = odoo.models.execute_kw(
+                ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                'hr.leave', 'search_read',
+                [[('date_from', '<=', prev_date + ' 23:59:59'),
+                  ('date_to',   '>=', prev_date + ' 00:00:00'),
+                  ('state', 'in', ['confirm', 'validate1', 'validate'])]],
+                {'fields': ['employee_id', 'state', 'name'], 'limit': 500}
+            )
+            for lv in leaves:
+                emp_raw = lv.get('employee_id')
+                if isinstance(emp_raw, list) and len(emp_raw) > 0:
+                    on_leave_emp_ids.add(emp_raw[0])
+        except Exception as e:
+            logger.warning(f'leave fetch: {e}')
         # Collect employee IDs directly from prev timesheets
         proj_emp_ids  = {}  # emp_name -> emp_id (from ts_prev)
         proj_emp_names = set()
@@ -1337,13 +1355,17 @@ def api_standup():
                 if e not in phase_members[bucket]:
                     phase_members[bucket][e] = {
                         'name': e, 'logged_yesterday': False,
+                        'on_leave': False,
                         'yesterday': [], 'inprogress': [], 'closed_with_remaining': [],
                         'cross_project_hrs': cross_proj_hrs.get(e, {})
                     }
                 m = phase_members[bucket][e]
-                # Update cross_project_hrs in case it wasn't set
                 if not m.get('cross_project_hrs'):
                     m['cross_project_hrs'] = cross_proj_hrs.get(e, {})
+                # Check leave status using employee ID from proj_emp_ids
+                emp_id = proj_emp_ids.get(e)
+                if emp_id and emp_id in on_leave_emp_ids:
+                    m['on_leave'] = True
                 h_prev = hrs_prev.get(e, {}).get(tid, 0)
                 if h_prev > 0:
                     m['logged_yesterday'] = True
