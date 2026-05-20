@@ -318,11 +318,12 @@ function renderContent() {
   var m=null;
   for (var i=0;i<allMembers.length;i++){if(allMembers[i].name===selName){m=allMembers[i];break;}}
   if (!m) return;
+  var isNoPhase = (currentPhase === 'unassigned');
   var html = motivBanner(m)
     +'<div class="three-col">'
-    +col('Logged Yesterday', m.yesterday||[], 'y')
-    +col('In Progress', m.inprogress||[], 'i')
-    +col('Closed — Has Remaining', m.closed_with_remaining||[], 'c')
+    +col(isNoPhase ? 'Logged Yesterday' : 'Logged Yesterday', m.yesterday||[], 'y')
+    +col(isNoPhase ? 'All Tasks (No Phase)' : 'In Progress', m.inprogress||[], 'i')
+    +col(isNoPhase ? 'Closed Tasks' : 'Closed — Has Remaining', m.closed_with_remaining||[], 'c')
     +'</div>';
   document.getElementById('contentArea').innerHTML=html;
 }
