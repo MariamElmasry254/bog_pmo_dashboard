@@ -218,11 +218,16 @@ function renderMembers() {
     var iCnt = (m.inprogress||[]).length;
     var totHrs = (m.yesterday||[]).reduce(function(s,t){return s+(t.hrs||0);},0);
     var hrsStr = totHrs>0 ? ' &nbsp;<span style="color:#1B2A4E;font-weight:600;">'+totHrs.toFixed(1)+'h</span>' : '';
+    var onLeave = m.on_leave === true;
+    var leaveBadge = onLeave ? ' &nbsp;<span style="font-size:9px;background:#FEF3C7;color:#92400E;border-radius:4px;padding:1px 5px;font-weight:600;">🏖 Leave</span>' : '';
     html += '<div class="mem-item'+act+'" data-idx="'+i+'" onclick="selectMember('+i+')">'
       +'<div class="av" style="background:'+c.bg+';color:'+c.c+';">'+initials(m.name)+'</div>'
       +'<div class="mem-info"><div class="mem-name">'+esc(strip(m.name))+'</div>'
-      +'<div class="mem-sub">'+yCnt+' yesterday &middot; '+iCnt+' open'+hrsStr+'</div></div>'
-      +'<div class="mem-dot '+dot+'"></div></div>';
+      +'<div class="mem-sub">'+yCnt+' yesterday &middot; '+iCnt+' open'+hrsStr+leaveBadge+'</div></div>'
+      +(onLeave
+        ? '<span style="font-size:14px;">🏖</span>'
+        : '<div class="mem-dot '+dot+'"></div>')
+      +'</div>';
   });
   document.getElementById('membersList').innerHTML=html;
 }
@@ -298,6 +303,16 @@ var MOTIVATIONS = [
 function motivBanner(m) {
   var mv = MOTIVATIONS[Math.floor(Math.random()*MOTIVATIONS.length)];
   var dName = strip(m.name);
+  var onLeave = m.on_leave === true;
+
+  if (onLeave) {
+    return '<div class="motiv" style="background:#92400E;">'
+      +'<span class="motiv-emoji">🏖</span>'
+      +'<div style="flex:1;">'
+        +'<div class="motiv-text">'+dName+' — On Leave</div>'
+        +'<div class="motiv-sub">Leave request submitted &amp; pending / approved</div>'
+      +'</div></div>';
+  }
 
   // Total hours yesterday in this project
   var projHrs = (m.yesterday||[]).reduce(function(s,t){return s+(t.hrs||0);},0);
