@@ -298,8 +298,7 @@ function motivBanner(m) {
     }
     crossKeys.forEach(function(proj) {
       hoursHtml += '<div style="background:rgba(255,200,0,.15);border-radius:6px;padding:4px 10px;font-size:11px;color:#FDE68A;">'
-        +'Also logged <strong>'+crossHrs[proj].toFixed(1)+'h</strong>'
-        +' in <span style="opacity:.85;">'+esc(proj)+'</span></div>';
+        +'+ <strong>'+crossHrs[proj].toFixed(1)+'h</strong> in '+esc(proj)+'</div>';
     });
     hoursHtml += '</div>';
   }
