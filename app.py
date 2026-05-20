@@ -8015,7 +8015,12 @@ def api_project_employees_manual_add():
         name = (body.get('full_name') or '').strip()
         if not name:
             return jsonify({'error': 'full_name required'}), 400
-        pfx = active_db_prefix()
+        # Get project prefix from body or session
+        body_proj_id = body.get('project_id')
+        if body_proj_id and str(body_proj_id) != '228':
+            pfx = f'proj_{body_proj_id}'
+        else:
+            pfx = active_db_prefix()
         ns = f'{pfx}_manual_employees' if pfx else 'manual_employees'
         key = name.lower().replace(' ', '_').replace('[','').replace(']','')
         db.set_override(ns, '', key, {
