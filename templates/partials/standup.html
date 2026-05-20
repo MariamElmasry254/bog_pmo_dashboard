@@ -143,8 +143,25 @@ function fmtDate(d) {
 function toISO(d) {
   return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
 }
+function prevBizDay(d) {
+  var p = new Date(d);
+  // Only Sunday (day=0) skips back to Thursday (-3)
+  if (p.getDay() === 0) {
+    p.setDate(p.getDate() - 3);
+  } else {
+    p.setDate(p.getDate() - 1);
+  }
+  return p;
+}
+
 function changeDay(delta) {
-  currentDate.setDate(currentDate.getDate()+delta);
+  var d = new Date(currentDate);
+  if (delta > 0) {
+    d.setDate(d.getDate() + 1);
+  } else {
+    d = prevBizDay(currentDate);
+  }
+  currentDate = d;
   loadStandup();
 }
 
@@ -355,7 +372,7 @@ function saveNote() {
 async function loadStandup() {
   document.getElementById('dateLbl').textContent=fmtDate(currentDate);
   var ds=toISO(currentDate);
-  var prev=new Date(currentDate); prev.setDate(prev.getDate()-1);
+  var prev=prevBizDay(currentDate);
   var ps=toISO(prev);
   var url='/api/standup?date='+ds+'&prev='+ps;
   if (projId)   url+='&project_id='+encodeURIComponent(projId);
