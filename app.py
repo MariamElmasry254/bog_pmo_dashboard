@@ -1161,48 +1161,23 @@ def api_standup():
         ts_today = fetch_ts(query_date, task_ids)
 
         # ── 3b. Cross-project hours for prev_date ─────────────────────────
-        # Collect ALL employees who worked on this project in last 30 days
+        # Collect employee IDs directly from prev timesheets
+        proj_emp_ids  = {}  # emp_name -> emp_id (from ts_prev)
         proj_emp_names = set()
         for ts in ts_prev:
             emp_raw = ts.get('employee_id')
             if isinstance(emp_raw, list) and len(emp_raw) > 1:
                 proj_emp_names.add(emp_raw[1])
+                proj_emp_ids[emp_raw[1]] = emp_raw[0]
+
+        # Also add from first_ts_raw (will be populated after step 4)
+        # Cross-project fetch happens after first_ts_raw is built
+
+        cross_ts_prev  = []
+        cross_proj_hrs = {}
 
         # Fetch their timesheets on prev_date across ALL projects
-        cross_ts_prev = []
-        if proj_emp_names:
-            try:
-                # Get employee IDs for these names
-                emp_records = odoo.models.execute_kw(
-                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                    'hr.employee', 'search_read',
-                    [[('name', 'in', list(proj_emp_names))]],
-                    {'fields': ['id', 'name'], 'limit': 200}
-                )
-                emp_ids = [e['id'] for e in emp_records]
-                if emp_ids:
-                    cross_ts_prev = odoo.models.execute_kw(
-                        ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                        'account.analytic.line', 'search_read',
-                        [[('employee_id', 'in', emp_ids),
-                          ('date', '=', prev_date),
-                          ('task_id', 'not in', task_ids)]],
-                        {'fields': ['employee_id', 'task_id', 'unit_amount', 'project_id'], 'limit': 2000}
-                    )
-            except Exception as e:
-                logger.warning(f'cross-project ts fetch: {e}')
-
-        # Build cross-project hours map: emp_name -> {project_name -> hours}
-        cross_proj_hrs = {}  # emp_name -> {proj_name -> hours}
-        for ts in cross_ts_prev:
-            emp_raw  = ts.get('employee_id')
-            proj_raw = ts.get('project_id')
-            emp  = emp_raw[1]  if isinstance(emp_raw,  list) and len(emp_raw)  > 1 else ''
-            proj = proj_raw[1] if isinstance(proj_raw, list) and len(proj_raw) > 1 else 'Other project'
-            hrs  = float(ts.get('unit_amount') or 0)
-            if emp and hrs > 0:
-                cross_proj_hrs.setdefault(emp, {})
-                cross_proj_hrs[emp][proj] = cross_proj_hrs[emp].get(proj, 0) + hrs
+        # (done after first_ts_raw to have all employee IDs)
 
         # ── 4. First entry + all employees per task (last 30 days) ──────
         first_entry_map = {}
@@ -1221,10 +1196,36 @@ def api_standup():
                 tid = ts['task_id'][0] if ts.get('task_id') else None
                 if tid and tid not in first_entry_map:
                     first_entry_map[tid] = ts['date']
-                # Also collect employee for cross-project lookup
+                # Collect employee IDs for cross-project lookup
                 emp_raw = ts.get('employee_id')
                 if isinstance(emp_raw, list) and len(emp_raw) > 1:
+                    proj_emp_ids[emp_raw[1]] = emp_raw[0]
                     proj_emp_names.add(emp_raw[1])
+
+        # ── 4b. Cross-project hours using direct employee IDs ─────────────
+        cross_proj_hrs = {}
+        all_emp_ids = list(set(proj_emp_ids.values()))
+        if all_emp_ids:
+            try:
+                cross_ts = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'account.analytic.line', 'search_read',
+                    [[('employee_id', 'in', all_emp_ids),
+                      ('date', '=', prev_date),
+                      ('task_id', 'not in', task_ids)]],
+                    {'fields': ['employee_id', 'task_id', 'unit_amount', 'project_id'], 'limit': 3000}
+                )
+                for ts in cross_ts:
+                    emp_raw  = ts.get('employee_id')
+                    proj_raw = ts.get('project_id')
+                    emp  = emp_raw[1]  if isinstance(emp_raw,  list) and len(emp_raw)  > 1 else ''
+                    proj = proj_raw[1] if isinstance(proj_raw, list) and len(proj_raw) > 1 else 'Other'
+                    hrs  = float(ts.get('unit_amount') or 0)
+                    if emp and hrs > 0:
+                        cross_proj_hrs.setdefault(emp, {})
+                        cross_proj_hrs[emp][proj] = cross_proj_hrs[emp].get(proj, 0) + hrs
+            except Exception as e:
+                logger.warning(f'cross-project hrs: {e}')
 
         # ── 5. Build hours maps + all-time employee map per task ─────────
         def build_hrs_map(ts_list):
