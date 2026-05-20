@@ -122,8 +122,9 @@ var urlParams   = new URLSearchParams(window.location.search);
 var projId      = urlParams.get('project_id') || '';
 var projName    = urlParams.get('project_name') || '';
 var currentDate = new Date();
-var allPhases   = {};   // {phase: [members]}
-var allMembers  = [];   // flat merged list (current phase)
+var allPhases   = {};
+var allMembers  = [];
+var allData     = {};
 var currentPhase= '';
 var selName     = null;
 var colorMap    = {};
@@ -262,11 +263,12 @@ function taskCard(t, mode, idx) {
       +(t.firstEntry?'<div class="ti-stat"><span class="tag first">First entry</span></div>':'')
       +'</div>';
   } else if (mode==='i') {
+    var rem = Math.max(0, t.remaining_hrs);
     html+='<div class="prog-bg"><div class="prog-fill" style="width:'+pct+'%;background:'+fc+';"></div></div>'
       +'<div class="ti-stats" style="margin-top:6px;">'
       +(t.planned_hrs>0?'<div class="ti-stat"><span class="ti-stat-lbl">Planned</span><span class="ti-stat-val">'+t.planned_hrs+'h</span></div>':'')
       +(t.actual_hrs>0?'<div class="ti-stat"><span class="ti-stat-lbl">Actual</span><span class="ti-stat-val">'+t.actual_hrs+'h</span></div>':'')
-      +'<div class="ti-stat"><span class="ti-stat-lbl">Remaining</span><span class="ti-stat-val" style="color:'+(t.remaining_hrs>0?'#1B2A4E':'#94A3B8')+';">'+t.remaining_hrs.toFixed(1)+'h</span></div>'
+      +'<div class="ti-stat"><span class="ti-stat-lbl">Remaining</span><span class="ti-stat-val" style="color:'+(rem>0?'#1B2A4E':'#94A3B8')+';">'+rem.toFixed(1)+'h</span></div>'
       +(t.first_entry?'<div class="ti-stat"><span class="ti-stat-lbl">Since</span><span class="ti-stat-val" style="color:#64748B;">'+t.first_entry+'</span></div>':'')
       +(t.stale>=2?'<div class="ti-stat"><span class="tag stale">'+t.stale+'d stale</span></div>':'')
       +'</div>';
