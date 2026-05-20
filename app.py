@@ -7185,6 +7185,14 @@ def api_effort(phase_key):
     overrides = load_plan_overrides().get('position_overrides', {})
     position_lookup.update(overrides)
 
+    # Also include manual employees' positions
+    pfx = active_db_prefix()
+    manual_ns = f'{pfx}_manual_employees' if pfx else 'manual_employees'
+    manual_map = db.get_namespace_overrides(manual_ns, '') or {}
+    for key, val in manual_map.items():
+        if isinstance(val, dict) and val.get('full_name') and val.get('position'):
+            position_lookup[val['full_name']] = val['position']
+
     result = compute_effort_from_odoo(phase_key, year, month, position_lookup)
     return jsonify(result)
 
