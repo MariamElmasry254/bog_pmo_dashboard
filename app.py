@@ -8065,7 +8065,7 @@ def api_project_employees():
     pfx = active_db_prefix()
     ns = f'{pfx}_manual_employees' if pfx else 'manual_employees'
     manual_map = db.get_namespace_overrides(ns, '') or {}
-    positions_map = {p['name']: p for p in get_all_positions(db)}
+    positions_map = {p.get('position', p.get('name','')): p for p in get_all_positions(db)}
     for key, val in manual_map.items():
         if not isinstance(val, dict): continue
         fn = val.get('full_name', '')
