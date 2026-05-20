@@ -1250,13 +1250,15 @@ def api_standup():
         all_emp_ids = list(set(proj_emp_ids.values()))
         if all_emp_ids:
             try:
+                current_proj_id = int(proj_id) if proj_id and str(proj_id) != '228' else 228
                 cross_ts = odoo.models.execute_kw(
                     ODOO_DB, odoo.uid, ODOO_PASSWORD,
                     'account.analytic.line', 'search_read',
                     [[('employee_id', 'in', all_emp_ids),
                       ('date', '=', prev_date),
-                      ('task_id', 'not in', task_ids)]],
-                    {'fields': ['employee_id', 'task_id', 'unit_amount', 'project_id'], 'limit': 3000}
+                      ('project_id', '!=', current_proj_id),
+                      ('project_id', '!=', False)]],
+                    {'fields': ['employee_id', 'unit_amount', 'project_id'], 'limit': 3000}
                 )
                 for ts in cross_ts:
                     emp_raw  = ts.get('employee_id')
