@@ -1051,10 +1051,13 @@ def api_standup():
     """Return open tasks per team member grouped by phase."""
     from datetime import date, timedelta
 
-    today_str     = date.today().isoformat()
-    yesterday_str = (date.today() - timedelta(days=1)).isoformat()
-    query_date    = request.args.get('date', today_str)
-    prev_date     = request.args.get('prev', yesterday_str)
+    today_str  = date.today().isoformat()
+    query_date = request.args.get('date', today_str)
+    qd = date.fromisoformat(query_date)
+    # Only Sunday (weekday=6) skips back to Thursday (-3), all other days use actual previous day
+    delta = 3 if qd.weekday() == 6 else 1
+    prev_biz  = qd - timedelta(days=delta)
+    prev_date = request.args.get('prev', prev_biz.isoformat())
     # Accept project_id from URL param (standup opens in new tab)
     url_proj_id   = request.args.get('project_id')
     url_proj_name = request.args.get('project_name')
