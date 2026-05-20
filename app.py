@@ -1161,7 +1161,7 @@ def api_standup():
         ts_today = fetch_ts(query_date, task_ids)
 
         # ── 3b. Cross-project hours for prev_date ─────────────────────────
-        # Find all employees in this project who logged time yesterday
+        # Collect ALL employees who worked on this project in last 30 days
         proj_emp_names = set()
         for ts in ts_prev:
             emp_raw = ts.get('employee_id')
@@ -1221,6 +1221,10 @@ def api_standup():
                 tid = ts['task_id'][0] if ts.get('task_id') else None
                 if tid and tid not in first_entry_map:
                     first_entry_map[tid] = ts['date']
+                # Also collect employee for cross-project lookup
+                emp_raw = ts.get('employee_id')
+                if isinstance(emp_raw, list) and len(emp_raw) > 1:
+                    proj_emp_names.add(emp_raw[1])
 
         # ── 5. Build hours maps + all-time employee map per task ─────────
         def build_hrs_map(ts_list):
