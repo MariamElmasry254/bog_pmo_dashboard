@@ -1054,10 +1054,32 @@ def api_standup():
     today_str  = date.today().isoformat()
     query_date = request.args.get('date', today_str)
     qd = date.fromisoformat(query_date)
-    # Only Sunday (weekday=6) skips back to Thursday (-3), all other days use actual previous day
-    delta = 3 if qd.weekday() == 6 else 1
-    prev_biz  = qd - timedelta(days=delta)
-    prev_date = request.args.get('prev', prev_biz.isoformat())
+    # On Sunday: check Thu, Fri, Sat — use last day with any timesheet data
+    # For all other days: use actual previous day
+    if qd.weekday() == 6 and not request.args.get('prev'):
+        # Sunday — find last day with data among Thu/Fri/Sat
+        candidates = [qd - timedelta(days=3), qd - timedelta(days=2), qd - timedelta(days=1)]
+        prev_date = candidates[0].isoformat()  # default Thu
+        try:
+            if not odoo.uid: odoo.connect()
+            for candidate in reversed(candidates):  # Sat→Fri→Thu
+                c_str = candidate.isoformat()
+                check = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'account.analytic.line', 'search_read',
+                    [[('project_id', '=', 228 if (not url_proj_id or str(url_proj_id)=='228') else int(url_proj_id)),
+                      ('date', '=', c_str)]],
+                    {'fields': ['id'], 'limit': 1}
+                )
+                if check:
+                    prev_date = c_str
+                    break
+        except Exception as e:
+            logger.warning(f'sunday prev check: {e}')
+            prev_date = (qd - timedelta(days=3)).isoformat()
+    else:
+        delta = 1
+        prev_date = request.args.get('prev', (qd - timedelta(days=delta)).isoformat())
     # Accept project_id from URL param (standup opens in new tab)
     url_proj_id   = request.args.get('project_id')
     url_proj_name = request.args.get('project_name')
