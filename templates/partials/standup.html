@@ -414,6 +414,7 @@ async function loadStandup() {
     var resp=await fetch(url);
     var data=await resp.json();
     if (!data.ok) throw new Error(data.error||'Failed');
+    allData = data;
 
     var phases = Object.keys(data.phases||{});
     var hasPhaseTabs = data.has_phases === true && phases.length > 1 && phases[0] !== 'all';
