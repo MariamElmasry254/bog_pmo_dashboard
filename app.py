@@ -143,12 +143,15 @@ class OdooClient:
             self.last_error = "Credentials not set"
             return False
         try:
+            import socket
+            socket.setdefaulttimeout(30)  # 30 second timeout for Odoo
             common = xmlrpc.client.ServerProxy(f'{ODOO_URL}/xmlrpc/2/common')
             self.uid = common.authenticate(ODOO_DB, ODOO_USERNAME, ODOO_PASSWORD, {})
             if self.uid:
                 self.models = xmlrpc.client.ServerProxy(f'{ODOO_URL}/xmlrpc/2/object')
                 logger.info(f"Odoo connected: uid={self.uid}")
                 self.last_error = None
+                socket.setdefaulttimeout(60)  # restore to 60s for API calls
                 return True
             self.last_error = "Authentication failed"
             return False
@@ -7931,15 +7934,20 @@ def api_plan_overrides_get():
 
 @app.route('/api/position-overrides', methods=['POST'])
 @app.route('/api/position-overrides/save', methods=['POST'])
+@login_required
 def api_position_overrides_save():
     """Manual position override for an employee (when Odoo doesn't have it)"""
-    body = request.json or {}
-    name = body.get('name')
-    position = body.get('position')
-    if not name:
-        return jsonify({'error': 'name required'}), 400
-    db.set_override('position', '', name, position if position else None)
-    return jsonify({'ok': True})
+    try:
+        body = request.json or {}
+        name = body.get('name','').strip()
+        position = body.get('position','').strip()
+        if not name:
+            return jsonify({'error': 'name required'}), 400
+        db.set_override('position', '', name, position if position else None)
+        return jsonify({'ok': True})
+    except Exception as e:
+        logger.error(f'position override save: {e}')
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/plan-overrides/backup')
