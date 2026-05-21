@@ -143,15 +143,12 @@ class OdooClient:
             self.last_error = "Credentials not set"
             return False
         try:
-            import socket
-            socket.setdefaulttimeout(30)  # 30 second timeout for Odoo
             common = xmlrpc.client.ServerProxy(f'{ODOO_URL}/xmlrpc/2/common')
             self.uid = common.authenticate(ODOO_DB, ODOO_USERNAME, ODOO_PASSWORD, {})
             if self.uid:
                 self.models = xmlrpc.client.ServerProxy(f'{ODOO_URL}/xmlrpc/2/object')
                 logger.info(f"Odoo connected: uid={self.uid}")
                 self.last_error = None
-                socket.setdefaulttimeout(60)  # restore to 60s for API calls
                 return True
             self.last_error = "Authentication failed"
             return False
@@ -1054,35 +1051,10 @@ def api_standup():
     """Return open tasks per team member grouped by phase."""
     from datetime import date, timedelta
 
-    today_str  = date.today().isoformat()
-    query_date = request.args.get('date', today_str)
-    qd = date.fromisoformat(query_date)
-    # On Sunday: check Thu, Fri, Sat — use last day with any timesheet data
-    # For all other days: use actual previous day
-    if qd.weekday() == 6 and not request.args.get('prev'):
-        # Sunday — find last day with data among Thu/Fri/Sat
-        candidates = [qd - timedelta(days=3), qd - timedelta(days=2), qd - timedelta(days=1)]
-        prev_date = candidates[0].isoformat()  # default Thu
-        try:
-            if not odoo.uid: odoo.connect()
-            for candidate in reversed(candidates):  # Sat→Fri→Thu
-                c_str = candidate.isoformat()
-                check = odoo.models.execute_kw(
-                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                    'account.analytic.line', 'search_read',
-                    [[('project_id', '=', 228 if (not url_proj_id or str(url_proj_id)=='228') else int(url_proj_id)),
-                      ('date', '=', c_str)]],
-                    {'fields': ['id'], 'limit': 1}
-                )
-                if check:
-                    prev_date = c_str
-                    break
-        except Exception as e:
-            logger.warning(f'sunday prev check: {e}')
-            prev_date = (qd - timedelta(days=3)).isoformat()
-    else:
-        delta = 1
-        prev_date = request.args.get('prev', (qd - timedelta(days=delta)).isoformat())
+    today_str     = date.today().isoformat()
+    yesterday_str = (date.today() - timedelta(days=1)).isoformat()
+    query_date    = request.args.get('date', today_str)
+    prev_date     = request.args.get('prev', yesterday_str)
     # Accept project_id from URL param (standup opens in new tab)
     url_proj_id   = request.args.get('project_id')
     url_proj_name = request.args.get('project_name')
@@ -1188,42 +1160,49 @@ def api_standup():
         ts_prev  = fetch_ts(prev_date, task_ids)
         ts_today = fetch_ts(query_date, task_ids)
 
-        # ── 3c. Leave requests for prev_date ─────────────────────────────
-        # States: draft, confirm (waiting manager), validate1 (waiting HR), validate (approved)
-        # Show leave badge for: confirm, validate1, validate (NOT draft/refuse)
-        on_leave_emp_ids = set()
-        try:
-            leaves = odoo.models.execute_kw(
-                ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                'hr.leave', 'search_read',
-                [[('date_from', '<=', prev_date + ' 23:59:59'),
-                  ('date_to',   '>=', prev_date + ' 00:00:00'),
-                  ('state', 'in', ['confirm', 'validate1', 'validate'])]],
-                {'fields': ['employee_id', 'state', 'name'], 'limit': 500}
-            )
-            for lv in leaves:
-                emp_raw = lv.get('employee_id')
-                if isinstance(emp_raw, list) and len(emp_raw) > 0:
-                    on_leave_emp_ids.add(emp_raw[0])
-        except Exception as e:
-            logger.warning(f'leave fetch: {e}')
-        # Collect employee IDs directly from prev timesheets
-        proj_emp_ids  = {}  # emp_name -> emp_id (from ts_prev)
+        # ── 3b. Cross-project hours for prev_date ─────────────────────────
+        # Find all employees in this project who logged time yesterday
         proj_emp_names = set()
         for ts in ts_prev:
             emp_raw = ts.get('employee_id')
             if isinstance(emp_raw, list) and len(emp_raw) > 1:
                 proj_emp_names.add(emp_raw[1])
-                proj_emp_ids[emp_raw[1]] = emp_raw[0]
-
-        # Also add from first_ts_raw (will be populated after step 4)
-        # Cross-project fetch happens after first_ts_raw is built
-
-        cross_ts_prev  = []
-        cross_proj_hrs = {}
 
         # Fetch their timesheets on prev_date across ALL projects
-        # (done after first_ts_raw to have all employee IDs)
+        cross_ts_prev = []
+        if proj_emp_names:
+            try:
+                # Get employee IDs for these names
+                emp_records = odoo.models.execute_kw(
+                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                    'hr.employee', 'search_read',
+                    [[('name', 'in', list(proj_emp_names))]],
+                    {'fields': ['id', 'name'], 'limit': 200}
+                )
+                emp_ids = [e['id'] for e in emp_records]
+                if emp_ids:
+                    cross_ts_prev = odoo.models.execute_kw(
+                        ODOO_DB, odoo.uid, ODOO_PASSWORD,
+                        'account.analytic.line', 'search_read',
+                        [[('employee_id', 'in', emp_ids),
+                          ('date', '=', prev_date),
+                          ('task_id', 'not in', task_ids)]],
+                        {'fields': ['employee_id', 'task_id', 'unit_amount', 'project_id'], 'limit': 2000}
+                    )
+            except Exception as e:
+                logger.warning(f'cross-project ts fetch: {e}')
+
+        # Build cross-project hours map: emp_name -> {project_name -> hours}
+        cross_proj_hrs = {}  # emp_name -> {proj_name -> hours}
+        for ts in cross_ts_prev:
+            emp_raw  = ts.get('employee_id')
+            proj_raw = ts.get('project_id')
+            emp  = emp_raw[1]  if isinstance(emp_raw,  list) and len(emp_raw)  > 1 else ''
+            proj = proj_raw[1] if isinstance(proj_raw, list) and len(proj_raw) > 1 else 'Other project'
+            hrs  = float(ts.get('unit_amount') or 0)
+            if emp and hrs > 0:
+                cross_proj_hrs.setdefault(emp, {})
+                cross_proj_hrs[emp][proj] = cross_proj_hrs[emp].get(proj, 0) + hrs
 
         # ── 4. First entry + all employees per task (last 30 days) ──────
         first_entry_map = {}
@@ -1242,38 +1221,6 @@ def api_standup():
                 tid = ts['task_id'][0] if ts.get('task_id') else None
                 if tid and tid not in first_entry_map:
                     first_entry_map[tid] = ts['date']
-                # Collect employee IDs for cross-project lookup
-                emp_raw = ts.get('employee_id')
-                if isinstance(emp_raw, list) and len(emp_raw) > 1:
-                    proj_emp_ids[emp_raw[1]] = emp_raw[0]
-                    proj_emp_names.add(emp_raw[1])
-
-        # ── 4b. Cross-project hours using direct employee IDs ─────────────
-        cross_proj_hrs = {}
-        all_emp_ids = list(set(proj_emp_ids.values()))
-        if all_emp_ids:
-            try:
-                current_proj_id = int(proj_id) if proj_id and str(proj_id) != '228' else 228
-                cross_ts = odoo.models.execute_kw(
-                    ODOO_DB, odoo.uid, ODOO_PASSWORD,
-                    'account.analytic.line', 'search_read',
-                    [[('employee_id', 'in', all_emp_ids),
-                      ('date', '=', prev_date),
-                      ('project_id', '!=', current_proj_id),
-                      ('project_id', '!=', False)]],
-                    {'fields': ['employee_id', 'unit_amount', 'project_id'], 'limit': 3000}
-                )
-                for ts in cross_ts:
-                    emp_raw  = ts.get('employee_id')
-                    proj_raw = ts.get('project_id')
-                    emp  = emp_raw[1]  if isinstance(emp_raw,  list) and len(emp_raw)  > 1 else ''
-                    proj = proj_raw[1] if isinstance(proj_raw, list) and len(proj_raw) > 1 else 'Other'
-                    hrs  = float(ts.get('unit_amount') or 0)
-                    if emp and hrs > 0:
-                        cross_proj_hrs.setdefault(emp, {})
-                        cross_proj_hrs[emp][proj] = cross_proj_hrs[emp].get(proj, 0) + hrs
-            except Exception as e:
-                logger.warning(f'cross-project hrs: {e}')
 
         # ── 5. Build hours maps + all-time employee map per task ─────────
         def build_hrs_map(ts_list):
@@ -1329,7 +1276,7 @@ def api_standup():
             planned   = float(task.get('planned_hours') or 0)
             actual    = float(task.get('effective_hours') or 0)
             odoo_rem  = task.get('remaining_hours')
-            remaining = max(0.0, float(odoo_rem)) if (odoo_rem is not None and odoo_rem is not False) else max(0.0, planned - actual)
+            remaining = float(odoo_rem) if (odoo_rem is not None and odoo_rem is not False) else max(0.0, planned - actual)
             closed    = is_closed(task)
             first_d   = first_entry_map.get(tid, '')
 
@@ -1360,17 +1307,13 @@ def api_standup():
                 if e not in phase_members[bucket]:
                     phase_members[bucket][e] = {
                         'name': e, 'logged_yesterday': False,
-                        'on_leave': False,
                         'yesterday': [], 'inprogress': [], 'closed_with_remaining': [],
                         'cross_project_hrs': cross_proj_hrs.get(e, {})
                     }
                 m = phase_members[bucket][e]
+                # Update cross_project_hrs in case it wasn't set
                 if not m.get('cross_project_hrs'):
                     m['cross_project_hrs'] = cross_proj_hrs.get(e, {})
-                # Check leave status using employee ID from proj_emp_ids
-                emp_id = proj_emp_ids.get(e)
-                if emp_id and emp_id in on_leave_emp_ids:
-                    m['on_leave'] = True
                 h_prev = hrs_prev.get(e, {}).get(tid, 0)
                 if h_prev > 0:
                     m['logged_yesterday'] = True
@@ -7108,8 +7051,6 @@ def api_positions_reseed():
     return jsonify({'ok': True, 'updated': count})
 
 
-@app.route('/api/positions/save', methods=['POST'])
-@login_required
 def api_positions_save():
     """Add or update a position. Body: { position, hour_rate, md_rate, country, is_onsite }"""
     body = request.json or {}
@@ -7189,14 +7130,6 @@ def api_effort(phase_key):
 
     overrides = load_plan_overrides().get('position_overrides', {})
     position_lookup.update(overrides)
-
-    # Also include manual employees' positions
-    pfx = active_db_prefix()
-    manual_ns = f'{pfx}_manual_employees' if pfx else 'manual_employees'
-    manual_map = db.get_namespace_overrides(manual_ns, '') or {}
-    for key, val in manual_map.items():
-        if isinstance(val, dict) and val.get('full_name') and val.get('position'):
-            position_lookup[val['full_name']] = val['position']
 
     result = compute_effort_from_odoo(phase_key, year, month, position_lookup)
     return jsonify(result)
@@ -7933,21 +7866,15 @@ def api_plan_overrides_get():
 
 
 @app.route('/api/position-overrides', methods=['POST'])
-@app.route('/api/position-overrides/save', methods=['POST'])
-@login_required
 def api_position_overrides_save():
     """Manual position override for an employee (when Odoo doesn't have it)"""
-    try:
-        body = request.json or {}
-        name = body.get('name','').strip()
-        position = body.get('position','').strip()
-        if not name:
-            return jsonify({'error': 'name required'}), 400
-        db.set_override('position', '', name, position if position else None)
-        return jsonify({'ok': True})
-    except Exception as e:
-        logger.error(f'position override save: {e}')
-        return jsonify({'error': str(e)}), 500
+    body = request.json or {}
+    name = body.get('name')
+    position = body.get('position')
+    if not name:
+        return jsonify({'error': 'name required'}), 400
+    db.set_override('position', '', name, position if position else None)
+    return jsonify({'ok': True})
 
 
 @app.route('/api/plan-overrides/backup')
@@ -8018,31 +7945,21 @@ def api_db_audit():
 @login_required
 def api_project_employees_manual_add():
     """Add a manual/resigned employee to the project."""
-    try:
-        body = request.json or {}
-        name = (body.get('full_name') or '').strip()
-        if not name:
-            return jsonify({'error': 'full_name required'}), 400
-        # Get project prefix from body or session
-        body_proj_id = body.get('project_id')
-        if body_proj_id and str(body_proj_id) != '228':
-            pfx = f'proj_{body_proj_id}'
-        else:
-            pfx = active_db_prefix()
-        ns = f'{pfx}_manual_employees' if pfx else 'manual_employees'
-        key = name.lower().replace(' ', '_').replace('[','').replace(']','')
-        db.set_override(ns, '', key, {
-            'full_name':    name,
-            'position':     body.get('position', ''),
-            'resigned_date':body.get('resigned_date', ''),
-            'note':         body.get('note', ''),
-            'source_type':  'manual',
-        })
-        return jsonify({'ok': True})
-    except Exception as e:
-        import traceback
-        logger.error(f'manual employee add: {traceback.format_exc()}')
-        return jsonify({'error': str(e)}), 500
+    body = request.json or {}
+    name = (body.get('full_name') or '').strip()
+    if not name:
+        return jsonify({'error': 'full_name required'}), 400
+    pfx = active_db_prefix()
+    ns = f'{pfx}_manual_employees' if pfx else 'manual_employees'
+    key = name.lower().replace(' ', '_')
+    db.set_override(ns, '', key, {
+        'full_name':    name,
+        'position':     body.get('position', ''),
+        'resigned_date':body.get('resigned_date', ''),
+        'note':         body.get('note', ''),
+        'source_type':  'manual',
+    })
+    return jsonify({'ok': True})
 
 
 @app.route('/api/project-employees/manual/<path:full_name>', methods=['DELETE'])
@@ -8096,7 +8013,7 @@ def api_project_employees():
     pfx = active_db_prefix()
     ns = f'{pfx}_manual_employees' if pfx else 'manual_employees'
     manual_map = db.get_namespace_overrides(ns, '') or {}
-    positions_map = {p.get('position', p.get('name','')): p for p in get_all_positions(db)}
+    positions_map = {p['name']: p for p in get_all_positions(db)}
     for key, val in manual_map.items():
         if not isinstance(val, dict): continue
         fn = val.get('full_name', '')
