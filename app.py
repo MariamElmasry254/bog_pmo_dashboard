@@ -7479,6 +7479,27 @@ def api_effort_all_months(phase_key):
     odoo_data = batch_fetch_employees_from_odoo(all_emp_names)
     logger.info(f"Resolved {len(odoo_data)} of {len(all_emp_names)} employees from Odoo")
 
+    # Override position from manual employees DB
+    pfx_eff = active_db_prefix()
+    manual_ns_eff = f'{pfx_eff}_manual_employees' if pfx_eff else 'manual_employees'
+    manual_map_eff = db.get_namespace_overrides(manual_ns_eff, '') or {}
+    for key, val in manual_map_eff.items():
+        if isinstance(val, dict) and val.get('full_name') and val.get('position'):
+            fn = val['full_name']
+            # Inject into odoo_data so _base_position_on_date uses it
+            if fn not in odoo_data:
+                odoo_data[fn] = {}
+            if not odoo_data[fn].get('position'):
+                odoo_data[fn]['position'] = val['position']
+
+    # Also apply position overrides from plan_overrides
+    pos_overrides = load_plan_overrides().get('position_overrides', {})
+    for emp_name, pos in pos_overrides.items():
+        if emp_name not in odoo_data:
+            odoo_data[emp_name] = {}
+        if pos and not odoo_data[emp_name].get('position'):
+            odoo_data[emp_name]['position'] = pos
+
     # Build emp_odoo_ids map: emp_name → Odoo employee ID (for travel matching)
     emp_odoo_ids = {}
     for ts in timesheets:
